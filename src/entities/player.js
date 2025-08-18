@@ -11,10 +11,10 @@ export class Player {
     this.height = Math.floor(1.8 * TILE_SIZE);
     this.vx = 0;
     this.vy = 0;
-    this.maxSpeed = 220;
-    this.jumpVelocity = 265;
-    this.gravity = 950;
-    this.maxFallSpeed = 800;
+    this.maxSpeed = 180; // Reduced max speed
+    this.jumpVelocity = 250; // Reduced jump velocity for smoother jumping
+    this.gravity = 800; // Reduced gravity for smoother falling
+    this.maxFallSpeed = 600; // Reduced max fall speed
     this.onGround = false;
   }
   update(input, dt, time, noClipMode = false) {

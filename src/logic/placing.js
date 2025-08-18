@@ -37,9 +37,29 @@ export class Placer {
       meta = { orient };
     } else if (item.blockId === 'chest') {
       meta = { inv: Array.from({ length: 27 }, () => null) };
+    } else if (item.blockId.endsWith('_leaves')) {
+      // For placed leaves, ensure they don't have rotation and mark them as placed
+      meta = { placed: true };
     }
     world.setBlock(tileX, tileY, type.id, meta);
     if (type.onPlace) type.onPlace(world, tileX, tileY, meta);
+    
+    // Check if we're placing a block on top of grass - if so, turn grass to dirt quickly
+    const belowX = tileX;
+    const belowY = tileY + 1;
+    if (world.inBounds(belowX, belowY)) {
+      const belowId = world.getBlockId(belowX, belowY);
+      if (belowId === 'grass') {
+        // Set a flag in the grass block's metadata to indicate it should turn to dirt quickly
+        const belowCell = world.getCell(belowX, belowY);
+        if (!belowCell.meta) belowCell.meta = {};
+        belowCell.meta.turnToDirt = true;
+        belowCell.meta.dirtTimer = 0; // Start the timer immediately
+      }
+    }
+    
+    // Update lighting around the placed block
+    world.updateLighting(tileX, tileY);
     return true;
   }
 }

@@ -1,3 +1,73 @@
+// Perlin noise implementation
+function fade(t) {
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+function lerp(a, b, t) {
+  return a + t * (b - a);
+}
+
+function grad(hash, x, y) {
+  const h = hash & 15;
+  const u = h < 8 ? x : y;
+  const v = h < 4 ? y : h === 12 || h === 14 ? x : 0;
+  return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+}
+
+// Fixed permutation table
+function createPermutation(seed) {
+  const permutation = [];
+  for (let i = 0; i < 256; i++) {
+    permutation[i] = i;
+  }
+
+  // Shuffle the permutation array using the seed
+  for (let i = 255; i > 0; i--) {
+    // Simple seeded random shuffle
+    const j = Math.floor(hash32(i + seed * 1000) * (i + 1));
+    [permutation[i], permutation[j]] = [permutation[j], permutation[i]];
+  }
+  
+  return permutation;
+}
+
+
+function perlinNoise(x, y, seed) {
+  // Create permutation table based on seed
+  const permutation = createPermutation(seed);
+  // Duplicate the permutation array for easier indexing
+  const p = new Array(512);
+  for (let i = 0; i < 256; i++) {
+    p[i] = p[i + 256] = permutation[i];
+  }
+  
+  // Apply seed by adding it to coordinates
+  x += seed * 1000;
+  y += seed * 1000;
+  
+  const X = Math.floor(x) & 255;
+  const Y = Math.floor(y) & 255;
+  
+  x -= Math.floor(x);
+  y -= Math.floor(y);
+  
+  const u = fade(x);
+  const v = fade(y);
+  
+  const A = p[X] + Y;
+  const AA = p[A] & 15;
+  const AB = p[A + 1] & 15;
+  const B = p[X + 1] + Y;
+  const BA = p[B] & 15;
+  const BB = p[B + 1] & 15;
+  
+  return lerp(
+    lerp(grad(AA, x, y), grad(BA, x - 1, y), u),
+    lerp(grad(AB, x, y - 1), grad(BB, x - 1, y - 1), u),
+    v
+  );
+}
+
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
 }
@@ -25,48 +95,50 @@ function rand01From(x, seed) {
 
 export function generateTerrain(world, { seed = 1234 } = {}) {
   const HEIGHT = world.height;
-  const BASE = Math.floor(HEIGHT * 0.6);
+  const BASE = 50 + Math.floor(rand01From(seed, seed) * 10); // Ground level between 50-60
 
   function heightAt(x) {
-    const hill1 = Math.sin(x * 0.01 + seed * 0.01) * 15;
-    const hill2 = Math.sin(x * 0.03 + seed * 0.02) * 8;
-    const hill3 = Math.sin(x * 0.08 + seed * 0.03) * 4;
-    const mountain = Math.sin(x * 0.005 + seed * 0.005) * 30;
-    const h = BASE + Math.round(hill1 + hill2 + hill3 + mountain);
+    // Use Perlin noise for more natural terrain
+    const noise1 = perlinNoise(x * 0.01, 0, seed) * 15;
+    const noise2 = perlinNoise(x * 0.03, 0, seed * 2) * 8;
+    const noise3 = perlinNoise(x * 0.08, 0, seed * 3) * 4;
+    const mountain = perlinNoise(x * 0.005, 0, seed * 4) * 30;
+    const h = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
     return clamp(h, 6, HEIGHT - 4);
   }
 
   function generateCaves(x, y, h) {
     if (y <= h + 1) return false;
     
-    const caveNoise1 = valueNoise1D(x * 0.05 + y * 0.05, seed + 311, 1);
-    const caveNoise2 = valueNoise1D(x * 0.2 + y * 0.2, seed + 733, 1);
-    const caveNoise3 = valueNoise1D(x * 0.8 + y * 0.8, seed + 977, 1);
-    
-    const combinedNoise = 0.5 * caveNoise1 + 0.3 * caveNoise2 + 0.2 * caveNoise3;
-    
+    // Use Perlin noise for cave generation
+    const caveNoise = perlinNoise(x * 0.05, y * 0.05, seed + 311);
     const depthFactor = Math.min(1, (y - (h + 1)) / 20);
     const threshold = 0.3 + 0.2 * depthFactor;
     
-    return combinedNoise > threshold;
+    return caveNoise > threshold;
   }
 
   function generateOre(x, y, h, oreType, rarity, minHeight, maxHeight) {
     if (y < minHeight || y > Math.min(h - 1, maxHeight)) return false;
     
-    const oreNoise = valueNoise1D(x * 0.3 + y * 0.3, seed + 1000 + rarity * 100, 1);
+    const oreNoise = perlinNoise(x * 0.3, y * 0.3, seed + 1000 + rarity * 100);
     return oreNoise > (1 - rarity * 0.05);
   }
 
   function generateGravel(x, y, h) {
-    const gravelNoise = valueNoise1D(x * 0.8 + y * 0.8, seed + 800, 1);
-    const gravelNoise2 = valueNoise1D(x * 0.3 + y * 0.3, seed + 900, 1);
-    const combinedNoise = 0.7 * gravelNoise + 0.3 * gravelNoise2;
-    return combinedNoise > 0.65 && y > h + 3 && y < HEIGHT - 5;
+    const gravelNoise = perlinNoise(x * 0.8, y * 0.8, seed + 800);
+    // Place gravel both above and below ground, more frequently underground
+    if (y < h) {
+      // Underground gravel - more common
+      return gravelNoise > 0.4 && y > 5 && y < HEIGHT - 5;
+    } else {
+      // Surface gravel - less common
+      return gravelNoise > 0.7 && y > h + 3 && y < HEIGHT - 5;
+    }
   }
 
   function isBeach(x, y) {
-    const beachNoise = valueNoise1D(x * 0.03, seed + 500, 1);
+    const beachNoise = perlinNoise(x * 0.03, 0, seed + 500);
     const beachThresholdY = BASE + 5;
     return beachNoise > 0.6 && y < beachThresholdY;
   }
@@ -126,12 +198,26 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
     let leavesType = 'oak_leaves';
     let trunkHeight, leafPattern;
     
-    if (treeTypeNoise < 0.33) {
+    // Add maple trees (10% chance)
+    if (treeTypeNoise < 0.1) {
+      logType = 'maple_log';
+      // Choose a random maple leaf color for the entire tree
+      const leafColorNoise = rand01From(x * 23.7, seed);
+      if (leafColorNoise < 0.33) {
+        leavesType = 'maple_green_leaves';
+      } else if (leafColorNoise < 0.66) {
+        leavesType = 'maple_orange_leaves';
+      } else {
+        leavesType = 'maple_red_leaves';
+      }
+      trunkHeight = 5 + Math.floor(rand01From(x * 13.7, seed) * 4);
+      leafPattern = 'maple';
+    } else if (treeTypeNoise < 0.4) {
       logType = 'oak_log';
       leavesType = 'oak_leaves';
       trunkHeight = 4 + Math.floor(rand01From(x * 13.7, seed) * 3);
       leafPattern = 'oak';
-    } else if (treeTypeNoise < 0.66) {
+    } else if (treeTypeNoise < 0.7) {
       logType = 'birch_log';
       leavesType = 'birch_leaves';
       trunkHeight = 6 + Math.floor(rand01From(x * 13.7, seed) * 3);
@@ -167,7 +253,9 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
             if (rand01From((tx + ty) * 13.7, seed) < 0.7) {
               const id = world.getBlockId(tx, ty);
               if (id === 'air') {
-                world.setBlock(tx, ty, leavesType, { layer: 'bg' });
+                // Add rotation metadata to naturally generated leaves
+                const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
+                world.setBlock(tx, ty, leavesType, { layer: 'bg', rotation });
               }
             }
           }
@@ -179,7 +267,9 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
         const tx = x + dx;
         const ty = cy + dy;
         if (world.inBounds(tx, ty) && world.getBlockId(tx, ty) === 'air') {
-          world.setBlock(tx, ty, leavesType);
+          // Add rotation metadata to naturally generated leaves
+          const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
+          world.setBlock(tx, ty, leavesType, { rotation });
         }
       }
     } else if (leafPattern === 'birch') {
@@ -194,7 +284,9 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
           if (d <= radius) {
             const id = world.getBlockId(tx, ty);
             if (id === 'air') {
-              world.setBlock(tx, ty, leavesType);
+              // Add rotation metadata to naturally generated leaves
+              const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
+              world.setBlock(tx, ty, leavesType, { rotation });
             }
           }
         }
@@ -202,7 +294,7 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
     } else if (leafPattern === 'spruce') {
       const layers = 3 + Math.floor(rand01From(x * 41.9, seed) * 2);
       for (let layer = 0; layer < layers; layer++) {
-        const dy = -layer - 2;
+        const dy = -layer - 1;
         const ty = cy + dy;
         const radius = Math.max(0, layers - layer - 1);
         for (let dx = -radius; dx <= radius; dx++) {
@@ -212,26 +304,61 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
           if (d <= radius) {
             const id = world.getBlockId(tx, ty);
             if (id === 'air') {
-              world.setBlock(tx, ty, leavesType);
+              // Add rotation metadata to naturally generated leaves
+              const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
+              world.setBlock(tx, ty, leavesType, { rotation });
             }
           }
         }
       }
-    }
-    
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
+      // Add some random leaves around the tree for a fuller look
+      for (let i = 0; i < 5; i++) {
+        const dx = Math.floor(rand01From((x + i) * 17.3, seed) * 3) - 1;
+        const dy = Math.floor(rand01From((x + i) * 19.7, seed) * 3) - 2;
         const tx = x + dx;
-        const ty = topY + dy;
-        if (!world.inBounds(tx, ty)) continue;
-        if (world.getBlockId(tx, ty) === 'grass') {
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          if (rand01From((tx + ty) * 13.7, seed) < (1.0 - distance * 0.2)) {
-            world.setBlock(tx, ty, 'nutrient_grass');
+        const ty = cy + dy;
+        if (world.inBounds(tx, ty) && world.getBlockId(tx, ty) === 'air') {
+          // Add rotation metadata to naturally generated leaves
+          const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
+          world.setBlock(tx, ty, leavesType, { rotation });
+        }
+      }
+    } else if (leafPattern === 'maple') {
+      // Improved maple tree with more natural shape
+      const baseR = 2 + Math.floor(rand01From(x * 41.9, seed) * 3);
+      for (let layer = 0; layer < 4; layer++) {
+        const dy = -layer - 1;
+        const ty = cy + dy;
+        // Vary the radius for each layer to create a more natural shape
+        const radius = Math.max(0, baseR - Math.floor(layer / 2));
+        for (let dx = -radius; dx <= radius; dx++) {
+          const tx = x + dx;
+          if (!world.inBounds(tx, ty)) continue;
+          const d = Math.abs(dx);
+          if (d <= radius) {
+            const id = world.getBlockId(tx, ty);
+            if (id === 'air') {
+              // Add rotation metadata to naturally generated leaves
+              const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
+              world.setBlock(tx, ty, leavesType, { rotation });
+            }
           }
         }
       }
+      // Add some random leaves around the tree for a fuller look
+      for (let i = 0; i < 8; i++) {
+        const dx = Math.floor(rand01From((x + i) * 17.3, seed) * 5) - 2;
+        const dy = Math.floor(rand01From((x + i) * 19.7, seed) * 4) - 2;
+        const tx = x + dx;
+        const ty = cy + dy;
+        if (world.inBounds(tx, ty) && world.getBlockId(tx, ty) === 'air') {
+          // Add rotation metadata to naturally generated leaves
+          const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
+          world.setBlock(tx, ty, leavesType, { rotation });
+        }
+      }
     }
+    
     
     return true;
   }
@@ -247,7 +374,12 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
     const grassRand = rand01From(x * 1009, seed);
     if (grassRand < 0.5) {
       if (world.inBounds(x, top - 1) && world.getBlockId(x, top - 1) === 'air') {
-        world.setBlock(x, top - 1, 'short_grass');
+        // Randomly choose between short grass and fern
+        if (rand01From(x * 1011, seed) < 0.3) {
+          world.setBlock(x, top - 1, 'fern');
+        } else {
+          world.setBlock(x, top - 1, 'short_grass');
+        }
       }
     }
     
@@ -266,4 +398,8 @@ export function generateTerrain(world, { seed = 1234 } = {}) {
       }
     }
   }
+  
+  // Calculate lighting after terrain generation
+  world.calculateSkyLight();
+  world.propagateLight();
 }

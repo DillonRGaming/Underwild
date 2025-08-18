@@ -22,7 +22,6 @@ import sand from './sand.js';
 import water from './water.js';
 import mud from './mud.js';
 import coarseDirt from './coarse_dirt.js';
-import nutrientGrass from './nutrient_grass.js';
 import gravel from './gravel.js';
 import birchLog from './birch_log.js';
 import birchLeaves from './birch_leaves.js';
@@ -33,6 +32,14 @@ import birchStairs from './birch_stairs.js';
 import spruceStairs from './spruce_stairs.js';
 import shortGrass from './short_grass.js';
 import poppy from './poppy.js';
+import fern from './fern.js';
+import mapleLog from './maple_log.js';
+import mapleGreenLeaves from './maple_green_leaves.js';
+import mapleOrangeLeaves from './maple_orange_leaves.js';
+import mapleRedLeaves from './maple_red_leaves.js';
+import maplePlanks from './maple_planks.js';
+import mapleStairs from './maple_stairs.js';
+import glass from './glass.js';
 
 export function registerAllBlocks(registry) {
   [
@@ -59,7 +66,6 @@ export function registerAllBlocks(registry) {
     water,
     mud,
     coarseDirt,
-    nutrientGrass,
     gravel,
     birchLog,
     birchLeaves,
@@ -69,6 +75,14 @@ export function registerAllBlocks(registry) {
     birchStairs,
     spruceStairs,
     shortGrass,
-    poppy
+    poppy,
+    fern,
+    mapleLog,
+    mapleGreenLeaves,
+    mapleOrangeLeaves,
+    mapleRedLeaves,
+    maplePlanks,
+    mapleStairs,
+    glass
   ].forEach(b => registry.register(b));
 }

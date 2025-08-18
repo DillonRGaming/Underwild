@@ -1,7 +1,7 @@
 import { TILE_SIZE, darkenHex } from './utils.js';
 
 export class Renderer {
-  constructor(ctx, canvas, world, registry, camera, input, player, inventory, breaker, clouds, getUI) {
+  constructor(ctx, canvas, world, registry, camera, input, player, inventory, breaker, getUI) {
     this.ctx = ctx;
     this.canvas = canvas;
     this.world = world;
@@ -11,11 +11,13 @@ export class Renderer {
     this.player = player;
     this.inventory = inventory;
     this.breaker = breaker;
-    this.clouds = clouds;
     this.getUI = getUI;
     this._layoutCache = null;
     this._imageCache = new Map();
     this.textures = {};
+    this.fps = 0;
+    this.frameCount = 0;
+    this.lastFpsUpdate = 0;
   }
 
   preloadTextures() {
@@ -25,7 +27,8 @@ export class Renderer {
       image.onload = () => {
         this.textures[block.id] = image;
       };
-      image.onerror = () => {};
+      image.onerror = () => {
+      };
       image.src = texturePath;
     }
     
@@ -37,35 +40,59 @@ export class Renderer {
       image.onload = () => {
         this.textures[textureId] = image;
       };
-      image.onerror = () => {};
+      image.onerror = () => {
+      };
       image.src = texturePath;
     }
     
-    const itemIds = ['stick', 'short_grass', 'poppy'];
+    const itemIds = ['stick', 'short_grass', 'poppy', 'apple'];
     for (const itemId of itemIds) {
       const texturePath = `textures/${itemId}.png`;
       const image = new Image();
       image.onload = () => {
         this.textures[itemId] = image;
       };
-      image.onerror = () => {};
+      image.onerror = () => {
+      };
       image.src = texturePath;
     }
+    
+    // Preload leaf particle texture
+    const leafParticleTexture = 'oak_leaf_particle';
+    const leafParticleTexturePath = `textures/${leafParticleTexture}.png`;
+    const leafParticleImage = new Image();
+    leafParticleImage.onload = () => {
+      this.textures[leafParticleTexture] = leafParticleImage;
+    };
+    leafParticleImage.onerror = () => {
+    };
+    leafParticleImage.src = leafParticleTexturePath;
   }
 
   render() {
+    // FPS tracking
+    this.frameCount++;
+    const now = performance.now();
+    if (now - this.lastFpsUpdate >= 1000) {
+      this.fps = Math.round((this.frameCount * 1000) / (now - this.lastFpsUpdate));
+      this.frameCount = 0;
+      this.lastFpsUpdate = now;
+    }
+
     const { ctx, canvas, world, camera } = this;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     this.drawSky();
-    this.drawClouds();
 
     const viewW = canvas.width / camera.zoom;
     const viewH = canvas.height / camera.zoom;
-    const startX = Math.max(0, Math.floor(camera.x / TILE_SIZE) - 1);
-    const endX = Math.min(world.width - 1, Math.ceil((camera.x + viewW) / TILE_SIZE) + 1);
-    const startY = Math.max(0, Math.floor(camera.y / TILE_SIZE) - 1);
-    const endY = Math.min(world.height - 1, Math.ceil((camera.y + viewH) / TILE_SIZE) + 1);
+    
+    // Improved view culling with a larger margin to ensure smooth rendering
+    const margin = 2; // Increased margin to reduce pop-in
+    const startX = Math.max(0, Math.floor(camera.x / TILE_SIZE) - margin);
+    const endX = Math.min(world.width - 1, Math.ceil((camera.x + viewW) / TILE_SIZE) + margin);
+    const startY = Math.max(0, Math.floor(camera.y / TILE_SIZE) - margin);
+    const endY = Math.min(world.height - 1, Math.ceil((camera.y + viewH) / TILE_SIZE) + margin);
 
     for (let y = startY; y <= endY; y++) {
       for (let x = startX; x <= endX; x++) {
@@ -79,6 +106,9 @@ export class Renderer {
     this.drawBreakingProgress();
     this.drawPlayer();
     this.drawItems(); // Draw item entities
+    this.drawLeafParticles(); // Draw leaf particles
+    this.drawHoveredBlockOutline(); // Draw grey outline for hovered blocks
+    
     this.drawUI();
   }
 
@@ -86,50 +116,64 @@ export class Renderer {
     const { ctx, canvas, world, camera } = this;
     
     const timeOfDay = (world.time % world.dayLength) / world.dayLength;
-    
-    const sunPosition = (timeOfDay + 0.25) % 1;
+    // We'll treat sunrise at 0.25, noon at 0.5, sunset at 0.75
+    // sunPhase = timeOfDay shifted so sunrise = 0
+    const sunPhase = (timeOfDay - 0.25 + 1) % 1; // 0..1 where 0 is sunrise
+    // sunVisible when sunPhase in [0, 0.5]
+    const sunVisible = sunPhase >= 0 && sunPhase <= 0.5;
     
     let r, g, b;
     
-    if (sunPosition < 0.25) {
-      const t = sunPosition / 0.25;
-      r = Math.floor(20 * (1 - t) + 100 * t);
-      g = Math.floor(20 * (1 - t) + 150 * t);
-      b = Math.floor(40 * (1 - t) + 200 * t);
-    } else if (sunPosition < 0.5) {
-      const t = (sunPosition - 0.25) / 0.25;
-      r = Math.floor(100 * (1 - t) + 120 * t);
-      g = Math.floor(150 * (1 - t) + 200 * t);
-      b = Math.floor(200 * (1 - t) + 255 * t);
-    } else if (sunPosition < 0.75) {
-      const t = (sunPosition - 0.5) / 0.25;
-      r = Math.floor(120 * (1 - t) + 100 * t);
-      g = Math.floor(200 * (1 - t) + 150 * t);
-      b = Math.floor(255 * (1 - t) + 200 * t);
+    // Interpolate sky color by timeOfDay but aligned to common day phases
+    // Dawn: 0.2->0.35, Day: 0.35->0.65, Dusk: 0.65->0.8, Night otherwise
+    // Extended transition periods for smoother transitions
+    if (timeOfDay < 0.15 || timeOfDay > 0.85) {
+      // Night - darker blue
+      r = 10; g = 15; b = 30;
+    } else if (timeOfDay < 0.25) {
+      // Extended dawn transition (0.15 to 0.25) - longer transition
+      const t = (timeOfDay - 0.15) / 0.1;
+      r = Math.floor(10 * (1 - t) + 100 * t);
+      g = Math.floor(15 * (1 - t) + 70 * t);
+      b = Math.floor(30 * (1 - t) + 140 * t);
+    } else if (timeOfDay < 0.35) {
+      // Sunrise (0.25 to 0.35) - transition to day
+      const t = (timeOfDay - 0.25) / 0.1;
+      r = Math.floor(100 * (1 - t) + 135 * t);
+      g = Math.floor(70 * (1 - t) + 200 * t);
+      b = Math.floor(140 * (1 - t) + 255 * t);
+    } else if (timeOfDay < 0.65) {
+      // Day
+      r = 135; g = 200; b = 255;
+    } else if (timeOfDay < 0.75) {
+      // Sunset (0.65 to 0.75) - transition from day
+      const t = (timeOfDay - 0.65) / 0.1;
+      r = Math.floor(135 * (1 - t) + 100 * t);
+      g = Math.floor(200 * (1 - t) + 70 * t);
+      b = Math.floor(255 * (1 - t) + 140 * t);
     } else {
-      const t = (sunPosition - 0.75) / 0.25;
-      r = Math.floor(100 * (1 - t) + 20 * t);
-      g = Math.floor(150 * (1 - t) + 20 * t);
-      b = Math.floor(200 * (1 - t) + 40 * t);
+      // Extended dusk transition (0.75 to 0.85) - longer transition
+      const t = (timeOfDay - 0.75) / 0.1;
+      r = Math.floor(100 * (1 - t) + 10 * t);
+      g = Math.floor(70 * (1 - t) + 15 * t);
+      b = Math.floor(140 * (1 - t) + 30 * t);
     }
     
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Draw sun and moon
-    this.drawCelestialBodies(timeOfDay, sunPosition);
+    // Draw sun or moon (never both). Pass sunPhase so drawCelestialBodies can map arc correctly.
+    this.drawCelestialBodies(timeOfDay, sunPhase);
     
-    if (sunPosition >= 0.75 || sunPosition <= 0.25) {
-      this.drawStars(sunPosition);
+    // Draw stars only when moon is visible (i.e., sun is not visible)
+    if (!sunVisible) {
+      this.drawStars(sunPhase);
     }
   }
   
   drawStars(sunPosition) {
     const { ctx, canvas, world, camera } = this;
     const time = world.time;
-    
-    const isNight = sunPosition >= 0.75 || sunPosition <= 0.25;
-    if (!isNight) return;
     
     ctx.save();
     for (const star of world.stars) {
@@ -151,97 +195,9 @@ export class Renderer {
     ctx.restore();
   }
 
-  drawClouds() {
-    const { ctx, camera } = this;
-    const clouds = this.clouds.list;
-    for (const c of clouds) {
-      const sx = Math.round(camera.worldToScreenX(c.x));
-      const sy = Math.round(camera.worldToScreenY(c.y));
-      ctx.save();
-      ctx.translate(sx, sy);
-      ctx.fillStyle = `rgba(255,255,255,${c.alpha})`;
-      for (const p of c.parts) {
-        const x = Math.round(p.dx * this.camera.zoom);
-        const y = Math.round(p.dy * this.camera.zoom);
-        const w = Math.round(p.rx * this.camera.zoom * 2);
-        const h = Math.round(p.ry * this.camera.zoom * 2);
-        ctx.fillRect(x - w/2, y - h/2, w, h);
-      }
-      ctx.restore();
-    }
-  }
-
-  getSunPosition(timeOfDay) {
-    const angle = (timeOfDay * 2 * Math.PI) - (Math.PI / 2);
-    
-    return {
-      x: Math.cos(angle),
-      y: -Math.sin(angle)
-    };
-  }
 
   drawCelestialBodies(timeOfDay, sunPosition) {
-    const { ctx, canvas } = this;
-
-    // STRICT visibility windows so they never overlap:
-    // Sun visible between 0.25 (dawn) and 0.75 (dusk)
-    // Moon visible otherwise
-    const sunVisible = sunPosition >= 0.25 && sunPosition <= 0.75;
-    const moonVisible = !sunVisible;
-
-    // Map 0..1 -> -0.15..1.15 so spawn/despawn are fully off-screen
-    const offscreenPos = (t) => (t * 1.3) - 0.15;
-
-    // Small parallax offsets (very low)
-    const pxFactor = 0.02; // tiny horizontal parallax
-    const pyFactor = 0.02; // tiny vertical parallax
-    const px = -this.camera.x * pxFactor;
-    const py = -this.camera.y * pyFactor;
-
-    // Sun path (straight)
-    const sunT = offscreenPos(sunPosition); // -0.15..1.15
-    const sunX = canvas.width * sunT + px;
-    const sunY = canvas.height * 0.12 + py;
-
-    // Moon path (curved)
-    const moonPhase = (sunPosition + 0.5) % 1;
-    const moonT = offscreenPos(moonPhase); // -0.15..1.15
-    const moonX = canvas.width * moonT + px;
-    // modest parabolic curve for Y (keeps it subtle)
-    const maxCurve = canvas.height * 0.16;
-    const moonY = canvas.height * 0.1 + Math.pow(moonT - 0.5, 2) * maxCurve + py;
-
-    // Draw sun if visible (with subtle glow)
-    if (sunVisible) {
-      const sunSize = Math.round(Math.max(22, canvas.width * 0.035));
-      // Gentle glow (very low opacity)
-      const g = ctx.createRadialGradient(sunX, sunY, sunSize * 0.4, sunX, sunY, sunSize * 1.4);
-      g.addColorStop(0, 'rgba(255,230,140,0.28)');
-      g.addColorStop(1, 'rgba(255,230,140,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(sunX, sunY, sunSize * 1.4, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Sun square
-      ctx.fillStyle = '#fff3b0';
-      ctx.fillRect(sunX - sunSize / 2, sunY - sunSize / 2, sunSize, sunSize);
-    }
-
-    // Draw moon if visible (with subtle glow + curve)
-    if (moonVisible) {
-      const moonSize = Math.round(Math.max(18, canvas.width * 0.03));
-      const mg = ctx.createRadialGradient(moonX, moonY, moonSize * 0.4, moonX, moonY, moonSize * 1.2);
-      mg.addColorStop(0, 'rgba(210,220,255,0.22)');
-      mg.addColorStop(1, 'rgba(210,220,255,0)');
-      ctx.fillStyle = mg;
-      ctx.beginPath();
-      ctx.arc(moonX, moonY, moonSize * 1.2, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#f0f4ff';
-      ctx.fillRect(moonX - moonSize / 2, moonY - moonSize / 2, moonSize, moonSize);
-    }
+    // Removed sun and moon drawing
   }
 
   drawItems() {
@@ -250,23 +206,75 @@ export class Renderer {
     const items = ui?.items ?? null;
     if (!items || items.length === 0) return;
 
-    const { ctx, camera } = this;
+    const { ctx, camera, world } = this;
+    ctx.imageSmoothingEnabled = false;
 
     for (const item of items) {
       const sx = Math.round(camera.worldToScreenX(item.x));
       const sy = Math.round(camera.worldToScreenY(item.y));
       // Draw a small version of the block/item and scale with camera zoom
-      const size = Math.max(6, Math.round(TILE_SIZE * 0.45 * camera.zoom));
+      // For falling leaves, use a larger size
+      const isFallingLeaf = item.leafType && typeof item.rotation !== 'undefined';
+      const size = isFallingLeaf ? 
+        Math.max(10, Math.round(TILE_SIZE * 0.8 * camera.zoom)) : 
+        Math.max(6, Math.round(TILE_SIZE * 0.45 * camera.zoom));
 
-      const blockType = this.registry.get(item.blockId);
+      // For falling leaves, use the leafType instead of blockId
+      const blockId = isFallingLeaf ? item.leafType : item.blockId;
+      const blockType = this.registry.get(blockId);
       if (!blockType) continue;
 
-      const texture = this.textures[item.blockId];
+      // Get light level for this item based on its position
+      const tileX = Math.floor(item.x / TILE_SIZE);
+      const tileY = Math.floor(item.y / TILE_SIZE);
+      const lightLevel = world.getLight(tileX, tileY);
+      // Convert light level (0-15) to a factor (0.0-1.0)
+      const lightFactor = lightLevel / 15;
+      
+      // Compute canonical sunPhase same as drawSky (sunrise at 0.25)
+      const timeOfDay = (world.time % world.dayLength) / world.dayLength;
+      const sunPhase = (timeOfDay - 0.25 + 1) % 1; // 0..1 where 0 = sunrise, 0.5 = noon
+      
+      // Determine whether sun is visible (first half) or moon (second half)
+      const sunVisible = sunPhase >= 0 && sunPhase <= 0.5;
+      const travelT = sunVisible ? (sunPhase / 0.5) : ((sunPhase - 0.5) / 0.5); // 0..1 across visible window
+      
+      // Base lighting factor based on time of day
+      let baseLightFactor;
+      if (sunVisible) {
+        // peak at travelT=0.5 (noon), lower at edges (sunrise/sunset)
+        // Use sin curve for smoothness: sin(pi * travelT) maps 0..1..0 -> we remap to 0.5..1.0..0.5
+        const s = Math.sin(Math.PI * travelT); // 0..1..0
+        baseLightFactor = 0.5 + 0.5 * s; // 0.5..1.0..0.5
+      } else {
+        // Night - moonlight provides modest illumination
+        const s = Math.sin(Math.PI * travelT); // as moon moves, slight variation
+        baseLightFactor = 0.35 + 0.15 * s; // ~0.35..0.5
+      }
+      
+      // Underground lighting should be less affected by time of day
+      // Only items near the surface should be affected by time of day
+      const depthFactor = Math.min(1, Math.max(0, (tileY - 5) / 5)); // Items deeper than 5 tiles are less affected by time of day
+      const adjustedBaseLightFactor = baseLightFactor * (1 - Math.min(1, depthFactor * 0.7)) + 0.3 * Math.min(1, depthFactor);
+      
+      // Combine base light factor with block light level
+      const combinedLightFactor = lightFactor * adjustedBaseLightFactor;
+      
+      // For falling leaves, apply the tint factor that was set at spawn time
+      const tintedLightFactor = isFallingLeaf ? combinedLightFactor * (item.tintFactor || 1.0) : combinedLightFactor;
+      
+      // For falling leaves, use the leaf particle texture if available
+      const texture = isFallingLeaf ? this.textures['oak_leaf_particle'] : this.textures[blockId];
 
       if (texture) {
-        ctx.drawImage(texture, sx - size / 2, sy - size / 2, size, size);
+        // For falling leaves, apply rotation
+        const rotation = isFallingLeaf ? item.rotation : 0;
+        this.drawBlockTexture(texture, sx - size / 2, sy - size / 2, size, tintedLightFactor, rotation);
       } else {
-        ctx.fillStyle = blockType.color || '#999';
+        let c = blockType?.color || '#999';
+        c = darkenHex(c, tintedLightFactor);
+        
+        ctx.fillStyle = c;
         ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
         ctx.strokeStyle = '#00000020';
         ctx.strokeRect(sx - size / 2 + 0.5, sy - size / 2 + 0.5, size - 1, size - 1);
@@ -274,34 +282,236 @@ export class Renderer {
     }
   }
 
+  drawLeafParticles() {
+    // Obtain leaf particles from the UI provider (script supplies the leafParticles array)
+    const ui = this.getUI();
+    const leafParticles = ui?.leafParticles ?? null;
+    if (!leafParticles || leafParticles.length === 0) return;
 
+    const { ctx, camera, world } = this;
+    ctx.imageSmoothingEnabled = false;
+
+    for (const particle of leafParticles) {
+      const sx = Math.round(camera.worldToScreenX(particle.x));
+      const sy = Math.round(camera.worldToScreenY(particle.y));
+      // Draw a larger version of the particle and scale with camera zoom
+      const size = Math.max(10, Math.round(TILE_SIZE * 0.8 * camera.zoom));
+
+      // Get light level for this particle based on its position
+      const tileX = Math.floor(particle.x / TILE_SIZE);
+      const tileY = Math.floor(particle.y / TILE_SIZE);
+      const lightLevel = world.getLight(tileX, tileY);
+      // Convert light level (0-15) to a factor (0.0-1.0)
+      const lightFactor = lightLevel / 15;
+      
+      // Compute canonical sunPhase same as drawSky (sunrise at 0.25)
+      const timeOfDay = (world.time % world.dayLength) / world.dayLength;
+      const sunPhase = (timeOfDay - 0.25 + 1) % 1; // 0..1 where 0 = sunrise, 0.5 = noon
+      
+      // Determine whether sun is visible (first half) or moon (second half)
+      const sunVisible = sunPhase >= 0 && sunPhase <= 0.5;
+      const travelT = sunVisible ? (sunPhase / 0.5) : ((sunPhase - 0.5) / 0.5); // 0..1 across visible window
+      
+      // Base lighting factor based on time of day
+      let baseLightFactor;
+      if (sunVisible) {
+        // peak at travelT=0.5 (noon), lower at edges (sunrise/sunset)
+        // Use sin curve for smoothness: sin(pi * travelT) maps 0..1..0 -> we remap to 0.5..1.0..0.5
+        const s = Math.sin(Math.PI * travelT); // 0..1..0
+        baseLightFactor = 0.5 + 0.5 * s; // 0.5..1.0..0.5
+      } else {
+        // Night - moonlight provides modest illumination
+        const s = Math.sin(Math.PI * travelT); // as moon moves, slight variation
+        baseLightFactor = 0.35 + 0.15 * s; // ~0.35..0.5
+      }
+      
+      // Underground lighting should be less affected by time of day
+      // Only particles near the surface should be affected by time of day
+      const depthFactor = Math.min(1, Math.max(0, (tileY - 5) / 5)); // Particles deeper than 5 tiles are less affected by time of day
+      const adjustedBaseLightFactor = baseLightFactor * (1 - Math.min(1, depthFactor * 0.7)) + 0.3 * Math.min(1, depthFactor);
+      
+      // Combine base light factor with block light level
+      const combinedLightFactor = lightFactor * adjustedBaseLightFactor;
+      
+      // Apply fade effect if particle is fading out
+      let alpha = 1.0;
+      if (particle.fadeOut) {
+        alpha = 1.0 - particle.fadeProgress;
+      }
+      
+      const texture = this.textures['oak_leaf_particle'];
+
+      if (texture) {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        
+        // Add random tint to the particle for more visual variety
+        const tintFactor = 0.8 + Math.random() * 0.4; // 0.8 to 1.2 for slight brightness variation
+        const tintedLightFactor = combinedLightFactor * tintFactor;
+        
+        this.drawBlockTexture(texture, sx - size / 2, sy - size / 2, size, tintedLightFactor, particle.rotation);
+        ctx.restore();
+      } else {
+        // Fallback: draw a simple colored rectangle if texture is not available
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        let c = '#66bb66'; // Default green color
+        // Adjust color based on leaf type if available
+        if (particle.leafType === 'birch_leaves') {
+          c = '#88cc88';
+        } else if (particle.leafType === 'spruce_leaves') {
+          c = '#44aa44';
+        } else if (particle.leafType === 'maple_green_leaves') {
+          c = '#66cc66';
+        } else if (particle.leafType === 'maple_orange_leaves') {
+          c = '#ffbb66';
+        } else if (particle.leafType === 'maple_red_leaves') {
+          c = '#ff6666';
+        }
+        
+        // Add random tint to the particle for more visual variety
+        const tintFactor = 0.8 + Math.random() * 0.4; // 0.8 to 1.2 for slight brightness variation
+        const tintedLightFactor = combinedLightFactor * tintFactor;
+        c = darkenHex(c, tintedLightFactor);
+        
+        ctx.fillStyle = c;
+        ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
+        ctx.restore();
+      }
+    }
+  }
+
+  drawBlockTexture(texture, x, y, size, lightFactor = 1.0, rotation = 0) {
+    const { ctx } = this;
+    
+    // Create cache key with reduced precision for light factor to improve cache hit rate
+    const cacheKey = `${texture.src}_${(Math.round(lightFactor * 20) / 20).toFixed(2)}`;
+    
+    // Try to get from cache
+    let processedTexture = this._imageCache.get(cacheKey);
+    if (!processedTexture) {
+      // Limit cache size to prevent memory issues
+      if (this._imageCache.size > 200) {
+        const firstKey = this._imageCache.keys().next().value;
+        this._imageCache.delete(firstKey);
+      }
+      
+      // Get the actual dimensions of the texture
+      const textureWidth = texture.width || 16;
+      const textureHeight = texture.height || 16;
+      
+      // Create a temporary canvas at the original texture size
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCanvas.width = textureWidth;
+      tempCanvas.height = textureHeight;
+      
+      // Draw the texture at its original size
+      tempCtx.imageSmoothingEnabled = false;
+      tempCtx.drawImage(texture, 0, 0, textureWidth, textureHeight);
+      
+      // Get the image data to process pixels
+      const imageData = tempCtx.getImageData(0, 0, textureWidth, textureHeight);
+      const data = imageData.data;
+      
+      // Process each pixel with simplified lighting
+      for (let i = 0; i < data.length; i += 4) {
+        // Preserve original alpha values - don't force binary transparency
+        // Only apply lighting to RGB channels
+        if (data[i + 3] > 0) { // If pixel is not fully transparent
+          // Simplified lighting calculation
+          data[i] = Math.floor(data[i] * lightFactor);
+          data[i + 1] = Math.floor(data[i + 1] * lightFactor);
+          data[i + 2] = Math.floor(data[i + 2] * lightFactor);
+        }
+      }
+      
+      // Put the processed image data back
+      tempCtx.putImageData(imageData, 0, 0);
+      
+      // Cache the result
+      this._imageCache.set(cacheKey, tempCanvas);
+      processedTexture = tempCanvas;
+    }
+    
+    // Draw the processed texture at the target size
+    ctx.imageSmoothingEnabled = false;
+    if (rotation !== 0) {
+      ctx.save();
+      ctx.translate(x + size/2, y + size/2);
+      ctx.rotate(rotation);
+      ctx.drawImage(processedTexture, -size/2, -size/2, size, size);
+      ctx.restore();
+    } else {
+      ctx.drawImage(processedTexture, x, y, size, size);
+    }
+  }
+  
   drawBlock(tileX, tileY, type, meta) {
     const { ctx, camera, world } = this;
+    ctx.imageSmoothingEnabled = false;
     const sx = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
     const sy = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
     const size = Math.round(TILE_SIZE * camera.zoom);
     
+    // Get light level for this block
+    const lightLevel = world.getLight(tileX, tileY);
+    // Convert light level (0-15) to a factor (0.0-1.0)
+    const lightFactor = lightLevel / 15;
+    
+    // Compute canonical sunPhase same as drawSky (sunrise at 0.25)
     const timeOfDay = (world.time % world.dayLength) / world.dayLength;
+    const sunPhase = (timeOfDay - 0.25 + 1) % 1; // 0..1 where 0 = sunrise, 0.5 = noon
     
-    const sunPosition = (timeOfDay + 0.25) % 1;
+    // Determine whether sun is visible (first half) or moon (second half)
+    const sunVisible = sunPhase >= 0 && sunPhase <= 0.5;
+    const travelT = sunVisible ? (sunPhase / 0.5) : ((sunPhase - 0.5) / 0.5); // 0..1 across visible window
     
-    const sunPos = this.getSunPosition(sunPosition);
-    
-    let lightFactor;
-    if (sunPosition < 0.25) {
-      const t = sunPosition / 0.25;
-      lightFactor = 0.5 * (1 - t) + 0.7 * t;
-    } else if (sunPosition < 0.5) {
-      const t = (sunPosition - 0.25) / 0.25;
-      lightFactor = 0.7 * (1 - t) + 1.0 * t;
-    } else if (sunPosition < 0.75) {
-      const t = (sunPosition - 0.5) / 0.25;
-      lightFactor = 1.0 * (1 - t) + 0.7 * t;
+    // Base lighting factor based on time of day
+    let baseLightFactor;
+    if (sunVisible) {
+      // peak at travelT=0.5 (noon), lower at edges (sunrise/sunset)
+      // Use sin curve for smoothness: sin(pi * travelT) maps 0..1..0 -> we remap to 0.5..1.0..0.5
+      const s = Math.sin(Math.PI * travelT); // 0..1..0
+      baseLightFactor = 0.5 + 0.5 * s; // 0.5..1.0..0.5
     } else {
-      const t = (sunPosition - 0.75) / 0.25;
-      lightFactor = 0.7 * (1 - t) + 0.5 * t;
+      // Night - moonlight provides modest illumination
+      const s = Math.sin(Math.PI * travelT); // as moon moves, slight variation
+      baseLightFactor = 0.35 + 0.15 * s; // ~0.35..0.5
     }
     
+    // Underground lighting should be less affected by time of day
+    // Only blocks near the surface should be affected by time of day
+    const depthFactor = Math.min(1, Math.max(0, (tileY - 5) / 5)); // Blocks deeper than 5 tiles are less affected by time of day
+    const adjustedBaseLightFactor = baseLightFactor * (1 - Math.min(1, depthFactor * 0.7)) + 0.3 * Math.min(1, depthFactor);
+    
+    // Combine base light factor with block light level
+    // Underground blocks will be darker regardless of time of day
+    let combinedLightFactor = lightFactor * adjustedBaseLightFactor;
+    
+    // Reduce shading during daytime
+    if (sunVisible) {
+      combinedLightFactor = Math.min(1.0, combinedLightFactor * 1.5);
+    }
+    
+    // Add shadow effect based on blocks above
+    let shadowFactor = 1.0;
+    const blockAbove = world.getBlockType(tileX, tileY - 1);
+    // Only apply shadow if the block above is solid and has high opacity
+    if (blockAbove && blockAbove.solid && (blockAbove.opacity === undefined || blockAbove.opacity >= 0.99)) {
+      // Dynamic shadow based on time of day
+      if (sunVisible) {
+        // During day, shadows are lighter at noon, darker at sunrise/sunset
+        const noonness = Math.sin(Math.PI * travelT); // 0 at sunrise/sunset, 1 at noon
+        shadowFactor = 0.85 + (noonness * 0.1); // 0.85-0.95 range
+      } else {
+        // During night, shadows are consistently darker
+        shadowFactor = 0.7;
+      }
+    }
+    
+    // Apply shadow to the combined light factor
+    const finalLightFactor = Math.min(1.0, combinedLightFactor * shadowFactor);
     
     const texture = this.textures[type.id];
     
@@ -316,14 +526,20 @@ export class Renderer {
 
     if (texture || chestTexture) {
       const drawTexture = chestTexture || texture;
-      ctx.drawImage(drawTexture, sx, sy, size, size);
       
+      // Check if this is a leaf block that's part of a tree (not placed by player)
+      if ((type.id.endsWith('_leaves')) && (!meta || !meta.placed)) {
+        const randomRotation = meta?.rotation ?? Math.floor(Math.random() * 4) * Math.PI / 2;
+        this.drawBlockTexture(drawTexture, sx, sy, size, finalLightFactor, randomRotation);
+      } else {
+        this.drawBlockTexture(drawTexture, sx, sy, size, finalLightFactor);
+      }
       return;
     }
 
     let c = type.color || '#999';
     
-    c = darkenHex(c, lightFactor);
+    c = darkenHex(c, finalLightFactor);
 
     ctx.save();
     ctx.translate(sx, sy);
@@ -404,7 +620,7 @@ export class Renderer {
     const bw = Math.round(player.width * camera.zoom);
     const bh = Math.round(player.height * camera.zoom);
     
-    ctx.fillStyle = '#000000';
+    ctx.fillStyle = '#FFFFFF'; // Make character fully white
     
     const radius = Math.floor(bw / 2);
     const rectHeight = Math.max(0, bh - bw);
@@ -430,8 +646,8 @@ export class Renderer {
     const sx = Math.round(camera.worldToScreenX(state.x * TILE_SIZE));
     const sy = Math.round(camera.worldToScreenY(state.y * TILE_SIZE));
     const type = registry.get(world.getBlockId(state.x, state.y)) || registry.get(state.id);
-    const baseColor = type?.color || '#666';
-    const shardColor = darkenHex(baseColor, 0.5);
+    // Use a solid dark grey color for all blocks
+    const shardColor = '#444444';
 
     const total = state.shards.length;
     const visible = Math.max(1, Math.floor(total * Math.min(1, state.progress)));
@@ -550,7 +766,14 @@ export class Renderer {
     const playerTileX = Math.floor((player.x + player.width / 2) / TILE_SIZE);
     const playerTileY = Math.floor((player.y + player.height / 2) / TILE_SIZE);
     const daysPlayed = Math.floor(world.time / world.dayLength);
-    const label = `Position: ${playerTileX}, ${playerTileY}  Days: ${daysPlayed}`;
+    
+    // Calculate time of day
+    const timeOfDay = world.time % world.dayLength;
+    const hours = Math.floor(timeOfDay / 60); // 60 seconds per minute
+    const minutes = Math.floor(timeOfDay % 60);
+    const timeString = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    
+    const label = `Position: ${playerTileX}, ${playerTileY}  Days: ${daysPlayed}  Time: ${timeString}  FPS: ${this.fps}`;
 
     ctx.font = `bold ${14 * dpr}px sans-serif`;
     const textMetrics = ctx.measureText(label);
@@ -622,7 +845,8 @@ export class Renderer {
       if (t) {
         const texture = this.textures[t.id];
         if (texture) {
-          ctx.drawImage(texture, ix, iy, iconSize, iconSize);
+          // For inventory items, use light factor 1.0 (no lighting)
+          this.drawBlockTexture(texture, ix, iy, iconSize, 1.0);
         } else {
           ctx.save();
           ctx.translate(ix, iy);
@@ -650,7 +874,8 @@ export class Renderer {
     } else if (stack.type === 'item') {
       const texture = this.textures[stack.itemId];
       if (texture) {
-        ctx.drawImage(texture, ix, iy, iconSize, iconSize);
+        // For inventory items, use light factor 1.0 (no lighting)
+        this.drawBlockTexture(texture, ix, iy, iconSize, 1.0);
       } else {
         ctx.save();
         ctx.translate(ix, iy);
@@ -870,5 +1095,47 @@ export class Renderer {
       if (inside(r)) return { area: 'craft', index: r.index };
     }
     return null;
+  }
+  
+  drawHoveredBlockOutline() {
+    // Get the necessary variables from the UI provider
+    const ui = this.getUI();
+    const input = this.input;
+    const camera = this.camera;
+    const world = this.world;
+    const ctx = this.ctx;
+    const player = this.player;
+    
+    // Check if outline should be shown
+    if (!ui.showOutline) return;
+    
+    // Get mouse tile position
+    const worldX = camera.screenToWorldX(input.mouse.x);
+    const worldY = camera.screenToWorldY(input.mouse.y);
+    const tileX = Math.floor(worldX / TILE_SIZE);
+    const tileY = Math.floor(worldY / TILE_SIZE);
+    
+    // Check if the tile is in bounds and has a block
+    if (world.inBounds(tileX, tileY)) {
+      const blockId = world.getBlockId(tileX, tileY);
+      if (blockId !== 'air') {
+        // Check reach distance (5 tiles)
+        const playerCenterX = player.x + player.width / 2;
+        const playerCenterY = player.y + player.height / 2;
+        const dx = (tileX * TILE_SIZE + TILE_SIZE / 2) - playerCenterX;
+        const dy = (tileY * TILE_SIZE + TILE_SIZE / 2) - playerCenterY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance <= 5 * TILE_SIZE) {
+          const sx = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
+          const sy = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
+          const size = Math.round(TILE_SIZE * camera.zoom);
+          
+          ctx.strokeStyle = '#888888'; // Grey outline
+          ctx.lineWidth = 2;
+          ctx.strokeRect(sx, sy, size, size);
+        }
+      }
+    }
   }
 }

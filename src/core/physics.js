@@ -67,10 +67,10 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   const isSprinting = input.isKeyDown('ShiftLeft') || input.isKeyDown('ShiftRight');
   
   let gravity = player.gravity;
-  let walkSpeed = 180;
-  let sprintSpeed = 230;
+  let walkSpeed = 80; // Further reduced walk speed
+  let sprintSpeed = 120; // Further reduced sprint speed
   let jumpVelocity = player.jumpVelocity;
-  let accel = player.onGround ? (isSprinting ? 3000 : 2400) : 1400;
+  let accel = player.onGround ? (isSprinting ? 1200 : 800) : 600; // Further reduced acceleration
   
   if (inWater && !noClipMode) {
     gravity *= 0.3;
@@ -106,18 +106,19 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   player.vx += step;
 
   if (target === 0) {
-    const friction = inWater ? 6 : (player.onGround ? 12 : 1);
+    const friction = inWater ? 6 : (player.onGround ? 18 : 1);
     player.vx *= Math.max(0, 1 - friction * dt);
     if (Math.abs(player.vx) < 1) player.vx = 0;
   }
 
   if (input.isKeyDown('KeyW') || input.isKeyDown('Space')) {
     if (player.onGround) {
-      player.vy = -jumpVelocity;
+      // Apply jump with reduced velocity for slower jumping
+      player.vy = -jumpVelocity * 0.7; // Apply full jump velocity
       player.onGround = false;
     } else if (inWater) {
-      player.vy -= 300 * dt;
-      if (player.vy < -jumpVelocity * 0.8) player.vy = -jumpVelocity * 0.8;
+      player.vy -= 200 * dt; // Reduce water jump force
+      if (player.vy < -jumpVelocity * 0.5) player.vy = -jumpVelocity * 0.5; // Reduce max water jump velocity
     }
   }
   

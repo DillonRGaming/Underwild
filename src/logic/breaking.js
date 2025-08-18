@@ -62,19 +62,21 @@ export class Breaker {
         type.onBreak(world, this.state.x, this.state.y, cell.meta);
       }
       
-      // Check block above to see if it needs to break as well (for plants)
+    // Check block above to see if it needs to break as well (for plants)
       const aboveX = this.state.x;
       const aboveY = this.state.y - 1;
       if (world.inBounds(aboveX, aboveY)) {
         const aboveId = world.getBlockId(aboveX, aboveY);
         const aboveType = this.registry.get(aboveId);
-        if (aboveType && (aboveType.id === 'poppy' || aboveType.id === 'short_grass')) {
+        if (aboveType && (aboveType.id === 'poppy' || aboveType.id === 'short_grass' || aboveType.id === 'fern')) {
           world.setBlock(aboveX, aboveY, 'air', null);
         }
       }
       
       // Remove the block and return full break result so caller can spawn drops
       world.setBlock(this.state.x, this.state.y, 'air', null);
+      // Update lighting around the removed block
+      world.updateLighting(this.state.x, this.state.y);
       this.cancel();
       return result;
     }

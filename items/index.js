@@ -1,4 +1,5 @@
 import { BlockItem, Item } from './blockItem.js';
+import apple from './apple.js';
 
 export function defaultHotbar(registry) {
   return [
@@ -12,4 +13,10 @@ export function defaultHotbar(registry) {
     new BlockItem('stone_slab'),
     new BlockItem('stone_stairs')
   ];
+}
+
+export function registerAllItems(registry) {
+  [
+    apple
+  ].forEach(item => registry.register(item));
 }
