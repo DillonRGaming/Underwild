@@ -13,7 +13,7 @@ import { Placer } from './src/logic/placing.js';
 import { Breaker } from './src/logic/breaking.js';
 import { findMatchingRecipe, consumeRecipeIngredients, createRecipeOutput } from './src/logic/crafting.js';
 
-const REACH_TILES = 5;
+const REACH_TILES = 500;
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -42,8 +42,8 @@ const registry = new BlockRegistry();
 registerAllBlocks(registry);
 registerAllItems(registry);
 
-const WORLD_WIDTH = 256;
-const WORLD_HEIGHT = 350;
+const WORLD_WIDTH = 2560;
+const WORLD_HEIGHT = 3500;
 const world = new World(WORLD_WIDTH, WORLD_HEIGHT, registry);
 // Generate a new random seed each time the game loads
 let currentSeed = Math.floor(Math.random() * 1000000);
