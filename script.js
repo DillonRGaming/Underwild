@@ -42,8 +42,8 @@ const registry = new BlockRegistry();
 registerAllBlocks(registry);
 registerAllItems(registry);
 
-const WORLD_WIDTH = 2560;
-const WORLD_HEIGHT = 200;
+const WORLD_WIDTH = 25000;
+const WORLD_HEIGHT = 20;
 const world = new World(WORLD_WIDTH, WORLD_HEIGHT, registry);
 // Generate a new random seed each time the game loads
 let currentSeed = Math.floor(Math.random() * 1000000);
