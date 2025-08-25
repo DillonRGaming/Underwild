@@ -52,12 +52,12 @@ export class World {
               chunk.dirty = true;
               this._savedChunks.delete(chunkX);
             }
-          } catch (e) { /* ignore restore errors */ }
+          } catch (e) {}
 
           this.chunks.set(key, chunk);
           for (let rx = 0; rx < this.chunkSize; rx++) {
             const wx = chunkX * this.chunkSize + rx;
-            try { this._sampleCache.delete(wx); } catch (e) { /* ignore */ }
+            try { this._sampleCache.delete(wx); } catch (e) {}
           }
 
           try {
@@ -76,9 +76,7 @@ export class World {
               }
               this._crossChunkPending.delete(chunkX);
             }
-          } catch (err) {
-            // Ignore cross-chunk errors
-          }
+          } catch (err) {}
 
           this._touchChunkLRU(chunkX);
           this._enforceChunkLimit();
@@ -210,9 +208,8 @@ export class World {
         chunk.dirty = true;
         this._savedChunks.delete(chunkX);
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {}
 
-    // Restore chest inventories for this chunk
     const savedChests = this._savedChestInventories.get(chunkX);
     if (savedChests && savedChests.length > 0) {
       for (const savedChest of savedChests) {
@@ -223,7 +220,7 @@ export class World {
           chunk.cells[idx].meta.inv = savedChest.inv;
         }
       }
-      this._savedChestInventories.delete(chunkX); // Clear from saved map after restoring
+      this._savedChestInventories.delete(chunkX);
     }
 
     this.chunks.set(key, chunk);
@@ -231,7 +228,6 @@ export class World {
     this._enforceChunkLimit();
 
         try {
-          // Fast lighting initialization for this chunk
           const chunkX = Math.floor(baseX / this.chunkSize);
           this.initializeChunkLighting(chunkX);
         } catch (e) {
@@ -281,9 +277,6 @@ export class World {
       return chunk;
     }
     
-    // If chunk is not loaded, we'll create a temporary one
-    // In a real implementation, you might want to load it synchronously
-    // For now, we'll return null to indicate it's not available
     return null;
   }
 
@@ -326,7 +319,6 @@ export class World {
       try {
         const ch = this.chunks.get(key);
         if (ch && ch.cells && ch.dirty) {
-          // Save chest inventories
           const chestsInChunk = [];
           for (let y = 0; y < this.height; y++) {
             for (let rx = 0; rx < this.chunkSize; rx++) {
@@ -346,9 +338,9 @@ export class World {
 
           try {
             this._savedChunks.set(chunkX, ch.cells.slice());
-          } catch (e) { /* ignore save errors */ }
+          } catch (e) {}
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {}
       this.chunks.delete(key);
     }
     const idx = this.loadedChunkOrder.indexOf(chunkX);
@@ -395,7 +387,6 @@ export class World {
     const chunk = this.loadChunk(cx);
     
     if (chunk && chunk.cells) {
-      // Chunk is loaded, we can directly modify it
       const rx = this.xRelInChunk(x);
       const idx = y * this.chunkSize + rx;
       chunk.cells[idx] = { id, meta };
@@ -407,7 +398,6 @@ export class World {
       
       this.updateLighting(x, y);
     } else {
-      // Chunk is not loaded, store the change for later
       if (!this._crossChunkPending.has(cx)) {
         this._crossChunkPending.set(cx, []);
       }
@@ -426,7 +416,6 @@ export class World {
   }
   
   calculateSkyLight() {
-    // Only calculate lighting for loaded chunks
     for (const chunkEntry of this.chunks.values()) {
       if (!chunkEntry || !chunkEntry.cells) continue;
       
@@ -443,13 +432,9 @@ export class World {
           const isBlockLightSource = blockType && blockType.lightLevel && blockType.lightLevel > 0;
           
           if (isBlockLightSource) {
-            // For light sources, ALWAYS preserve their light level
-            // Never let sky light override a light source
             const lightSourceLevel = blockType.lightLevel;
             this.setLight(x, y, lightSourceLevel);
           } else {
-            // For non-light source blocks, use the higher of sky light or existing light
-            // This preserves torch light that has been propagated to neighboring blocks
             const newLight = Math.max(skyLight, existingLight);
             this.setLight(x, y, newLight);
           }
@@ -474,10 +459,8 @@ export class World {
   }
   
   calculateBlockLight() {
-    // Calculate light from block sources (torches, etc.)
     const lightSources = [];
     
-    // Find all light sources in loaded chunks
     for (const chunkEntry of this.chunks.values()) {
       if (!chunkEntry || !chunkEntry.cells) continue;
       
@@ -495,8 +478,6 @@ export class World {
       }
     }
     
-    // Propagate light from each source
-    // This ensures that torch light spreads to neighboring blocks
     for (const source of lightSources) {
       this.propagateLightFromSource(source.x, source.y, source.light);
     }
@@ -513,12 +494,10 @@ export class World {
       if (visited.has(idx)) continue;
       visited.add(idx);
       
-      // Set light level if it's higher than current
       const currentLight = this.getLight(x, y);
       const combinedLight = Math.max(currentLight, light);
       this.setLight(x, y, combinedLight);
       
-      // Propagate to neighbors
       const neighbors = [
         { x: x + 1, y: y },
         { x: x - 1, y: y },
@@ -552,7 +531,6 @@ export class World {
     const queue = [];
     const visited = new Set();
     
-    // Only propagate light from loaded chunks
     for (const chunkEntry of this.chunks.values()) {
       if (!chunkEntry || !chunkEntry.cells) continue;
       
@@ -605,20 +583,15 @@ export class World {
   }
 
   updateLighting(x, y) {
-    // Update lighting immediately for block changes
-    // Add a small throttle to prevent excessive updates
     if (!this._lastLightUpdate) this._lastLightUpdate = 0;
-    if (this.time - this._lastLightUpdate < 0.1) return; // Update at most 10 times per second
+    if (this.time - this._lastLightUpdate < 0.1) return;
     
     this._lastLightUpdate = this.time;
     
-    // Calculate sky light first
     this.calculateSkyLight();
     
-    // Then calculate block light sources - this will override sky light where needed
     this.calculateBlockLight();
     
-    // Finally propagate all light
     this.propagateLight();
   }
 
@@ -627,13 +600,10 @@ export class World {
 
 
   initializeLighting() {
-    // Calculate sky light first
     this.calculateSkyLight();
     
-    // Then calculate block light sources - this will override sky light where needed
     this.calculateBlockLight();
     
-    // Finally propagate all light
     this.propagateLight();
   }
 
@@ -645,16 +615,12 @@ export class World {
   }
 
   tick(dt, time) {
-    // Periodic lighting update to ensure lighting stays current
     if (!this._lastPeriodicLightUpdate) this._lastPeriodicLightUpdate = 0;
-    if (time - this._lastPeriodicLightUpdate > 60) { // Update every 60 frames (about 1 second)
-      // Calculate sky light first
+    if (time - this._lastPeriodicLightUpdate > 60) {
       this.calculateSkyLight();
       
-      // Then calculate block light sources - this will override sky light where needed
       this.calculateBlockLight();
       
-      // Finally propagate all light
       this.propagateLight();
       this._lastPeriodicLightUpdate = time;
     }

@@ -17,18 +17,16 @@ export class Player {
     this.maxFallSpeed = 600;
     this.onGround = false;
     
-    // Hand swing animation
     this.swingAnimation = {
       active: false,
       progress: 0,
-      duration: 0.15, // 150ms swing duration for responsive mining feel
+      duration: 0.15,
       startTime: 0,
-      continuous: false, // New: for continuous swinging while holding buttons
-      cycleCount: 0 // Track how many cycles we've done
+      continuous: false,
+      cycleCount: 0
     };
     
-    // Facing direction and mouse tracking
-    this.facingDirection = 1; // 1 for right, -1 for left
+    this.facingDirection = 1;
     this.lastMouseX = 0;
     this.lastMouseY = 0;
   }
@@ -40,32 +38,24 @@ export class Player {
       return;
     }
     
-    // Check if world exists before proceeding with physics
     if (!this.world) {
-      // World not created yet, just return without updating physics
       return;
     }
     
-    // Track movement direction
-    if (Math.abs(this.vx) > 10) { // Only update if moving with some speed
+    if (Math.abs(this.vx) > 10) {
       this.facingDirection = this.vx > 0 ? 1 : -1;
     }
     
-    // Update swing animation - BULLETPROOF VERSION
     if (this.swingAnimation.active) {
-      // Use world time from the world object for consistency
       const currentTime = this.world.time || time;
-      const elapsed = (currentTime - this.swingAnimation.startTime) / 1000; // Convert to seconds
+      const elapsed = (currentTime - this.swingAnimation.startTime) / 1000;
       
       if (this.swingAnimation.continuous) {
-        // For continuous animation, ALWAYS keep it running
         this.swingAnimation.progress = (elapsed % this.swingAnimation.duration) / this.swingAnimation.duration;
         this.swingAnimation.cycleCount = Math.floor(elapsed / this.swingAnimation.duration);
         
-        // Ensure animation never stops when continuous
         this.swingAnimation.active = true;
       } else {
-        // Single swing animation
         this.swingAnimation.progress = Math.min(elapsed / this.swingAnimation.duration, 1);
         
         if (this.swingAnimation.progress >= 1) {
@@ -110,15 +100,11 @@ export class Player {
     const centerX = this.x + this.width / 2;
     const centerY = this.y + this.height / 2;
     
-    // Use only movement direction, not mouse position
     const side = this.facingDirection;
     
-    // Base position - better distance and height
     const baseDistance = 12;
     let handX = centerX + (side * baseDistance);
     let handY = centerY + 2;
-    
-    // No animation - hand stays in fixed position
     
     return { x: handX, y: handY };
   }

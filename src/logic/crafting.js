@@ -109,14 +109,14 @@ function consumeShapedInputs(grid, gridWidth, shape, ingredients) {
               match = false;
               break;
             }
-                     } else {
-             const requiredIngredient = ingredients[shapeKey];
-             if (!gridItem || 
-                 (gridItem.type !== 'block' && gridItem.type !== 'item') ||
-                 !ingredientsMatch(gridItem.type === 'block' ? gridItem.blockId : gridItem.itemId, requiredIngredient)) {
-               match = false;
-               break;
-             }
+          } else {
+            const requiredIngredient = ingredients[shapeKey];
+            if (!gridItem || 
+                (gridItem.type !== 'block' && gridItem.type !== 'item') ||
+                !ingredientsMatch(gridItem.type === 'block' ? gridItem.blockId : gridItem.itemId, requiredIngredient)) {
+              match = false;
+              break;
+            }
             
             if (!tempConsumed[gridIndex]) {
               tempConsumed[gridIndex] = { ...gridItem, count: 0 };
