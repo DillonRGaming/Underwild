@@ -1819,10 +1819,6 @@ class MenuManager {
       // Configure PeerJS with more aggressive connection options
       const peerConfig = {
         debug: 3, // Enable debug logging
-        host: 'peerjs-server.herokuapp.com',
-        port: 443,
-        path: '/',
-        secure: true,
         config: {
           'iceServers': [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -2131,26 +2127,16 @@ class MenuManager {
         console.log(`Aggressive check - RTC: ${rtcState}, ICE: ${iceState}, Open: ${conn.open}`);
         
         if ((rtcState === 'connected' || iceState === 'connected' || iceState === 'completed') && !conn.open) {
-          console.log('Aggressive check found connected WebRTC but closed PeerJS - forcing open!');
-          clearTimeout(attemptTimeout);
-          clearInterval(aggressiveCheck);
-          
-          conn.open = true;
-          conn.emit('open');
+          console.log('Aggressive check found connected WebRTC, waiting for PeerJS to update...');
+          // Let PeerJS handle the connection state naturally
         }
         
-        // ULTRA AGGRESSIVE: If ICE is still stuck at "new" after 5 seconds, force connection anyway
+        // Check for stuck connections
         if (rtcState === 'new' && iceState === 'new' && !conn.open) {
           const timeSinceCreate = Date.now() - (conn._createTime || Date.now());
           if (timeSinceCreate > 5000) {
-            console.log('ULTRA AGGRESSIVE: ICE stuck at new state, forcing connection anyway!');
-            clearTimeout(attemptTimeout);
-            clearInterval(aggressiveCheck);
-            
-            conn.open = true;
-            setTimeout(() => {
-              conn.emit('open');
-            }, 100);
+            console.log('Connection appears stuck, but letting PeerJS handle it...');
+            // Modern PeerJS should handle this case better
           }
         }
       }
@@ -2163,39 +2149,21 @@ class MenuManager {
       conn.peerConnection.addEventListener('connectionstatechange', () => {
         console.log('WebRTC connection state changed:', conn.peerConnection.connectionState);
         
-        // When WebRTC connects, force the connection open
+        // When WebRTC connects, check if we should proceed
         if (conn.peerConnection.connectionState === 'connected' && !conn.open) {
-          console.log('WebRTC connected but data channel not open, forcing connection...');
-          clearTimeout(attemptTimeout);
-          
-          // Force the connection to be considered open
-          conn.open = true;
-          
-          // Manually trigger the open event
-          setTimeout(() => {
-            console.log('Manually triggering connection open event...');
-            conn.emit('open');
-          }, 100);
+          console.log('WebRTC connected, waiting for data channel to open...');
+          // Let PeerJS handle the connection state naturally
         }
       });
       
       conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
         console.log('ICE connection state changed:', conn.peerConnection.iceConnectionState);
         
-        // Also try when ICE connects  
+        // Also monitor ICE connection status
         if ((conn.peerConnection.iceConnectionState === 'connected' || 
              conn.peerConnection.iceConnectionState === 'completed') && !conn.open) {
-          console.log('ICE connected but data channel not open, forcing connection...');
-          clearTimeout(attemptTimeout);
-          
-          // Force the connection to be considered open
-          conn.open = true;
-          
-          // Manually trigger the open event
-          setTimeout(() => {
-            console.log('Manually triggering connection open event after ICE...');
-            conn.emit('open');
-          }, 100);
+          console.log('ICE connected, waiting for data channel to open...');
+          // Let PeerJS handle the connection state naturally
         }
       });
       
@@ -2208,15 +2176,9 @@ class MenuManager {
         const channel = event.channel;
         
         channel.addEventListener('open', () => {
-          console.log('Data channel opened - forcing connection ready');
+          console.log('Data channel opened - connection should be ready');
           clearTimeout(attemptTimeout);
-          
-          if (!conn.open) {
-            conn.open = true;
-            setTimeout(() => {
-              conn.emit('open');
-            }, 50);
-          }
+          // PeerJS will handle setting conn.open automatically
         });
         
         channel.addEventListener('close', () => {
@@ -2900,37 +2862,21 @@ class MenuManager {
       conn.peerConnection.addEventListener('connectionstatechange', () => {
         console.log('Host: WebRTC connection state changed:', conn.peerConnection.connectionState);
         
-        // When WebRTC connects on host side, force connection open
+        // When WebRTC connects on host side, monitor status
         if (conn.peerConnection.connectionState === 'connected' && !conn.open) {
-          console.log('Host: WebRTC connected but data channel not open, forcing connection...');
-          
-          // Force the connection to be considered open
-          conn.open = true;
-          
-          // Manually trigger the open event
-          setTimeout(() => {
-            console.log('Host: Manually triggering connection open event...');
-            conn.emit('open');
-          }, 100);
+          console.log('Host: WebRTC connected, waiting for data channel to open...');
+          // Let PeerJS handle the connection state naturally
         }
       });
       
       conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
         console.log('Host: ICE connection state changed:', conn.peerConnection.iceConnectionState);
         
-        // Also try when ICE connects on host side
+        // Also monitor ICE connection status on host side
         if ((conn.peerConnection.iceConnectionState === 'connected' || 
              conn.peerConnection.iceConnectionState === 'completed') && !conn.open) {
-          console.log('Host: ICE connected but data channel not open, forcing connection...');
-          
-          // Force the connection to be considered open
-          conn.open = true;
-          
-          // Manually trigger the open event
-          setTimeout(() => {
-            console.log('Host: Manually triggering connection open event after ICE...');
-            conn.emit('open');
-          }, 100);
+          console.log('Host: ICE connected, waiting for data channel to open...');
+          // Let PeerJS handle the connection state naturally
         }
       });
       
@@ -3587,11 +3533,15 @@ class MenuManager {
           if (!conn.dataChannel.onopen) {
             conn.dataChannel.onopen = () => {
               console.log('Manual data channel opened!');
-              conn.open = true;
+              // PeerJS will handle setting conn.open automatically
               
-              // Trigger the open event manually
-              if (conn._events && conn._events.open) {
+              // Trigger the open event manually if needed
+              if (conn._events && conn._events.open && !conn.open) {
+                setTimeout(() => {
+                  if (!conn.open) {
                 conn.emit('open');
+                  }
+                }, 100);
               }
             };
           }
@@ -4455,10 +4405,7 @@ let backgroundBuild = false;
 let gamePaused = false;
 let pauseMenuState = 'main'; // 'main', 'options'
 let pauseMenuHover = -1; // Track which button is being hovered
-// Old gameState system removed - using HTML menus only
-// Old menu hover system removed - using HTML menus only
 
-// Old submenu system removed - using HTML menus only
 
 inventory = new Inventory(registry);
 
@@ -5517,65 +5464,7 @@ function getMouseTileFromEvent(e) {
   return { screenX, screenY, ...getMouseTileFromRaw(screenX, screenY) };
 }
 
-// OLD CANVAS MENU HANDLERS - DISABLED IN FAVOR OF HTML MENUS
-// function handleMainMenuClick(screenX, screenY) {
-//   const dpr = window.devicePixelRatio;
-//   const canvas = document.getElementById('gameCanvas');
-//   
-//   if (!canvas) return; // Safety check
-//   
-//   const buttonWidth = 200 * dpr;
-//   const buttonHeight = 50 * dpr;
-//   const buttonSpacing = 20 * dpr;
-//   const totalHeight = buttonHeight * 4 + buttonSpacing * 3;
-//   const startY = canvas.height * 0.5 - totalHeight / 2;
-//   
-//   // Single Player button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY && screenY <= startY + buttonHeight) {
-//     gameState = 'createWorld';
-//     return;
-//   }
-//   
-//   // Load World button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + buttonHeight + buttonSpacing && screenY <= startY + buttonHeight * 2 + buttonSpacing) {
-//     gameState = 'loadWorld';
-//     return;
-//   }
-//   
-//   // Options button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + (buttonHeight + buttonSpacing) * 2 && screenY <= startY + buttonHeight * 3 + buttonSpacing * 2) {
-//     gameState = 'options';
-//     return;
-//   }
-//   
-//   // Quit Game button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + (buttonHeight + buttonSpacing) * 3 && screenY <= startY + buttonHeight * 4 + buttonSpacing * 3) {
-//     window.close();
-//     return;
-//   }
-// }
 
-// OLD CANVAS MENU HANDLERS - DISABLED IN FAVOR OF HTML MENUS
-// function handleCreateWorldClick(screenX, screenY) {
-//   const dpr = window.devicePixelRatio;
-//   const canvas = document.getElementById('gameCanvas');
-//   
-//   if (!canvas) return; // Safety check
-//   
-//   const subMenu = createWorldSubMenu;
-//   
-//   if (subMenu === 'main') {
-//     handleCreateWorldMainMenuClick(screenX, screenY, dpr, canvas);
-//   } else if (subMenu === 'superflat') {
-//     handleSuperflatEditorClick(screenX, screenY, dpr, canvas);
-//   } else if (subMenu === 'advanced') {
-//     handleAdvancedOptionsClick(screenX, screenY, dpr, canvas);
-//   }
-// }
 
 function handleCreateWorldMainMenuClick(screenX, screenY, dpr, canvas) {
   // Calculate button positions based on the new layout
@@ -7743,135 +7632,3 @@ engine.start();
 
 // Make engine globally accessible for mods
 window.engine = engine;
-
-// Make settings globally accessible
-window.autoJump = autoJump;
-window.keybinds = keybinds;
-
-// OLD CANVAS MENU HANDLERS - DISABLED IN FAVOR OF HTML MENUS
-// function handleOptionsClick(screenX, screenY) {
-//   const dpr = window.devicePixelRatio;
-//   const canvas = document.getElementById('gameCanvas');
-//   
-//   if (!canvas) return;
-//   
-//   // Button dimensions
-//   const buttonWidth = 200 * dpr;
-//   const buttonHeight = 50 * dpr;
-//   const buttonSpacing = 20 * dpr;
-//   const totalHeight = buttonHeight * 4 + buttonSpacing * 3;
-//   const startY = canvas.height * 0.5 - totalHeight / 2;
-//   
-//   // Graphics button (index 0)
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY && screenY <= startY + buttonHeight) {
-//     optionsSubMenu = 'graphics';
-//     return;
-//   }
-//   
-//   // Gameplay button (index 1)
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + buttonHeight + buttonSpacing && screenY <= startY + buttonHeight * 2 + buttonSpacing) {
-//     optionsSubMenu = 'gameplay';
-//     return;
-//   }
-//   
-//   // Audio button (index 2)
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + (buttonHeight + buttonSpacing) * 2 && screenY <= startY + buttonHeight * 3 + buttonSpacing * 2) {
-//     optionsSubMenu = 'audio';
-//     return;
-//   }
-//   
-//   // Controls button (index 3)
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + (buttonHeight + buttonSpacing) * 3 && screenY <= startY + buttonHeight * 4 + buttonSpacing * 3) {
-//     optionsSubMenu = 'controls';
-//     return;
-//   }
-//   
-//   // Back button (index 4)
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= canvas.height * 0.8 && screenY <= canvas.height * 0.8 + buttonHeight) {
-//     if (optionsSubMenu !== 'main') {
-//       optionsSubMenu = 'main';
-//     } else {
-//     gameState = 'mainMenu';
-//     }
-//     return;
-//   }
-// }
-
-// OLD CANVAS MENU HANDLERS - DISABLED IN FAVOR OF HTML MENUS
-// function handleOptionsHover(screenX, screenY) {
-//   const dpr = window.devicePixelRatio;
-//   const canvas = document.getElementById('gameCanvas');
-//   
-//   if (!canvas) return;
-//   
-//   // Check if we're in a submenu
-//   if (optionsSubMenu && optionsSubMenu !== 'main') {
-//     // Only handle back button in submenus
-//     const buttonWidth = 200 * dpr;
-//     const buttonHeight = 50 * dpr;
-//     
-//     // Back button
-//     if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//         screenY >= canvas.height * 0.8 && screenY <= canvas.height * 0.8 + buttonHeight) {
-//       optionsHover = 4;
-//       return;
-//     }
-//     
-//     optionsHover = -1;
-//     return;
-//   }
-//   
-//   // Main options menu
-//   // Button dimensions
-//   const buttonWidth = 200 * dpr;
-//   const buttonHeight = 50 * dpr;
-//   const buttonSpacing = 20 * dpr;
-//   const totalHeight = buttonHeight * 4 + buttonSpacing * 3;
-//   const startY = canvas.height * 0.5 - totalHeight / 2;
-//   
-//   // Graphics button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY && screenY <= startY + buttonHeight) {
-//     optionsHover = 0;
-//     return;
-//   }
-//   
-//   // Gameplay button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + buttonHeight + buttonSpacing && screenY <= startY + buttonHeight * 2 + buttonSpacing) {
-//     optionsHover = 1;
-//     return;
-//   }
-//   
-//   // Audio button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + (buttonHeight + buttonSpacing) * 2 && screenY <= startY + buttonHeight * 3 + buttonSpacing * 2) {
-//     optionsHover = 2;
-//     return;
-//   }
-//   
-//   // Controls button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= startY + (buttonHeight + buttonSpacing) * 3 && screenY <= startY + buttonHeight * 4 + buttonSpacing * 3) {
-//     optionsHover = 3;
-//     return;
-//   }
-//   
-//   // Back button
-//   if (screenX >= canvas.width / 2 - buttonWidth / 2 && screenX <= canvas.width / 2 + buttonWidth / 2 &&
-//       screenY >= canvas.height * 0.8 && screenY <= canvas.height * 0.8 + buttonHeight) {
-//     optionsHover = 4;
-//     return;
-//   }
-//   
-//   optionsHover = -1;
-// }
-  
-
-
-
