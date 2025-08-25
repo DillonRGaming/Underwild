@@ -2,7 +2,7 @@ import { sampleBlockAt } from '../logic/terrainGen.js';
 import { TILE_SIZE } from './utils.js';
 
 export class World {
-  constructor(width, height, registry) {
+  constructor(width, height, registry, seed = 0) {
     this.width = width;
     this.height = height;
     this.registry = registry;
@@ -351,6 +351,37 @@ export class World {
     const arr = this._savedEntities.get(chunkX) || [];
     this._savedEntities.delete(chunkX);
     return arr;
+  }
+
+  loadChunkFromData(chunkX, blocks, meta) {
+    const key = this.chunkKey(chunkX);
+    const chunk = { chunkX, cells: [], dirty: true };
+
+    if (!Array.isArray(blocks)) {
+      console.error(`Failed to load chunk ${chunkX}: Invalid blocks data received.`);
+      return;
+    }
+
+    // Reconstruct cells from blocks and meta
+    for (let y = 0; y < this.height; y++) {
+      for (let rx = 0; rx < this.chunkSize; rx++) {
+        const idx = y * this.chunkSize + rx;
+        const blockId = blocks[idx];
+        const blockMeta = meta && meta[idx] ? meta[idx] : null;
+        chunk.cells[idx] = { id: blockId, meta: blockMeta };
+      }
+    }
+
+    this.chunks.set(key, chunk);
+    this._touchChunkLRU(chunkX);
+    this._enforceChunkLimit();
+
+    // Re-calculate lighting for the loaded chunk
+    this.calculateSkyLight();
+    this.calculateBlockLight();
+    this.propagateLight();
+
+    console.log(`Loaded chunk ${chunkX} from data.`);
   }
 
   

@@ -19,7 +19,7 @@ import { ItemEntity } from './src/entities/item.js';
 import { Bee } from './src/entities/bee.js';
 
 // Game version
-const GAME_VERSION = '0.0.1';
+const GAME_VERSION = '0.5.0';
 
 // World configuration variables - declared early for MenuManager access
 let worldName = 'New World';
@@ -788,19 +788,24 @@ class MenuManager {
         worldName = 'New World';
       }
       
-      // Set world seed if provided
-      if (worldSeed && worldSeed.trim() !== '') {
-        const seed = parseInt(worldSeed);
-        if (!isNaN(seed)) {
-          currentSeed = seed;
+      // Determine the seed to use
+      let finalSeed = 0; // Default seed
+      if (worldSeed && typeof worldSeed === 'string' && worldSeed.trim() !== '') {
+        const parsedSeed = parseInt(worldSeed.trim());
+        if (!isNaN(parsedSeed)) {
+          finalSeed = parsedSeed;
         }
+      } else {
+        // If no seed provided, generate a random one for this session
+        finalSeed = Math.floor(Math.random() * 1000000);
       }
-      
-      console.log('Creating World instance...');
+      currentSeed = finalSeed; // Keep currentSeed updated for consistency
+
+      console.log('Creating World instance with seed:', finalSeed);
       // Create the world instance
       const WORLD_WIDTH = 2000;
       const WORLD_HEIGHT = 200;
-      world = new World(WORLD_WIDTH, WORLD_HEIGHT, registry);
+      world = new World(WORLD_WIDTH, WORLD_HEIGHT, registry, finalSeed);
       console.log('World instance created successfully');
       console.log('Initial world setup:', { 
         width: WORLD_WIDTH, 
@@ -822,16 +827,10 @@ class MenuManager {
         console.log('No mod manager available');
       }
       
-      // Set world seed
-      world.seed = currentSeed;
-      console.log('World seed set:', currentSeed);
+      
       
       // Set random time of day with better distribution
-      randomTime = Math.random();
-      world.time = randomTime * world.dayLength;
-      world.timeManuallySet = false; // Initialize flag
-      console.log(`World spawned with random time: ${Math.floor(randomTime * 24)}:${Math.floor((randomTime * 24 - Math.floor(randomTime * 24)) * 60).toString().padStart(2, '0')}`);
-      console.log(`Initial world time: ${world.time}, Day length: ${world.dayLength}`);
+      
       
       // Set world properties
       world.items = items;
@@ -880,10 +879,10 @@ class MenuManager {
       
       // Start player at surface level, not in the air
       const surfaceY = 60; // Start at a reasonable surface level
-      const tempSpawnY = surfaceY * TILE_SIZE;
-      console.log('Setting player spawn Y to:', tempSpawnY, '(tile:', surfaceY, ')');
+      spawnY = surfaceY * TILE_SIZE; // Assign to global spawnY
+      console.log('Setting player spawn Y to:', spawnY, '(tile:', surfaceY, ')');
       
-      player = new Player(world, registry, spawnX, tempSpawnY);
+      player = new Player(world, registry, spawnX, spawnY); // Use global spawnY
       player.onGround = false;
       console.log('Player created at position:', { x: player.x, y: player.y });
       console.log('Player tile position:', { 
@@ -2540,11 +2539,16 @@ class MenuManager {
       peerId: window.myPeerId,
       players: 1,
       connectedPeers: [],
-      worldData: this.serializeWorldData(),
+      worldSettings: this.serializeWorldSettings(),
       worldName: worldName,
       gameMode: worldGameMode,
       timestamp: Date.now()
     };
+
+    // Ensure remotePlayers map exists, but do not add host's own player
+    if (!window.remotePlayers) {
+      window.remotePlayers = new Map();
+    }
     
     // Register room for discovery
     this.registerRoomForDiscovery(window.hostedRoom);
@@ -2763,52 +2767,35 @@ class MenuManager {
       enabled: true,
       isHost: true,
       connectedPeers: [],
-      worldData: this.serializeWorldData(),
-      playerData: new Map()
+      worldSettings: this.serializeWorldSettings(),
+      playerData: new Map(),
+      lastSentHostX: 0,
+      lastSentHostY: 0,
+      lastHostSyncTime: 0
     };
     
-    // TODO: Implement data synchronization
+    // Implement data synchronization
     console.log('Multiplayer sync initialized');
+
+    // Start periodic world data synchronization for host
+    if (window.hostedRoom) {
+      if (this.worldSyncInterval) {
+        clearInterval(this.worldSyncInterval);
+      }
+      this.worldSyncInterval = setInterval(() => {
+        this.syncWorldData();
+      }, 1000); // Sync every 1 second
+    }
   }
   
-  serializeWorldData() {
-    console.log('Serializing world data...');
+  serializeWorldSettings() {
+    console.log('Serializing world settings...');
     if (!world) {
       console.log('No world available for serialization');
       return null;
     }
-    
-    // This game uses chunks, not a blocks array - let's serialize the chunks
-    console.log('World chunks size:', world.chunks ? world.chunks.size : 'no chunks');
-    
-    if (!world.chunks || world.chunks.size === 0) {
-      console.log('World chunks not ready yet, returning minimal structure...');
-      
-      // Return a minimal world structure that clients can use
-      return {
-        worldName: worldName,
-        seed: world.seed || 0,
-        gameMode: worldGameMode,
-        worldType: worldType,
-        worldSize: worldSize,
-        width: world.width || 2000,
-        height: world.height || 200,
-        chunks: {}, // Empty chunks object
-        time: world.time || 0,
-        weather: world.weather || 'clear',
-        dayLength: world.dayLength || 24000
-      };
-    }
-    
-    // Serialize chunks to a format that can be transmitted
-    const chunksData = {};
-    world.chunks.forEach((chunkData, chunkKey) => {
-      chunksData[chunkKey] = chunkData;
-    });
-    
-    console.log('Serialized chunks count:', Object.keys(chunksData).length);
-    
-    const worldData = {
+
+    const worldSettings = {
       worldName: worldName,
       seed: world.seed,
       gameMode: worldGameMode,
@@ -2816,19 +2803,33 @@ class MenuManager {
       worldSize: worldSize,
       width: world.width,
       height: world.height,
-      chunks: chunksData,
       time: world.time,
       weather: world.weather || 'clear',
-      dayLength: world.dayLength || 24000
+      dayLength: world.dayLength || 24000,
+      superflatLayers: world.superflatLayers
     };
-    
-    console.log('Serialized world data:', worldData);
-    console.log('World chunks count:', Object.keys(worldData.chunks).length);
-    console.log('World dimensions:', `${worldData.width}x${worldData.height}`);
-    
-    return worldData;
+
+    console.log('Serialized world settings:', worldSettings);
+    return worldSettings;
   }
   
+  syncWorldData() {
+    if (!window.hostedRoom || !world) return;
+
+    const worldData = {
+      time: world.time,
+      weather: world.weather,
+      dayLength: world.dayLength
+      // Add other world properties to sync as needed
+    };
+
+    this.broadcastToAll({
+      type: 'world_data_sync',
+      data: worldData,
+      timestamp: Date.now()
+    });
+  }
+
   // Handle incoming connections from other players
   handleIncomingConnection(conn) {
     console.log('Handling incoming connection from:', conn.peer);
@@ -2905,8 +2906,19 @@ class MenuManager {
           timestamp: Date.now() 
         });
         console.log('Sent welcome ping to new connection');
+      // Send host's current player position to the newly connected client
+      if (player) {
+        conn.send({
+          type: 'player_movement',
+          peerId: window.myPeerId, // Host's peer ID
+          position: { x: player.x, y: player.y },
+          username: window.hostedRoom.host, // Host's username
+          timestamp: Date.now()
+        });
+        console.log('Sent host player position to new connection');
+      }
       } catch (error) {
-        console.error('Failed to send welcome ping:', error);
+        console.error('Failed to send welcome ping or host position:', error);
       }
     });
     
@@ -2922,6 +2934,8 @@ class MenuManager {
     
     conn.on('error', (err) => {
       console.error('Incoming connection error:', err);
+      // Treat connection errors as disconnects
+      this.removePlayerFromRoom(conn.peer);
     });
     
     // Add periodic checks for connection state (workaround for PeerJS data channel issues)
@@ -3035,16 +3049,31 @@ class MenuManager {
       username: data.username
     });
     
-    console.log('Sending join_accepted with world data...');
+    console.log('Sending join_accepted with world data and host player info...');
     
     // Send world data to joining player
     conn.send({
       type: 'join_accepted',
-      worldData: this.serializeWorldData(),
-      playerList: window.hostedRoom.connectedPeers.map(p => ({
-        peerId: p.peerId,
-        username: p.username
-      }))
+      worldSettings: this.serializeWorldSettings(),
+      hostPlayerPosition: { x: player.x, y: player.y }, // Include host's current position
+      playerList: (() => {
+        const players = [];
+        // Add host's own player info to the list
+        players.push({
+          peerId: window.myPeerId,
+          username: window.hostedRoom.host,
+          position: { x: player.x, y: player.y }
+        });
+        // Add other connected peers
+        window.hostedRoom.connectedPeers.forEach(p => {
+          players.push({
+            peerId: p.peerId,
+            username: p.username,
+            position: { x: window.remotePlayers.get(p.peerId)?.x || 0, y: window.remotePlayers.get(p.peerId)?.y || 0 }
+          });
+        });
+        return players;
+      })()
     });
     
     console.log(`Player ${data.username} joined the room successfully`);
@@ -3057,8 +3086,25 @@ class MenuManager {
     window.multiplayerConnection = conn;
     window.isMultiplayerClient = true;
     
+    // Store host player position for initial spawn
+    window.hostPlayerPosition = data.hostPlayerPosition;
+
+    // Initialize remote players tracking with the received player list
+    if (!window.remotePlayers) {
+      window.remotePlayers = new Map();
+    }
+    data.playerList.forEach(p => {
+      if (p.peerId !== window.myPeerId) { // Don't add self to remote players
+        window.remotePlayers.set(p.peerId, {
+          x: p.position.x,
+          y: p.position.y,
+          username: p.username
+        });
+      }
+    });
+
     // Load the world data from the host
-    this.loadMultiplayerWorld(data.worldData);
+    this.loadMultiplayerWorldFromSettings(data.worldSettings);
   }
   
   handleJoinDenied(conn, data) {
@@ -3069,16 +3115,30 @@ class MenuManager {
     this.showMenu('multiplayerMenu');
   }
   
-  loadMultiplayerWorld(worldData) {
-    console.log('Loading multiplayer world with data:', worldData);
+  loadMultiplayerWorldFromSettings(worldSettings) {
+    console.log('Loading multiplayer world with settings:', worldSettings);
     
     try {
-      // Set global world variables from host's world
-      worldName = worldData.worldName || 'Multiplayer World';
-      worldSeed = worldData.seed || '';
-      worldGameMode = worldData.gameMode || 'survival';
-      worldType = worldData.worldType || 'regular';
-      worldSize = worldData.worldSize || 'normal';
+      // Set global world variables from host's world settings
+      worldName = worldSettings.worldName || 'Multiplayer World';
+      worldSeed = worldSettings.seed || '';
+      worldGameMode = worldSettings.gameMode || 'survival';
+      worldType = worldSettings.worldType || 'regular';
+      worldSize = worldSettings.worldSize || 'normal';
+      worldSuperflatLayers = worldSettings.superflatLayers || worldSuperflatLayers;
+      
+      // Explicitly set superflat layers if world type is superflat
+      if (worldType === 'superflat') {
+        // If host sent specific superflat layers, use them. Otherwise, use the default.
+        worldSuperflatLayers = worldSettings.superflatLayers || [
+          { blockId: 'grass', height: 1 },
+          { blockId: 'dirt', height: 2 },
+          { blockId: 'bedrock', height: 2 }
+        ];
+      } else {
+        // If not superflat, ensure superflatLayers is null or empty to avoid conflicts
+        worldSuperflatLayers = [];
+      }
       
       // Hide all menus before creating world
       this.hideAllMenus();
@@ -3087,28 +3147,11 @@ class MenuManager {
       this.createWorld().then(() => {
         console.log('Multiplayer world loaded successfully');
         
-        // Load the actual world chunks from host
-        if (worldData.chunks && world) {
-          console.log('Loading world chunks from host...');
-          
-          // Clear existing chunks
-          world.chunks.clear();
-          
-          // Load chunks from host
-          Object.keys(worldData.chunks).forEach(chunkKey => {
-            world.chunks.set(chunkKey, worldData.chunks[chunkKey]);
-          });
-          
-          console.log(`Loaded ${Object.keys(worldData.chunks).length} chunks from host`);
-        }
-        
-        // Set player position (spawn at a safe location)
+        // Set player position to world spawn
         if (player) {
-          // Find a safe spawn position
-          const spawnPos = this.findSafeSpawnPosition();
-          player.x = spawnPos.x;
-          player.y = spawnPos.y;
-          console.log('Player spawned at:', spawnPos);
+          player.x = spawnX; // Use the global spawnX
+          player.y = spawnY; // Use the global spawnY
+          console.log('Player spawned at world spawn:', { x: player.x, y: player.y });
         }
         
         // Initialize multiplayer client sync
@@ -3138,8 +3181,9 @@ class MenuManager {
     for (let y = centerY; y < world.height - 10; y++) {
       for (let x = centerX - 10; x < centerX + 10; x++) {
         if (x >= 0 && x < world.width && y >= 0 && y < world.height) {
-          const index = y * world.width + x;
-          if (world.blocks[index] === 0) { // Air block
+          // Use the proper world access method instead of direct array access
+          const blockId = world.getBlockId(x, y);
+          if (blockId === 'air') { // Air block
             return { x: x * TILE_SIZE, y: y * TILE_SIZE };
           }
         }
@@ -3166,6 +3210,7 @@ class MenuManager {
             window.multiplayerConnection.send({
               type: 'player_movement',
               position: { x: player.x, y: player.y },
+              username: localStorage.getItem('playerUsername') || 'Player', // Include username
               timestamp: Date.now()
             });
           } catch (error) {
@@ -3248,6 +3293,15 @@ class MenuManager {
         alert('Host has shut down the server');
         this.returnToMainMenu();
         break;
+      case 'world_data_sync':
+        if (world && data.data) {
+          world.time = data.data.time;
+          world.weather = data.data.weather;
+          world.dayLength = data.data.dayLength;
+          // Apply other synced world properties
+          console.log('Client synced world data:', data.data);
+        }
+        break;
       default:
         console.log('Unknown client message type:', data.type);
     }
@@ -3287,22 +3341,18 @@ class MenuManager {
     // Update remote player position if we have a system for tracking remote players
     if (window.remotePlayers) {
       if (!window.remotePlayers.has(conn.peer)) {
-        // Find username from connected peers
-        let username = 'Remote Player';
-        if (window.hostedRoom && window.hostedRoom.connectedPeers) {
-          const peer = window.hostedRoom.connectedPeers.find(p => p.peerId === conn.peer);
-          if (peer) username = peer.username;
-        }
-        
         window.remotePlayers.set(conn.peer, {
           x: data.position.x,
           y: data.position.y,
-          username: username
+          username: data.username || 'Remote Player' // Use username from data
         });
       } else {
         const remotePlayer = window.remotePlayers.get(conn.peer);
         remotePlayer.x = data.position.x;
         remotePlayer.y = data.position.y;
+        if (data.username) { // Update username if provided
+          remotePlayer.username = data.username;
+        }
       }
     }
     
@@ -3893,6 +3943,7 @@ function fillArea(x1, y1, x2, y2, blockId, fillType = 'solid', replaceBlock = nu
 
 const spawnTileX = 100;
 const spawnX = TILE_SIZE * spawnTileX;
+let spawnY = 0; // Will be set during world creation
 // Player will be initialized when world is created
 
 // Add loading state
@@ -7346,6 +7397,33 @@ engine = new Engine((dt, time) => {
   }
   if (!inventoryOpen && !openContainer && world && player) {
     player.update(input, dt, time, noClipMode, creativeMode);
+
+    // Host: Broadcast own player position to all connected clients
+    if (window.hostedRoom && window.hostedRoom.connectedPeers) {
+      // Only send if position has changed significantly or periodically
+      const currentX = player.x;
+      const currentY = player.y;
+      const lastSentX = window.multiplayerSync.lastSentHostX || 0;
+      const lastSentY = window.multiplayerSync.lastSentHostY || 0;
+
+      // Send every 100ms or if position changed by more than 1 pixel
+      if (time - (window.multiplayerSync.lastHostSyncTime || 0) > 100 ||
+          Math.abs(currentX - lastSentX) > 1 ||
+          Math.abs(currentY - lastSentY) > 1) {
+
+        menuManager.broadcastToAll({
+          type: 'player_movement',
+          peerId: window.myPeerId, // Host's own peer ID
+          position: { x: currentX, y: currentY },
+          username: window.hostedRoom.host, // Host's username
+          timestamp: Date.now()
+        });
+
+        window.multiplayerSync.lastSentHostX = currentX;
+        window.multiplayerSync.lastSentHostY = currentY;
+        window.multiplayerSync.lastHostSyncTime = time;
+      }
+    }
   }
   
   

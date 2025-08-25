@@ -65,7 +65,7 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
   }
 }
 
-export function resolvePlayerPhysics(player, world, input, dt, noClipMode = false, creativeMode = false) {
+export function resolvePlayerPhysics(player, world, input, dt, noClipMode = false, creativeMode = false, keybinds) {
   const playerCenterX = player.x + player.width / 2;
   const playerCenterY = player.y + player.height / 2;
   const playerTileX = Math.floor(playerCenterX / TILE_SIZE);

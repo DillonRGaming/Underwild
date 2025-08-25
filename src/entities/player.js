@@ -66,7 +66,23 @@ export class Player {
       }
     }
     
-    resolvePlayerPhysics(this, this.world, input, dt, noClipMode, creativeMode);
+    const defaultKeybinds = {
+      forward: 'KeyW',
+      backward: 'KeyS',
+      left: 'KeyA',
+      right: 'KeyD',
+      jump: 'Space',
+      sprint: 'ShiftLeft',
+      inventory: 'KeyE',
+      chat: 'KeyT',
+      drop: 'KeyQ',
+      pause: 'Escape',
+      background: 'KeyZ',
+      rotate: 'KeyR',
+      flip: 'KeyF'
+    };
+    const keybinds = typeof window !== 'undefined' && window.keybinds ? window.keybinds : defaultKeybinds;
+    resolvePlayerPhysics(this, this.world, input, dt, noClipMode, creativeMode, keybinds);
   }
   getHeadAnchor() {
     return { x: this.x + this.width / 2, y: this.y + Math.max(6, this.height * 0.25) };

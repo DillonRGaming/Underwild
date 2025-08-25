@@ -1116,7 +1116,7 @@ export class Renderer {
         ctx.fillStyle = '#FFFFFF';
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 2;
-        ctx.font = `${Math.max(10, Math.round(12 * camera.zoom))}px "Press Start 2P", monospace`;
+        ctx.font = `${Math.max(6, Math.round(8 * camera.zoom))}px "Press Start 2P", monospace`;
         ctx.textAlign = 'center';
         
         const nameY = py - Math.round(5 * camera.zoom);
