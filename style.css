@@ -1,17 +1,1123 @@
+/* Global reset and pixel rendering; strictly monochrome */
 html, body {
   height: 100%;
-}
-body {
   margin: 0;
-  background: #82bafa;
+  padding: 0;
+  background: #000;          /* black background */
+  color: #fff;               /* white text */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   overflow: hidden;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
 }
-#game {
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
+
+* {
+  box-sizing: border-box;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+body {
+  overflow: hidden;
+  font-family: "Press Start 2P", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+}
+
+/* Canvas behind menus; background will be drawn here */
+#gameCanvas {
   display: block;
   width: 100vw;
   height: 100vh;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
   touch-action: none;
+  position: absolute;
+  top: 0; left: 0;
+  z-index: 1;
 }
+
+/* Menu containers */
+.menu-container {
+  position: absolute; inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.menu-container.hidden { display: none; }
+
+/* Menu background layer - now handled by canvas */
+.menu-background {
+  position: absolute; inset: 0;
+  z-index: 0;
+  background: transparent;
+}
+
+/* Pause menu background - dark low opacity */
+.menu-background.pause-bg {
+  background: rgba(0, 0, 0, 0.8);
+  background-image: none;
+}
+
+/* Panel: clean style like hotbar/inventory */
+.menu-content {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  width: min(640px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 24px 20px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: #ffffff;
+}
+.menu-content::-webkit-scrollbar { display: none; }
+
+/* Background configuration styles */
+.background-config {
+  text-align: left;
+  margin-top: 10px;
+}
+
+.background-blocks {
+  margin-bottom: 15px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.background-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.background-block-icon {
+  width: 24px;
+  height: 24px;
+  image-rendering: pixelated;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.randomize-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.randomize-controls input[type="number"] {
+  width: 80px;
+  flex-shrink: 0;
+}
+
+.no-mods-message {
+  text-align: center;
+  padding: 40px 20px;
+  color: #cccccc;
+}
+
+.no-mods-message p {
+  margin: 10px 0;
+}
+
+.no-worlds-message {
+  text-align: center;
+  padding: 20px;
+  color: #cccccc;
+}
+
+.no-worlds-message p {
+  margin: 5px 0;
+}
+
+.local-worlds-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.world-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  margin: 4px 0;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.world-name {
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.world-size {
+  color: #cccccc;
+  font-size: 12px;
+}
+
+.background-block input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.background-block button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: rgba(128, 128, 128, 0.5);
+  border-color: rgba(128, 128, 128, 0.8);
+}
+
+
+
+.background-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.background-controls input {
+  min-width: 120px;
+}
+
+.background-controls button {
+  white-space: nowrap;
+}
+
+.background-help {
+  margin-top: 8px;
+  color: #cccccc;
+  font-size: 10px;
+  text-align: center;
+}
+
+/* Input validation states */
+.minecraft-input.small.error {
+  border-color: #ff4444;
+  box-shadow: 0 0 5px rgba(255, 68, 68, 0.5);
+}
+
+.minecraft-input.small.success {
+  border-color: #44ff44;
+  box-shadow: 0 0 5px rgba(68, 255, 68, 0.5);
+}
+
+/* Titles with blocky shadow */
+.game-title, .menu-title {
+  margin: 0 0 24px 0;
+  color: #fff;
+  text-transform: uppercase;
+  line-height: 1.2;
+  text-shadow:
+    2px 2px 0 #00000080,            /* subtle mono shadow */
+    4px 4px 0 #00000040;
+}
+.game-title { font-size: 28px; letter-spacing: 1px; }
+.menu-title { font-size: 16px; }
+
+.changelog-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+  padding: 0 20px;
+}
+
+.version-number {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.8em;
+  color: #cccccc;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.changelog-button {
+  width: 120px;
+  height: 40px;
+  font-size: 0.7em;
+  padding: 8px 12px;
+}
+
+/* Stacks */
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.menu-buttons:last-child { margin-bottom: 0; }
+
+/* Clean Minecraft-style Buttons like hotbar */
+.minecraft-button, .mc-button {
+  display: inline-block;
+  min-width: 260px;
+  padding: 12px 10px;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  position: relative;
+  user-select: none;
+  font-family: "Press Start 2P", ui-monospace, monospace;
+  font-size: 12px;
+  backdrop-filter: blur(2px);
+  transition: none;
+}
+
+.minecraft-button.small, .mc-button.small {
+  min-width: 140px;
+  padding: 10px 8px;
+}
+
+/* Hover state */
+.minecraft-button:hover, .mc-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 1);
+}
+
+/* Pressed state */
+.minecraft-button:active, .mc-button:active {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translate(1px, 1px);
+}
+
+/* Selected state - clean highlight */
+.minecraft-button[data-selected="true"], .mc-button[data-selected="true"] {
+  background: rgba(255, 255, 255, 0.3);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 1);
+}
+
+/* Button variants */
+.minecraft-button.primary, .mc-primary { 
+  background: rgba(76, 175, 80, 0.7);
+  border-color: rgba(76, 175, 80, 1);
+}
+.minecraft-button.secondary, .mc-secondary { 
+  background: rgba(102, 102, 102, 0.7);
+  border-color: rgba(102, 102, 102, 1);
+}
+
+/* Forms */
+.form-section {
+  margin-bottom: 16px;
+  text-align: left;
+}
+.form-section label {
+  display: block;
+  margin: 0 0 6px 2px;
+  color: #fff;
+  font-weight: 700;
+}
+
+.minecraft-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #ffffff;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(2px);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-family: "Press Start 2P", ui-monospace, monospace;
+  font-size: 11px;
+}
+.minecraft-input:focus {
+  border-color: rgba(255, 255, 255, 1);
+  background: rgba(0, 0, 0, 0.7);
+  outline: none;
+}
+.minecraft-input::placeholder { color: #aaa; }
+
+.option-group { 
+  margin-bottom: 20px; 
+  text-align: center;
+}
+
+.option-group label {
+  display: block;
+  margin: 0 0 8px 0;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.button-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Checkboxes blocky, grayscale */
+
+/* Mods Grid */
+.mods-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.mod-card {
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(2px);
+}
+
+.mod-card:hover {
+  border-color: rgba(255, 255, 255, 1);
+  background: rgba(0, 0, 0, 0.8);
+  transform: translateY(-2px);
+}
+
+.mod-card.enabled {
+  border-color: rgba(76, 175, 80, 1);
+  background: rgba(76, 175, 80, 0.2);
+}
+
+.mod-thumbnail {
+  width: 64px;
+  height: 64px;
+  image-rendering: pixelated;
+  margin-bottom: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+.mod-name {
+  font-size: 14px;
+  margin: 0 0 8px 0;
+  color: #fff;
+  font-weight: bold;
+}
+
+.mod-description {
+  display: none;
+}
+
+.mod-version, .mod-author {
+  display: none;
+}
+
+/* Mod Details */
+.mod-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.mod-header .mod-thumbnail {
+  width: 80px;
+  height: 80px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.mod-info {
+  flex: 1;
+}
+
+.mod-info h2 {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+  color: #fff;
+}
+
+.mod-info p {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  color: #ccc;
+  line-height: 1.4;
+}
+
+.mod-actions {
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+/* Multiplayer Menu Styles */
+.server-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  margin-bottom: 16px;
+}
+
+.server-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.server-item:last-child {
+  border-bottom: none;
+}
+
+.server-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.server-name {
+  flex: 1;
+  text-align: left;
+  font-size: 12px;
+  color: #fff;
+}
+
+.server-status {
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 2px;
+  margin: 0 8px;
+}
+
+.server-status.online {
+  background: rgba(76, 175, 80, 0.8);
+  color: #fff;
+}
+
+.server-status.offline {
+  background: rgba(244, 67, 54, 0.8);
+  color: #fff;
+}
+
+.server-players {
+  font-size: 10px;
+  color: #ccc;
+  min-width: 40px;
+  text-align: right;
+}
+
+/* Suggestions Dropdown */
+.suggestions-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.9);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.suggestions-dropdown.hidden {
+  display: none;
+}
+
+.suggestion-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background-color 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.suggestion-item.selected {
+  background: rgba(76, 175, 80, 0.3);
+}
+
+.suggestion-icon {
+  width: 24px;
+  height: 24px;
+  image-rendering: pixelated;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.suggestion-text {
+  flex: 1;
+  font-size: 12px;
+  color: #fff;
+}
+
+.suggestion-type {
+  font-size: 10px;
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+/* Dropdown Container */
+.dropdown-container {
+  position: relative;
+}
+
+.checkbox-group {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 700;
+  color: #fff;
+}
+.checkbox-label input[type="checkbox"] { display: none; }
+
+.checkmark {
+  width: 20px; height: 20px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 2px solid rgba(255, 255, 255, 1);
+  backdrop-filter: blur(2px);
+  position: relative;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.checkbox-label input[type="checkbox"]:checked + .checkmark::after {
+  content: "✓";
+  position: absolute;
+  width: 100%; height: 100%;
+  top: 0; left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #00ff00;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+
+
+.advanced-options {
+  margin-top: 15px;
+  padding: 20px;
+}
+
+.advanced-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 25px;
+  padding: 20px 0;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.grid-column {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  align-items: center;
+  justify-content: flex-start;
+}
+.advanced-options.hidden { display: none; }
+
+/* Sliders (grayscale) */
+.slider-group { margin-bottom: 14px; }
+.slider-group label { display: block; color: #fff; }
+
+.minecraft-slider {
+  width: 100%;
+  height: 20px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(2px);
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: 6px;
+}
+.minecraft-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px; height: 20px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 2px solid rgba(255, 255, 255, 1);
+  backdrop-filter: blur(2px);
+  cursor: pointer;
+}
+.minecraft-slider::-moz-range-thumb {
+  width: 20px; height: 20px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 2px solid rgba(255, 255, 255, 1);
+  cursor: pointer;
+  border-radius: 0;
+}
+
+/* Hide all scrollbars everywhere */
+::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-track {
+  display: none;
+}
+
+::-webkit-scrollbar-thumb {
+  display: none;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  display: none;
+}
+
+::-webkit-scrollbar-corner {
+  display: none;
+}
+
+/* Firefox scrollbar styling - hide all scrollbars */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* Responsive tweaks */
+@media (max-width: 768px) {
+  .game-title { font-size: 22px; margin-bottom: 18px; }
+  .menu-title { font-size: 14px; margin-bottom: 14px; }
+  .minecraft-button, .mc-button { min-width: 180px; padding: 10px 8px; font-size: 11px; }
+  .minecraft-button.small, .mc-button.small { min-width: 120px; }
+  .button-group { flex-direction: column; align-items: center; }
+  .checkbox-group { flex-direction: column; gap: 10px; }
+  .menu-content { width: min(95%, 560px); padding: 16px; }
+  .form-section { margin-bottom: 12px; }
+  .option-group { margin-bottom: 10px; }
+}
+
+@media (max-width: 480px) {
+  .game-title { font-size: 18px; margin-bottom: 12px; }
+  .menu-title { font-size: 12px; margin-bottom: 10px; }
+  .minecraft-button, .mc-button { min-width: 150px; padding: 8px 8px; font-size: 10px; }
+  .minecraft-button.small, .mc-button.small { min-width: 100px; padding: 6px 6px; font-size: 10px; }
+  .menu-content { width: 98%; padding: 10px; }
+  .button-group { gap: 6px; }
+  .checkbox-group { gap: 8px; }
+}
+
+/* Keybind Controls */
+.keybind-group {
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+.keybind-group label {
+  display: block;
+  margin: 0 0 12px 0;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+}
+
+.keybind-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+}
+
+.keybind-row span {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.keybind-button {
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  color: #fff;
+  padding: 6px 12px;
+  font-family: "Press Start 2P", monospace;
+  font-size: 10px;
+  cursor: pointer;
+  min-width: 80px;
+  transition: all 0.2s ease;
+}
+
+.keybind-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.8);
+}
+
+.keybind-button:active {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translate(1px, 1px);
+}
+
+.keybind-button.binding {
+  background: rgba(255, 165, 0, 0.3);
+  border-color: rgba(255, 165, 0, 0.8);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+/* Changelog Content */
+.changelog-content {
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: 20px;
+  padding: 0 10px;
+}
+
+.version-entry {
+  margin-bottom: 25px;
+  text-align: left;
+}
+
+.version-entry h3 {
+  color: #ffffff;
+  font-size: 14px;
+  margin-bottom: 10px;
+  font-family: 'Press Start 2P', monospace;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+  padding-bottom: 5px;
+}
+
+.version-entry ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.version-entry li {
+  color: #cccccc;
+  font-size: 11px;
+  margin-bottom: 5px;
+  padding-left: 15px;
+  position: relative;
+}
+
+.version-entry li:before {
+  content: "•";
+  color: #ffffff;
+  position: absolute;
+  left: 0;
+  font-weight: bold;
+}
+
+/* Keybind buttons */
+.keybind-button {
+  min-width: 80px;
+  padding: 6px 12px;
+  background: #333;
+  border: 1px solid #555;
+  color: #fff;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.keybind-button:hover {
+  background: #444;
+  border-color: #666;
+}
+
+.keybind-button.binding {
+  background: #ff6b00;
+  border-color: #ff9800;
+  animation: pulse 1s infinite;
+}
+
+.keybind-button.modified {
+  background: #4a9eff;
+  border-color: #6bb3ff;
+  color: #ffffff;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.8; }
+  50% { opacity: 1; }
+  100% { opacity: 0.8; }
+}
+
+/* Background options styling */
+.randomize-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-start;
+}
+
+.randomize-controls input.minecraft-input.small {
+  width: 80px;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.randomize-controls .minecraft-button {
+  flex-shrink: 0;
+  min-width: 120px;
+}
+
+.background-blocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #555;
+  border-radius: 4px;
+  min-height: 80px;
+  align-items: flex-start;
+  align-content: flex-start;
+}
+
+.background-block-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid #666;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #fff;
+}
+
+.background-block-item .remove-btn {
+  background: #ff4444;
+  color: white;
+  border: none;
+  border-radius: 2px;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.background-block-item .remove-btn:hover {
+  background: #ff6666;
+}
+
+/* Multiplayer room styling */
+.rooms-container {
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.rooms-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid #555;
+}
+
+.rooms-status {
+  font-size: 12px;
+  color: #aaa;
+}
+
+.rooms-list {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.no-rooms-message {
+  text-align: center;
+  padding: 20px;
+  color: #888;
+}
+
+.room-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #555;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.room-item:hover {
+  background: rgba(0, 0, 0, 0.4);
+  border-color: #777;
+}
+
+.room-item:last-child {
+  margin-bottom: 0;
+}
+
+.room-info {
+  flex: 1;
+}
+
+.room-name {
+  font-weight: bold;
+  font-size: 14px;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.room-details {
+  font-size: 12px;
+  color: #aaa;
+}
+
+.room-players {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #ccc;
+}
+
+.room-players-count {
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid #666;
+  border-radius: 3px;
+  font-weight: bold;
+  color: #ddd;
+}
+
+.room-players-count.full {
+  background: rgba(255, 107, 107, 0.1);
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+
+.room-join-btn {
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid #666;
+  color: #fff;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.room-join-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: #888;
+}
+
+.room-join-btn:disabled {
+  background: rgba(255, 255, 255, 0.05);
+  color: #666;
+  border-color: #444;
+  cursor: not-allowed;
+}
+
+/* Info message styling */
+.info-message {
+  background: rgba(74, 158, 255, 0.1);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 4px;
+  padding: 12px;
+  margin: 8px 0;
+}
+
+.info-message p {
+  margin: 0;
+  font-size: 12px;
+  color: #4a9eff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-message i {
+  font-size: 14px;
+}
+
+/* World info display */
+.world-info {
+  margin: 16px 0;
+}
+
+.world-config-display {
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #555;
+  border-radius: 4px;
+  margin-top: 8px;
+}
+
+.world-config-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.world-config-item i {
+  color: #ffffff;
+  font-size: 16px;
+}
+
+.world-config-item span {
+  font-weight: bold;
+  color: #fff;
+  flex: 1;
+}
+
+.world-config-details {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.config-detail {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid #666;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #cccccc;
+  font-weight: bold;
+}
+

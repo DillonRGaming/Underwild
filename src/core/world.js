@@ -1,23 +1,102 @@
+import { sampleBlockAt } from '../logic/terrainGen.js';
+import { TILE_SIZE } from './utils.js';
+
 export class World {
   constructor(width, height, registry) {
     this.width = width;
     this.height = height;
     this.registry = registry;
-    this.cells = new Array(width * height);
-    for (let i = 0; i < this.cells.length; i++) {
-      this.cells[i] = { id: 'air', meta: null };
-    }
+
+    this.chunkSize = 8;
+    this.chunks = new Map();
+    this.loadedChunkOrder = [];
+    this.maxLoadedChunks = 9;
+
     this.time = 0;
-    this.dayLength = 1440; // 24 minutes in seconds (12 minutes day, 12 minutes night)
+    this.dayLength = 1440;
     
-    // Initialize light map
     this.lightMap = new Array(width * height);
     for (let i = 0; i < this.lightMap.length; i++) {
-      this.lightMap[i] = 15; // Full light by default
+      this.lightMap[i] = 15;
     }
     
     this.stars = [];
     this.initializeStars();
+
+    this.seed = 0;
+
+    this._savedEntities = new Map();
+
+    this._dirtyChunks = new Set();
+
+    this._crossChunkPending = new Map();
+    this._savedChunks = new Map();
+    this._sampleCache = new Map();
+    this._savedChestInventories = new Map();
+
+    try {
+      this._chunkWorker = new Worker('src/logic/chunkWorker.js', { type: 'module' });
+      this._pendingChunkLoads = new Map();
+      this._chunkWorker.onmessage = (e) => {
+        const msg = e.data;
+        if (!msg) return;
+        if (msg.cmd === 'chunkGenerated') {
+          const { chunkX, cells } = msg;
+          const key = this.chunkKey(chunkX);
+          const chunk = { chunkX, cells, dirty: false };
+
+          try {
+            const saved = this._savedChunks.get(chunkX);
+            if (saved && Array.isArray(saved) && saved.length === cells.length) {
+              chunk.cells = saved.slice();
+              chunk.dirty = true;
+              this._savedChunks.delete(chunkX);
+            }
+          } catch (e) { /* ignore restore errors */ }
+
+          this.chunks.set(key, chunk);
+          for (let rx = 0; rx < this.chunkSize; rx++) {
+            const wx = chunkX * this.chunkSize + rx;
+            try { this._sampleCache.delete(wx); } catch (e) { /* ignore */ }
+          }
+
+          try {
+            const pending = this._crossChunkPending.get(chunkX);
+            if (pending && pending.length) {
+              for (const p of pending) {
+                const rx = p.x - (chunkX * this.chunkSize);
+                if (rx >= 0 && rx < this.chunkSize && p.y >= 0 && p.y < this.height) {
+                  const idx = p.y * this.chunkSize + rx;
+                  const existing = chunk.cells[idx];
+                  if (!existing || existing.id === 'air') {
+                    chunk.cells[idx] = { id: p.id, meta: p.meta ?? null };
+                    chunk.dirty = true;
+                  }
+                }
+              }
+              this._crossChunkPending.delete(chunkX);
+            }
+          } catch (err) {
+            // Ignore cross-chunk errors
+          }
+
+          this._touchChunkLRU(chunkX);
+          this._enforceChunkLimit();
+          
+          this.calculateSkyLight();
+          this.propagateLight();
+          
+          const pending = this._pendingChunkLoads.get(chunkX);
+          if (pending) {
+            pending.resolve(chunk);
+            this._pendingChunkLoads.delete(chunkX);
+          }
+        }
+      };
+    } catch (err) {
+      this._chunkWorker = null;
+      this._pendingChunkLoads = new Map();
+    }
   }
   
   initializeStars() {
@@ -32,29 +111,310 @@ export class World {
       });
     }
   }
+
   index(x, y) {
     return y * this.width + x;
   }
   inBounds(x, y) {
     return x >= 0 && y >= 0 && x < this.width && y < this.height;
   }
+
+  chunkXFor(x) {
+    return Math.floor(x / this.chunkSize);
+  }
+  xRelInChunk(x) {
+    const cx = this.chunkXFor(x);
+    return x - cx * this.chunkSize;
+  }
+  chunkKey(cx) {
+    return String(cx);
+  }
+
+  isChunkLoaded(chunkX) {
+    return this.chunks.has(this.chunkKey(chunkX));
+  }
+
+  
+
+  async loadChunkAsync(chunkX) {
+    const key = this.chunkKey(chunkX);
+    if (this.chunks.has(key) && this.chunks.get(key).cells) {
+      this._touchChunkLRU(chunkX);
+      return this.chunks.get(key);
+    }
+
+    if (this._pendingChunkLoads && this._pendingChunkLoads.has(chunkX)) {
+      return this._pendingChunkLoads.get(chunkX).promise;
+    }
+
+    let resolveLoad, rejectLoad;
+    const loadingPromise = new Promise((res, rej) => { resolveLoad = res; rejectLoad = rej; });
+    const placeholder = { chunkX, cells: null, dirty: false, loadingPromise };
+    this.chunks.set(key, placeholder);
+
+    if (this._chunkWorker) {
+      this._pendingChunkLoads.set(chunkX, { resolve: resolveLoad, reject: rejectLoad, promise: loadingPromise });
+
+      try {
+        this._chunkWorker.postMessage({
+          cmd: 'generateChunk',
+          chunkX,
+          chunkSize: this.chunkSize,
+          height: this.height,
+          seed: this.seed ?? 0,
+          worldWidth: this.width,
+          worldType: this.worldType || 'regular',
+          superflatLayers: this.superflatLayers
+        });
+      } catch (err) {
+        this._pendingChunkLoads.delete(chunkX);
+      }
+
+      try {
+        const chunk = await loadingPromise;
+        this._touchChunkLRU(chunkX);
+        return chunk;
+      } catch (err) {
+      }
+    }
+
+    setTimeout(() => {
+      try {
+        const cells = new Array(this.chunkSize * this.height);
+        const baseX = chunkX * this.chunkSize;
+        for (let rx = 0; rx < this.chunkSize; rx++) {
+          const worldX = baseX + rx;
+          for (let y = 0; y < this.height; y++) {
+            if (worldX < 0 || worldX >= this.width) {
+              cells[y * this.chunkSize + rx] = { id: 'air', meta: null };
+                    } else {
+              const sampled = sampleBlockAt(worldX, y, this.seed ?? 0, this.height, this.width, this.worldType, this.superflatLayers);
+              cells[y * this.chunkSize + rx] = { id: sampled.id, meta: sampled.meta ?? null };
+            }
+          }
+        }
+
+        try {
+          if (typeof this.generateVegetation === 'function') {
+            this.generateVegetation(cells, baseX);
+          }
+        } catch (vegErr) {
+        }
+
+    const chunk = { chunkX, cells, dirty: false };
+
+    try {
+      const saved = this._savedChunks.get(chunkX);
+      if (saved && Array.isArray(saved) && saved.length === cells.length) {
+        chunk.cells = saved.slice();
+        chunk.dirty = true;
+        this._savedChunks.delete(chunkX);
+      }
+    } catch (e) { /* ignore */ }
+
+    // Restore chest inventories for this chunk
+    const savedChests = this._savedChestInventories.get(chunkX);
+    if (savedChests && savedChests.length > 0) {
+      for (const savedChest of savedChests) {
+        const rx = savedChest.x - (chunkX * this.chunkSize);
+        const idx = savedChest.y * this.chunkSize + rx;
+        if (chunk.cells[idx] && chunk.cells[idx].id === 'chest') {
+          if (!chunk.cells[idx].meta) chunk.cells[idx].meta = {};
+          chunk.cells[idx].meta.inv = savedChest.inv;
+        }
+      }
+      this._savedChestInventories.delete(chunkX); // Clear from saved map after restoring
+    }
+
+    this.chunks.set(key, chunk);
+    this._touchChunkLRU(chunkX);
+    this._enforceChunkLimit();
+
+        try {
+          // Fast lighting initialization for this chunk
+          const chunkX = Math.floor(baseX / this.chunkSize);
+          this.initializeChunkLighting(chunkX);
+        } catch (e) {
+        }
+
+        resolveLoad(chunk);
+        if (this.chunks.has(key)) delete this.chunks.get(key).loadingPromise;
+      } catch (err) {
+        this.chunks.delete(key);
+        resolveLoad();
+      }
+    }, 0);
+
+    this._pendingChunkLoads.set(chunkX, { resolve: resolveLoad, reject: rejectLoad, promise: loadingPromise });
+
+    try {
+      const loaded = await loadingPromise;
+      this._touchChunkLRU(chunkX);
+      if (this._pendingChunkLoads.has(chunkX)) this._pendingChunkLoads.delete(chunkX);
+      return loaded;
+    } catch (err) {
+      if (this._pendingChunkLoads.has(chunkX)) this._pendingChunkLoads.delete(chunkX);
+      throw err;
+    }
+  }
+
+  _touchChunkLRU(chunkX) {
+    const idx = this.loadedChunkOrder.indexOf(chunkX);
+    if (idx !== -1) this.loadedChunkOrder.splice(idx, 1);
+    this.loadedChunkOrder.push(chunkX);
+  }
+
+  _enforceChunkLimit() {
+    while (this.loadedChunkOrder.length > this.maxLoadedChunks) {
+      const oldestChunkX = this.loadedChunkOrder.shift();
+      if (oldestChunkX !== undefined) {
+        this.unloadChunk(oldestChunkX);
+      }
+    }
+  }
+
+  loadChunk(chunkX) {
+    const key = this.chunkKey(chunkX);
+    if (this.chunks.has(key)) {
+      const chunk = this.chunks.get(key);
+      this._touchChunkLRU(chunkX);
+      return chunk;
+    }
+    
+    // If chunk is not loaded, we'll create a temporary one
+    // In a real implementation, you might want to load it synchronously
+    // For now, we'll return null to indicate it's not available
+    return null;
+  }
+
+  
+
+  unloadChunk(chunkX) {
+    const key = this.chunkKey(chunkX);
+
+    try {
+      if (this.items && Array.isArray(this.items)) {
+        const baseX = chunkX * this.chunkSize;
+        const minX = baseX;
+        const maxX = baseX + this.chunkSize;
+        const toSave = [];
+        for (let i = this.items.length - 1; i >= 0; i--) {
+          const it = this.items[i];
+          if (!it) continue;
+          const cx = Math.floor((it.x + (it.width || 0) / 2) / TILE_SIZE);
+          if (cx >= minX && cx < maxX) {
+            toSave.push({
+              blockId: it.blockId,
+              x: it.x,
+              y: it.y,
+              vx: it.vx,
+              vy: it.vy,
+              life: it.life,
+              age: it.age ?? 0
+            });
+            this.items.splice(i, 1);
+          }
+        }
+        if (toSave.length > 0) {
+          this._savedEntities.set(chunkX, (this._savedEntities.get(chunkX) || []).concat(toSave));
+        }
+      }
+    } catch (err) {
+    }
+
+    if (this.chunks.has(key)) {
+      try {
+        const ch = this.chunks.get(key);
+        if (ch && ch.cells && ch.dirty) {
+          // Save chest inventories
+          const chestsInChunk = [];
+          for (let y = 0; y < this.height; y++) {
+            for (let rx = 0; rx < this.chunkSize; rx++) {
+              const cell = ch.cells[y * this.chunkSize + rx];
+              if (cell && cell.id === 'chest' && cell.meta && cell.meta.inv) {
+                chestsInChunk.push({
+                  x: chunkX * this.chunkSize + rx,
+                  y: y,
+                  inv: cell.meta.inv
+                });
+              }
+            }
+          }
+          if (chestsInChunk.length > 0) {
+            this._savedChestInventories.set(chunkX, chestsInChunk);
+          }
+
+          try {
+            this._savedChunks.set(chunkX, ch.cells.slice());
+          } catch (e) { /* ignore save errors */ }
+        }
+      } catch (e) { /* ignore */ }
+      this.chunks.delete(key);
+    }
+    const idx = this.loadedChunkOrder.indexOf(chunkX);
+    if (idx !== -1) this.loadedChunkOrder.splice(idx, 1);
+  }
+
+  fetchSavedEntitiesForChunk(chunkX) {
+    const arr = this._savedEntities.get(chunkX) || [];
+    this._savedEntities.delete(chunkX);
+    return arr;
+  }
+
+  
+
   getCell(x, y) {
     if (!this.inBounds(x, y)) return { id: 'air', meta: null };
-    return this.cells[this.index(x, y)];
+    const cx = this.chunkXFor(x);
+    const key = this.chunkKey(cx);
+    if (this.chunks.has(key)) {
+      const chunk = this.chunks.get(key);
+      this._touchChunkLRU(cx);
+      if (!chunk || !chunk.cells) {
+        return { id: 'air', meta: null };
+      }
+      const rx = this.xRelInChunk(x);
+      const idx = y * this.chunkSize + rx;
+      return chunk.cells[idx] ?? { id: 'air', meta: null };
+    }
+    return { id: 'air', meta: null };
   }
+
   getBlockId(x, y) {
     return this.getCell(x, y).id;
   }
+
   getBlockType(x, y) {
     const id = this.getBlockId(x, y);
     return this.registry.get(id);
   }
+
   setBlock(x, y, id, meta = null) {
     if (!this.inBounds(x, y)) return;
-    const i = this.index(x, y);
-    this.cells[i] = { id, meta };
+    const cx = this.chunkXFor(x);
+    const chunk = this.loadChunk(cx);
+    
+    if (chunk && chunk.cells) {
+      // Chunk is loaded, we can directly modify it
+      const rx = this.xRelInChunk(x);
+      const idx = y * this.chunkSize + rx;
+      chunk.cells[idx] = { id, meta };
+      chunk.dirty = true;
+      try {
+        this._dirtyChunks.add(cx);
+      } catch (e) {
+      }
+      
+      this.updateLighting(x, y);
+    } else {
+      // Chunk is not loaded, store the change for later
+      if (!this._crossChunkPending.has(cx)) {
+        this._crossChunkPending.set(cx, []);
+      }
+      this._crossChunkPending.get(cx).push({ x, y, id, meta });
+    }
   }
-  
+
   getLight(x, y) {
     if (!this.inBounds(x, y)) return 0;
     return this.lightMap[this.index(x, y)];
@@ -66,100 +426,176 @@ export class World {
   }
   
   calculateSkyLight() {
-    // Calculate sky light from top to bottom
-    for (let x = 0; x < this.width; x++) {
-      let skyLight = 15; // Start with full light at the top
+    // Only calculate lighting for loaded chunks
+    for (const chunkEntry of this.chunks.values()) {
+      if (!chunkEntry || !chunkEntry.cells) continue;
+      
+      const chunkX = chunkEntry.chunkX;
+      const startX = chunkX * this.chunkSize;
+      const endX = startX + this.chunkSize;
+      
+      for (let x = startX; x < endX; x++) {
+        let skyLight = 15;
+        
+        for (let y = 0; y < this.height; y++) {
+          const blockType = this.getBlockType(x, y);
+          const existingLight = this.getLight(x, y);
+          const isBlockLightSource = blockType && blockType.lightLevel && blockType.lightLevel > 0;
+          
+          if (isBlockLightSource) {
+            // For light sources, ALWAYS preserve their light level
+            // Never let sky light override a light source
+            const lightSourceLevel = blockType.lightLevel;
+            this.setLight(x, y, lightSourceLevel);
+          } else {
+            // For non-light source blocks, use the higher of sky light or existing light
+            // This preserves torch light that has been propagated to neighboring blocks
+            const newLight = Math.max(skyLight, existingLight);
+            this.setLight(x, y, newLight);
+          }
+          
+          if (blockType && blockType.solid) {
+            const opacity = blockType.opacity !== undefined ? blockType.opacity : 1;
+            if (opacity >= 1) {
+              skyLight = Math.max(0, skyLight - 15);
+            } else {
+              skyLight = Math.max(0, skyLight - Math.floor(15 * opacity));
+            }
+          }
+          if (skyLight <= 0) {
+            for (let y2 = y + 1; y2 < this.height; y2++) {
+              this.setLight(x, y2, 0);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  calculateBlockLight() {
+    // Calculate light from block sources (torches, etc.)
+    const lightSources = [];
+    
+    // Find all light sources in loaded chunks
+    for (const chunkEntry of this.chunks.values()) {
+      if (!chunkEntry || !chunkEntry.cells) continue;
+      
+      const chunkX = chunkEntry.chunkX;
+      const startX = chunkX * this.chunkSize;
+      const endX = startX + this.chunkSize;
       
       for (let y = 0; y < this.height; y++) {
-        const blockType = this.getBlockType(x, y);
-        // If block is a light source, use its light level
-        if (blockType && blockType.lightLevel) {
-          skyLight = Math.max(skyLight, blockType.lightLevel);
+        for (let x = startX; x < endX; x++) {
+          const blockType = this.getBlockType(x, y);
+          if (blockType && blockType.lightLevel && blockType.lightLevel > 0) {
+            lightSources.push({ x, y, light: blockType.lightLevel });
+          }
         }
-        // Set light level before potentially reducing it
-        this.setLight(x, y, skyLight);
-        // If block is solid, reduce light based on opacity
-        if (blockType && blockType.solid) {
-          // For transparent blocks, reduce light by their opacity value
-          // For opaque blocks, block all light
-          const opacity = blockType.opacity !== undefined ? blockType.opacity : 1;
-          if (opacity >= 1) {
-            skyLight = Math.max(0, skyLight - 15); // Opaque block blocks all light
+      }
+    }
+    
+    // Propagate light from each source
+    // This ensures that torch light spreads to neighboring blocks
+    for (const source of lightSources) {
+      this.propagateLightFromSource(source.x, source.y, source.light);
+    }
+  }
+  
+  propagateLightFromSource(x, y, lightLevel) {
+    const queue = [{ x, y, light: lightLevel }];
+    const visited = new Set();
+    
+    while (queue.length > 0) {
+      const { x, y, light } = queue.shift();
+      const idx = this.index(x, y);
+      
+      if (visited.has(idx)) continue;
+      visited.add(idx);
+      
+      // Set light level if it's higher than current
+      const currentLight = this.getLight(x, y);
+      const combinedLight = Math.max(currentLight, light);
+      this.setLight(x, y, combinedLight);
+      
+      // Propagate to neighbors
+      const neighbors = [
+        { x: x + 1, y: y },
+        { x: x - 1, y: y },
+        { x: x, y: y + 1 },
+        { x: x, y: y - 1 }
+      ];
+      
+      for (const n of neighbors) {
+        if (this.inBounds(n.x, n.y)) {
+          const blockType = this.getBlockType(n.x, n.y);
+          let newLight;
+          
+          if (!blockType || blockType.id === 'air') {
+            newLight = Math.max(0, light - 1);
+          } else if (blockType.solid) {
+            const opacity = blockType.opacity !== undefined ? blockType.opacity : 1;
+            newLight = Math.max(0, light - 1 - Math.floor(15 * opacity));
           } else {
-            skyLight = Math.max(0, skyLight - Math.floor(15 * opacity)); // Transparent block reduces light
+            newLight = Math.max(0, light - 1);
           }
-        }
-        
-        // If light is already 0, no need to go further down
-        if (skyLight <= 0) {
-          // Set all blocks below to 0 light
-          for (let y2 = y + 1; y2 < this.height; y2++) {
-            this.setLight(x, y2, 0);
+          
+          if (newLight > 0 && newLight > this.getLight(n.x, n.y)) {
+            queue.push({ x: n.x, y: n.y, light: newLight });
           }
-          break;
         }
       }
     }
   }
   
   propagateLight() {
-    // Improved light propagation - spread light to adjacent blocks with proper attenuation
     const queue = [];
     const visited = new Set();
     
-    // Add all blocks with light > 0 to the queue
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        const light = this.getLight(x, y);
-        if (light > 0) {
-          queue.push({x, y, light});
+    // Only propagate light from loaded chunks
+    for (const chunkEntry of this.chunks.values()) {
+      if (!chunkEntry || !chunkEntry.cells) continue;
+      
+      const chunkX = chunkEntry.chunkX;
+      const startX = chunkX * this.chunkSize;
+      const endX = startX + this.chunkSize;
+      
+      for (let y = 0; y < this.height; y++) {
+        for (let x = startX; x < endX; x++) {
+          const light = this.getLight(x, y);
+          if (light > 0) {
+            queue.push({x, y, light});
+          }
         }
       }
     }
     
-    // Process queue
     while (queue.length > 0) {
       const {x, y, light} = queue.shift();
       const idx = this.index(x, y);
-      
-      // Skip if already processed with equal or higher light level
       if (visited.has(idx) && this.getLight(x, y) >= light) continue;
       visited.add(idx);
-      
-      // Set the light level if it's higher than current
       if (light > this.getLight(x, y)) {
         this.setLight(x, y, light);
       }
-      
-      // Check adjacent blocks
       const neighbors = [
         {x: x + 1, y},
         {x: x - 1, y},
         {x: x, y: y + 1},
         {x: x, y: y - 1},
       ];
-      
       for (const n of neighbors) {
         if (this.inBounds(n.x, n.y)) {
           const blockType = this.getBlockType(n.x, n.y);
-          // Calculate light attenuation based on block opacity
-          // For air blocks, no attenuation
-          // For solid blocks, full attenuation
-          // For transparent blocks, partial attenuation based on opacity
           let newLight;
           if (!blockType || blockType.id === 'air') {
-            // Air blocks don't attenuate light
             newLight = Math.max(0, light - 1);
           } else if (blockType.solid) {
-            // Solid blocks attenuate light based on opacity
             const opacity = blockType.opacity !== undefined ? blockType.opacity : 1;
             newLight = Math.max(0, light - 1 - opacity);
           } else {
-            // Non-solid blocks (like flowers) don't attenuate light
             newLight = Math.max(0, light - 1);
           }
-          
-          // Only propagate if new light is brighter than existing light
           if (newLight > this.getLight(n.x, n.y)) {
             queue.push({x: n.x, y: n.y, light: newLight});
           }
@@ -167,148 +603,77 @@ export class World {
       }
     }
   }
-  
+
   updateLighting(x, y) {
-    // Update lighting around a block that was placed or removed
-    const queue = [];
-    const visited = new Set();
+    // Update lighting immediately for block changes
+    // Add a small throttle to prevent excessive updates
+    if (!this._lastLightUpdate) this._lastLightUpdate = 0;
+    if (this.time - this._lastLightUpdate < 0.1) return; // Update at most 10 times per second
     
-    // Add the block and its neighbors to the queue
-    const positions = [
-      {x, y},
-      {x: x + 1, y},
-      {x: x - 1, y},
-      {x: x, y: y + 1},
-      {x: x, y: y - 1},
-    ];
+    this._lastLightUpdate = this.time;
     
-    // Add all affected blocks to queue for recalculation
-    for (const pos of positions) {
-      if (this.inBounds(pos.x, pos.y)) {
-        queue.push(pos);
-      }
-    }
+    // Calculate sky light first
+    this.calculateSkyLight();
     
-    // Add neighbors of neighbors to ensure proper propagation
-    for (const pos of positions) {
-      const neighbors = [
-        {x: pos.x + 1, y: pos.y},
-        {x: pos.x - 1, y: pos.y},
-        {x: pos.x, y: pos.y + 1},
-        {x: pos.x, y: pos.y - 1},
-      ];
-      
-      for (const n of neighbors) {
-        if (this.inBounds(n.x, n.y)) {
-          queue.push(n);
-        }
-      }
-    }
+    // Then calculate block light sources - this will override sky light where needed
+    this.calculateBlockLight();
     
-    // Process queue
-    while (queue.length > 0) {
-      const {x, y} = queue.shift();
-      const idx = this.index(x, y);
-      
-      // Skip if already processed
-      if (visited.has(idx)) continue;
-      visited.add(idx);
-      
-      // Calculate light based on neighbors
-      let maxLight = 0;
-      
-      // Check adjacent blocks
-      const neighbors = [
-        {x: x + 1, y},
-        {x: x - 1, y},
-        {x: x, y: y + 1},
-        {x: x, y: y - 1},
-      ];
-      
-      // For sky light (from top)
-      if (y === 0) {
-        maxLight = 15;
-      }
-      
-      // Check light from neighbors
-      for (const n of neighbors) {
-        if (this.inBounds(n.x, n.y)) {
-          const neighborLight = this.getLight(n.x, n.y);
-          const blockType = this.getBlockType(n.x, n.y);
-          
-          // Calculate light attenuation based on block opacity
-          // For air blocks, no attenuation
-          // For solid blocks, full attenuation
-          // For transparent blocks, partial attenuation based on opacity
-          let transmittedLight;
-          if (!blockType || blockType.id === 'air') {
-            // Air blocks don't attenuate light
-            transmittedLight = Math.max(0, neighborLight - 1);
-          } else if (blockType.solid) {
-            // Solid blocks attenuate light based on opacity
-            const opacity = blockType.opacity !== undefined ? blockType.opacity : 1;
-            transmittedLight = Math.max(0, neighborLight - 1 - opacity);
-          } else {
-            // Non-solid blocks (like flowers) don't attenuate light
-            transmittedLight = Math.max(0, neighborLight - 1);
-          }
-          maxLight = Math.max(maxLight, transmittedLight);
-        }
-      }
-      
-      // If this is a light source, use its light level
-      const blockType = this.getBlockType(x, y);
-      if (blockType?.lightLevel) {
-        maxLight = Math.max(maxLight, blockType.lightLevel);
-      }
-      
-      // If this is an air block, it should have at least the light from neighbors
-      const currentBlockType = this.getBlockType(x, y);
-      if (!currentBlockType || currentBlockType.id === 'air') {
-        // Air blocks should have light propagated to them
-        // Find the maximum light from all neighbors
-        for (const n of neighbors) {
-          if (this.inBounds(n.x, n.y)) {
-            const neighborLight = this.getLight(n.x, n.y);
-            // For air blocks, we don't attenuate light from neighbors
-            maxLight = Math.max(maxLight, neighborLight);
-          }
-        }
-      }
-      
-      // Set the light level
-      const currentLight = this.getLight(x, y);
-      this.setLight(x, y, maxLight);
-      
-      // If light changed, add neighbors to queue
-      if (maxLight !== currentLight) {
-        for (const n of neighbors) {
-          if (this.inBounds(n.x, n.y)) {
-            const nIdx = this.index(n.x, n.y);
-            if (!visited.has(nIdx)) {
-              queue.push(n);
-            }
-          }
-        }
-      }
-    }
+    // Finally propagate all light
+    this.propagateLight();
   }
+
+
+
+
+
+  initializeLighting() {
+    // Calculate sky light first
+    this.calculateSkyLight();
+    
+    // Then calculate block light sources - this will override sky light where needed
+    this.calculateBlockLight();
+    
+    // Finally propagate all light
+    this.propagateLight();
+  }
+
+
+
   isSolidAt(x, y) {
     const t = this.getBlockType(x, y);
     return !!(t && t.solid);
   }
+
   tick(dt, time) {
-    // Only update blocks 10% of the time to reduce CPU usage
+    // Periodic lighting update to ensure lighting stays current
+    if (!this._lastPeriodicLightUpdate) this._lastPeriodicLightUpdate = 0;
+    if (time - this._lastPeriodicLightUpdate > 60) { // Update every 60 frames (about 1 second)
+      // Calculate sky light first
+      this.calculateSkyLight();
+      
+      // Then calculate block light sources - this will override sky light where needed
+      this.calculateBlockLight();
+      
+      // Finally propagate all light
+      this.propagateLight();
+      this._lastPeriodicLightUpdate = time;
+    }
+    
     if (Math.random() < 0.90) return;
     
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        const i = this.index(x, y);
-        const cell = this.cells[i];
-        const t = this.registry.get(cell.id);
-        if (t && typeof t.tick === 'function') {
-          if (!cell.meta) cell.meta = {};
-          t.tick(this, x, y, cell.meta, time);
+    for (const chunkEntry of this.chunks.values()) {
+      if (!chunkEntry || !chunkEntry.cells) continue;
+      for (let rx = 0; rx < this.chunkSize; rx++) {
+        const worldX = chunkEntry.chunkX * this.chunkSize + rx;
+        for (let y = 0; y < this.height; y++) {
+          const i = y * this.chunkSize + rx;
+          const cell = chunkEntry.cells[i];
+          if (!cell) continue;
+          const t = this.registry.get(cell.id);
+          if (t && typeof t.tick === 'function') {
+            if (!cell.meta) cell.meta = {};
+            t.tick(this, worldX, y, cell.meta, time);
+          }
         }
       }
     }

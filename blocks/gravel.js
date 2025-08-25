@@ -4,7 +4,7 @@ export default {
   shape: 'full',
   solid: true,
   color: '#a9a9a9',
-  hardness: 0.6,
+  hardness: 2.0,
   isSolid() {
     return true;
   },

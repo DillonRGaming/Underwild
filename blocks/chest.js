@@ -4,7 +4,7 @@ export default {
   shape: 'full',
   solid: true,
   color: '#b07d4e',
-  hardness: 1,
+  hardness: 3,
   onPlace: function(world, x, y, meta) {
     const cell = world.getCell(x, y);
     if (!cell.meta) cell.meta = {};
@@ -107,8 +107,6 @@ export default {
     }
   },
   onBreak: function(world, x, y, meta) {
-    // Preserve the inventory data when breaking the chest
-    // The inventory data will be handled in the breaking logic in script.js
     if (meta && meta.chestType) {
       if (meta.chestType === 'left') {
         if (world.inBounds(x + 1, y) && world.getBlockId(x + 1, y) === 'chest') {

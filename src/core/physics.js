@@ -1,11 +1,20 @@
 import { TILE_SIZE } from './utils.js';
 
 function isBlockSolid(world, x, y) {
+  try {
+    const chunkSize = world.chunkSize || 16;
+    const cx = Math.floor(x / chunkSize);
+    if (typeof world.isChunkLoaded === 'function' && !world.isChunkLoaded(cx)) {
+      return true;
+    }
+  } catch (e) {}
+
   const cell = world.getCell(x, y);
   if (!cell) return false;
   const type = world.getBlockType(x, y);
   if (!type) return false;
   if (cell.meta?.layer === 'bg') return false;
+  if (cell.meta?.noCollision) return false;
   if (typeof type.isSolid === 'function') {
     return type.isSolid(cell.meta || {});
   }
@@ -56,7 +65,7 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
   }
 }
 
-export function resolvePlayerPhysics(player, world, input, dt, noClipMode = false) {
+export function resolvePlayerPhysics(player, world, input, dt, noClipMode = false, creativeMode = false) {
   const playerCenterX = player.x + player.width / 2;
   const playerCenterY = player.y + player.height / 2;
   const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
@@ -64,13 +73,18 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   const inWater = world.inBounds(playerTileX, playerTileY) && 
                   world.getBlockId(playerTileX, playerTileY) === 'water';
 
-  const isSprinting = input.isKeyDown('ShiftLeft') || input.isKeyDown('ShiftRight');
+  // Initialize creative flight properties if not exist
+  if (!player.creativeFlying) player.creativeFlying = false;
+  if (!player.lastJumpPress) player.lastJumpPress = 0;
+  if (!player.jumpPressed) player.jumpPressed = false;
+
+  const isSprinting = input.isKeyDown(keybinds.sprint) || input.isKeyDown('ShiftRight');
   
   let gravity = player.gravity;
-  let walkSpeed = 80; // Further reduced walk speed
-  let sprintSpeed = 120; // Further reduced sprint speed
+  let walkSpeed = 60;
+  let sprintSpeed = 90;
   let jumpVelocity = player.jumpVelocity;
-  let accel = player.onGround ? (isSprinting ? 1200 : 800) : 600; // Further reduced acceleration
+  let accel = player.onGround ? (isSprinting ? 1200 : 800) : 600;
   
   if (inWater && !noClipMode) {
     gravity *= 0.3;
@@ -83,15 +97,15 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   const maxSpeed = isSprinting ? sprintSpeed : walkSpeed;
 
   if (noClipMode) {
-    const moveSpeed = maxSpeed * 0.8;
+    const moveSpeed = maxSpeed * 2.5;
     player.vx = 0;
     player.vy = 0;
     
-    if (input.isKeyDown('KeyD')) player.vx += moveSpeed;
-    if (input.isKeyDown('KeyA')) player.vx -= moveSpeed;
+    if (input.isKeyDown(keybinds.right)) player.vx += moveSpeed;
+    if (input.isKeyDown(keybinds.left)) player.vx -= moveSpeed;
     
-    if (input.isKeyDown('KeyW')) player.vy -= moveSpeed;
-    if (input.isKeyDown('KeyS')) player.vy += moveSpeed;
+    if (input.isKeyDown(keybinds.forward)) player.vy -= moveSpeed;
+    if (input.isKeyDown(keybinds.backward)) player.vy += moveSpeed;
     
     player.x += player.vx * dt;
     player.y += player.vy * dt;
@@ -99,7 +113,7 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
     return;
   }
   
-  const target = (input.isKeyDown('KeyD') ? 1 : 0) - (input.isKeyDown('KeyA') ? 1 : 0);
+  const target = (input.isKeyDown(keybinds.right) ? 1 : 0) - (input.isKeyDown(keybinds.left) ? 1 : 0);
   const desiredVx = target * maxSpeed;
   const dv = desiredVx - player.vx;
   const step = Math.sign(dv) * Math.min(Math.abs(dv), accel * dt);
@@ -111,18 +125,145 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
     if (Math.abs(player.vx) < 1) player.vx = 0;
   }
 
-  if (input.isKeyDown('KeyW') || input.isKeyDown('Space')) {
+  const jumpKeyPressed = input.isKeyDown(keybinds.forward) || input.isKeyDown(keybinds.jump);
+  
+  // Handle creative flight double-tap jump
+  if (creativeMode && jumpKeyPressed && !player.jumpPressed) {
+    const now = Date.now();
+    if (now - player.lastJumpPress < 500) { // 500ms window for double tap
+      const wasFlying = player.creativeFlying;
+      player.creativeFlying = !player.creativeFlying;
+      
+      // Sync flying state in multiplayer
+      if (wasFlying !== player.creativeFlying) {
+        player.isFlying = player.creativeFlying; // Sync the property
+        if (typeof menuManager !== 'undefined' && menuManager.syncFlyingState) {
+          menuManager.syncFlyingState(player.creativeFlying);
+        }
+      }
+    }
+    player.lastJumpPress = now;
+  }
+  player.jumpPressed = jumpKeyPressed;
+  
+  // Creative flight physics
+  if (creativeMode && player.creativeFlying) {
+    const baseFlySpeed = maxSpeed * 1.5;
+    const flySpeed = isSprinting ? baseFlySpeed * 1.5 : baseFlySpeed;
+    player.vx = 0;
+    player.vy = 0;
+    
+    if (input.isKeyDown(keybinds.right)) player.vx += flySpeed;
+    if (input.isKeyDown(keybinds.left)) player.vx -= flySpeed;
+    
+    if (jumpKeyPressed) player.vy -= flySpeed;
+    if (input.isKeyDown('ControlLeft') || input.isKeyDown('ControlRight') || input.isKeyDown(keybinds.backward)) player.vy += flySpeed;
+    
+    // Apply collision detection for creative flight
+    let nextX = player.x + player.vx * dt;
+    let nextY = player.y + player.vy * dt;
+    
+    // Horizontal collision check
+    const dirX = Math.sign(player.vx);
+    if (dirX !== 0) {
+      const left = Math.floor(nextX / TILE_SIZE);
+      const right = Math.floor((nextX + player.width) / TILE_SIZE);
+      const top = Math.floor(player.y / TILE_SIZE);
+      const bottom = Math.floor((player.y + player.height - 1) / TILE_SIZE);
+      for (let ty = top; ty <= bottom; ty++) {
+        const tx = dirX > 0 ? right : left;
+        if (isBlockSolid(world, tx, ty)) {
+          if (dirX > 0) nextX = tx * TILE_SIZE - player.width - 0.01;
+          else nextX = (tx + 1) * TILE_SIZE + 0.01;
+          player.vx = 0;
+          break;
+        }
+      }
+    }
+    
+    // Vertical collision check
+    const dirY = Math.sign(player.vy);
+    if (dirY !== 0) {
+      const left = Math.floor(nextX / TILE_SIZE);
+      const right = Math.floor((nextX + player.width) / TILE_SIZE);
+      const top = Math.floor(nextY / TILE_SIZE);
+      const bottom = Math.floor((nextY + player.height - 1) / TILE_SIZE);
+      for (let tx = left; tx <= right; tx++) {
+        const ty = dirY > 0 ? bottom : top;
+        if (isBlockSolid(world, tx, ty)) {
+          if (dirY > 0) nextY = ty * TILE_SIZE - player.height - 0.01;
+          else nextY = (ty + 1) * TILE_SIZE + 0.01;
+          player.vy = 0;
+          break;
+        }
+      }
+    }
+    
+    player.x = nextX;
+    player.y = nextY;
+    
+    return;
+  }
+  
+  // Normal jump handling
+  if (jumpKeyPressed) {
     if (player.onGround) {
-      // Apply jump with reduced velocity for slower jumping
-      player.vy = -jumpVelocity * 0.7; // Apply full jump velocity
+      player.vy = -jumpVelocity * 0.7;
       player.onGround = false;
     } else if (inWater) {
-      player.vy -= 200 * dt; // Reduce water jump force
-      if (player.vy < -jumpVelocity * 0.5) player.vy = -jumpVelocity * 0.5; // Reduce max water jump velocity
+      player.vy -= 200 * dt;
+      if (player.vy < -jumpVelocity * 0.5) player.vy = -jumpVelocity * 0.5;
     }
   }
   
-  if (inWater && (input.isKeyDown('ShiftLeft') || input.isKeyDown('ShiftRight'))) {
+  // Auto-jump functionality
+  if (player.onGround && (player.autoJump !== false && window.autoJump !== false)) { // Check both player and global setting
+    const playerCenterX = player.x + player.width / 2;
+    const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
+    const playerTileY = Math.floor(player.y / TILE_SIZE);
+    
+    // Check if there's a block ahead that we can auto-jump over
+    const direction = Math.sign(player.vx);
+    if (direction !== 0) {
+      const aheadX = playerTileX + direction;
+      const aheadY = playerTileY;
+      
+      if (world.inBounds(aheadX, aheadY)) {
+        const aheadBlock = world.getBlockType(aheadX, aheadY);
+        const aheadCell = world.getCell(aheadX, aheadY);
+        
+        // Check if there's a solid block ahead that's 1 tile high
+        if (aheadBlock && aheadBlock.solid && !aheadCell.meta?.noCollision) {
+          // Check if there's space above the block to jump into
+          const aboveX = aheadX;
+          const aboveY = aheadY - 1;
+          
+          if (world.inBounds(aboveX, aboveY)) {
+            const aboveBlock = world.getBlockType(aboveX, aboveY);
+            const aboveCell = world.getCell(aboveX, aboveY);
+            
+            // If there's no solid block above, we can auto-jump
+            if (!aboveBlock || !aboveBlock.solid || aboveCell.meta?.noCollision) {
+              // Check if there's space above the player's head
+              const playerHeadY = playerTileY - 1;
+              if (world.inBounds(playerTileX, playerHeadY)) {
+                const headBlock = world.getBlockType(playerTileX, playerHeadY);
+                const headCell = world.getCell(playerTileX, playerHeadY);
+                
+                if (!headBlock || !headBlock.solid || headCell.meta?.noCollision) {
+                  // Auto-jump!
+                  player.vy = -jumpVelocity * 0.6; // Slightly lower than manual jump
+                  player.onGround = false;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (inWater && (input.isKeyDown(keybinds.sprint) || input.isKeyDown('ShiftRight'))) {
     player.vy += 200 * dt;
   }
 

@@ -10,7 +10,7 @@ export default {
     if (meta.oxStart == null) meta.oxStart = time;
     const elapsed = time - meta.oxStart;
 
-    const t3 = 420; // weathered -> oxidized
+    const t3 = 420;
     if (world.getBlockId(x, y) !== 'copper_weathered') return;
 
     if (elapsed > t3) {

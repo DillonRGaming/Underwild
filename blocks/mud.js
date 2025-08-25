@@ -4,5 +4,5 @@ export default {
   shape: 'full',
   solid: true,
   color: '#6a3b17',
-  hardness: 0.4
+  hardness: 1.8
 };

@@ -4,10 +4,530 @@
   <meta charset="utf-8">
   <title>Underwild</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
-  <canvas id="game"></canvas>
-  <script type="module" src="script.js"></script>
+  <canvas id="gameCanvas"></canvas>
+  
+  <!-- Main Menu -->
+  <div id="mainMenu" class="menu-container">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="game-title">UNDERWILD</h1>
+             <div class="menu-buttons">
+         <button class="minecraft-button" data-action="single-player">Single Player</button>
+         <button class="minecraft-button" data-action="multiplayer">Multiplayer</button>
+         <button class="minecraft-button" data-action="load-world">Load World</button>
+         <button class="minecraft-button" data-action="options">Options</button>
+         <button class="minecraft-button" data-action="mods">Mods</button>
+         <button class="minecraft-button" data-action="quit">Quit Game</button>
+       </div>
+       <div class="changelog-section">
+         <span class="version-number">v1.0.0</span>
+         <button class="minecraft-button changelog-button" data-action="changelog">Changelog</button>
+       </div>
+    </div>
+  </div>
+
+  <!-- Create World Menu -->
+  <div id="createWorldMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Create New World</h1>
+      <div class="form-section">
+        <label for="worldName">World Name:</label>
+        <input type="text" id="worldName" class="minecraft-input" placeholder="New World">
+        
+        <label for="worldSeed">Seed (Optional):</label>
+        <input type="text" id="worldSeed" class="minecraft-input" placeholder="Random">
+        
+        <div class="option-group">
+          <label>Game Mode:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="game-mode-survival" data-selected="true">Survival</button>
+            <button class="minecraft-button small" data-action="game-mode-creative">Creative</button>
+          </div>
+        </div>
+        
+        <div class="menu-buttons">
+          <button class="minecraft-button" data-action="show-advanced-options">Advanced Options</button>
+        </div>
+      </div>
+      
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="create-world" id="createWorldButton">Create World</button>
+        <button class="minecraft-button hidden" id="continueButton" data-action="continue-to-room">Continue</button>
+        <button class="minecraft-button" data-action="back-to-main" id="backToMainButton">Back</button>
+        <button class="minecraft-button hidden" id="backToRoomButton" data-action="back-to-create-room">Back to Room Setup</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Options Menu -->
+  <div id="optionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">OPTIONS</h1>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="graphics-options">Graphics</button>
+        <button class="minecraft-button" data-action="background-options">Background</button>
+        <button class="minecraft-button" data-action="gameplay-options">Gameplay</button>
+        <button class="minecraft-button" data-action="audio-options">Audio</button>
+        <button class="minecraft-button" data-action="controls-options">Controls</button>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Background Options Submenu -->
+  <div id="backgroundOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Background Settings</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Add New Block:</label>
+          <div class="dropdown-container">
+            <input type="text" id="backgroundBlockInput" class="minecraft-input" placeholder="Type block name...">
+            <div id="backgroundSuggestions" class="suggestions-dropdown hidden"></div>
+          </div>
+        </div>
+        
+        <div class="option-group">
+          <label>Randomize Background:</label>
+          <div class="randomize-controls">
+            <input type="number" id="randomizeCount" class="minecraft-input small" min="1" max="20" value="5" placeholder="Count">
+            <button class="minecraft-button" data-action="randomize-background">Randomize</button>
+          </div>
+        </div>
+        
+        <div class="option-group">
+          <label>Current Background Blocks:</label>
+          <div class="background-blocks" id="backgroundBlocks">
+            <!-- Background blocks will be populated here -->
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="apply-background">Apply Changes</button>
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Multiplayer Menu -->
+  <div id="multiplayerMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">MULTIPLAYER</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Username:</label>
+          <input type="text" id="playerUsername" class="minecraft-input" placeholder="Player" value="Player" maxlength="16">
+        </div>
+        
+        <div class="option-group">
+          <label>Available Rooms:</label>
+          <div class="rooms-container">
+            <div class="rooms-header">
+              <button class="minecraft-button small" data-action="refresh-rooms"><i class="fas fa-sync-alt"></i> Refresh</button>
+              <span class="rooms-status" id="roomsStatus">Searching for rooms...</span>
+            </div>
+            <div class="rooms-list" id="roomsList">
+              <div class="no-rooms-message">
+                <p>No rooms found on the network</p>
+                <p style="font-size: 14px; color: #888;">Create a room or wait for others to host</p>
+              </div>
+            </div>
+            
+
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="create-room">Create Room</button>
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Room Menu -->
+  <div id="createRoomMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">CREATE ROOM</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Username:</label>
+          <input type="text" id="createRoomUsername" class="minecraft-input" placeholder="Player" maxlength="16">
+        </div>
+        
+        <div class="option-group">
+          <label>World Name:</label>
+          <input type="text" id="roomName" class="minecraft-input" placeholder="My Awesome World" maxlength="32">
+        </div>
+        
+        <div class="option-group">
+          <label>Max Players:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="max-players-2" data-selected="true">2</button>
+            <button class="minecraft-button small" data-action="max-players-4">4</button>
+            <button class="minecraft-button small" data-action="max-players-8">8</button>
+          </div>
+        </div>
+        
+        <div class="world-info hidden" id="configuredWorldInfo">
+          <label>World Configuration:</label>
+          <div class="world-config-display">
+            <div class="world-config-item">
+              <i class="fas fa-globe"></i>
+              <span id="configuredWorldName">World Name</span>
+            </div>
+            <div class="world-config-details" id="configuredWorldDetails">
+              <span class="config-detail" id="worldGameModeDisplay">Survival</span>
+              <span class="config-detail" id="worldTypeDisplay">Regular</span>
+              <span class="config-detail" id="worldSizeDisplay">Normal</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="create-multiplayer-world" id="createWorldBtn">Configure World</button>
+        <button class="minecraft-button hidden" data-action="host-multiplayer-room" id="hostRoomBtn">Host Room</button>
+        <button class="minecraft-button" data-action="back-to-multiplayer">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Graphics Options Submenu -->
+  <div id="graphicsOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Graphics</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Render Distance:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="render-tiny">Tiny</button>
+            <button class="minecraft-button small" data-action="render-short">Short</button>
+            <button class="minecraft-button small" data-action="render-normal" data-selected="true">Normal</button>
+            <button class="minecraft-button small" data-action="render-far">Far</button>
+            <button class="minecraft-button small" data-action="render-extreme">Extreme</button>
+          </div>
+        </div>
+        
+        <div class="option-group">
+          <label>Texture Quality:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="texture-fast">Fast</button>
+            <button class="minecraft-button small" data-action="texture-fancy" data-selected="true">Fancy</button>
+          </div>
+        </div>
+        
+        <div class="option-group">
+          <label>Render Falling Leaves:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="leaves-on" data-selected="true">ON</button>
+            <button class="minecraft-button small" data-action="leaves-off">OFF</button>
+          </div>
+        </div>
+        
+
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+
+
+  <!-- Gameplay Options Submenu -->
+  <div id="gameplayOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Gameplay</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Auto Jump:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="auto-jump-on" data-selected="true">ON</button>
+            <button class="minecraft-button small" data-action="auto-jump-off">OFF</button>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio Options Submenu -->
+  <div id="audioOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Audio</h1>
+      <div class="form-section">
+        <div class="slider-group">
+          <label>Master Volume: <span id="masterVolumeValue">100</span>%</label>
+          <input type="range" id="masterVolume" class="minecraft-slider" min="0" max="100" value="100">
+        </div>
+        
+        <div class="slider-group">
+          <label>Music Volume: <span id="musicVolumeValue">50</span>%</label>
+          <input type="range" id="musicVolume" class="minecraft-slider" min="0" max="100" value="50">
+        </div>
+        
+        <div class="slider-group">
+          <label>Sound Effects: <span id="sfxVolumeValue">75</span>%</label>
+          <input type="range" id="sfxVolume" class="minecraft-slider" min="0" max="100" value="75">
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls Options Submenu -->
+  <div id="controlsOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Controls</h1>
+      <div class="form-section">
+
+        
+        <div class="keybind-group">
+          <label>Movement Controls:</label>
+          <div class="keybind-row">
+            <span>Move Forward:</span>
+            <button class="keybind-button" data-action="bind-forward" data-key="KeyW">W</button>
+          </div>
+          <div class="keybind-row">
+            <span>Move Backward:</span>
+            <button class="keybind-button" data-action="bind-backward" data-key="KeyS">S</button>
+          </div>
+          <div class="keybind-row">
+            <span>Move Left:</span>
+            <button class="keybind-button" data-action="bind-left" data-key="KeyA">A</button>
+          </div>
+          <div class="keybind-row">
+            <span>Move Right:</span>
+            <button class="keybind-button" data-action="bind-right" data-key="KeyD">D</button>
+          </div>
+          <div class="keybind-row">
+            <span>Jump:</span>
+            <button class="keybind-button" data-action="bind-jump" data-key="Space">Space</button>
+          </div>
+          <div class="keybind-row">
+            <span>Sprint:</span>
+            <button class="keybind-button" data-action="bind-sprint" data-key="ShiftLeft">Shift</button>
+          </div>
+        </div>
+        
+        <div class="keybind-group">
+          <label>Game Controls:</label>
+          <div class="keybind-row">
+            <span>Inventory:</span>
+            <button class="keybind-button" data-action="bind-inventory" data-key="KeyE">E</button>
+          </div>
+          <div class="keybind-row">
+            <span>Chat/Commands:</span>
+            <button class="keybind-button" data-action="bind-chat" data-key="KeyT">T</button>
+          </div>
+          <div class="keybind-row">
+            <span>Drop Item:</span>
+            <button class="keybind-button" data-action="bind-drop" data-key="KeyQ">Q</button>
+          </div>
+          <div class="keybind-row">
+            <span>Pause:</span>
+            <button class="keybind-button" data-action="bind-pause" data-key="Escape">Escape</button>
+          </div>
+        </div>
+        
+        <div class="keybind-group">
+          <label>Building Controls:</label>
+          <div class="keybind-row">
+            <span>Background Build:</span>
+            <button class="keybind-button" data-action="bind-background" data-key="KeyZ">Z</button>
+          </div>
+          <div class="keybind-row">
+            <span>Rotate Block:</span>
+            <button class="keybind-button" data-action="bind-rotate" data-key="KeyR">R</button>
+          </div>
+          <div class="keybind-row">
+            <span>Flip Block:</span>
+            <button class="keybind-button" data-action="bind-flip" data-key="KeyF">F</button>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="apply-controls">Apply Changes</button>
+        <button class="minecraft-button" data-action="reset-controls">Reset to Defaults</button>
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Advanced World Options Menu -->
+  <div id="advancedOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Advanced World Options</h1>
+      <div class="advanced-options-grid">
+        <div class="grid-column">
+          <div class="option-group">
+            <label>World Type:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="world-type-regular" data-selected="true">Regular</button>
+              <button class="minecraft-button small" data-action="world-type-superflat">Superflat</button>
+              <button class="minecraft-button small" data-action="world-type-mountains">Mountains</button>
+            </div>
+          </div>
+          
+          <div class="option-group">
+            <label>World Size:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="world-size-tiny">Tiny</button>
+              <button class="minecraft-button small" data-action="world-size-small">Small</button>
+              <button class="minecraft-button small" data-action="world-size-normal" data-selected="true">Normal</button>
+              <button class="minecraft-button small" data-action="world-size-large">Large</button>
+            </div>
+          </div>
+          
+          <div class="option-group">
+            <label>Difficulty:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="difficulty-peaceful">Peaceful</button>
+              <button class="minecraft-button small" data-action="difficulty-easy" data-selected="true">Easy</button>
+              <button class="minecraft-button small" data-action="difficulty-normal">Normal</button>
+              <button class="minecraft-button small" data-action="difficulty-hard">Hard</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="grid-column">
+          <div class="option-group">
+            <label>Starting Time:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="time-day" data-selected="true">Day</button>
+              <button class="minecraft-button small" data-action="time-night">Night</button>
+              <button class="minecraft-button small" data-action="time-sunset">Sunset</button>
+              <button class="minecraft-button small" data-action="time-dawn">Dawn</button>
+            </div>
+          </div>
+          
+
+          
+          <div class="option-group">
+            <label>Generate Structures:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="structures-on" data-selected="true">ON</button>
+              <button class="minecraft-button small" data-action="structures-off">OFF</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="grid-column">
+
+          
+          <div class="option-group">
+            <label>Enable Cheats:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="cheats-on">ON</button>
+              <button class="minecraft-button small" data-action="cheats-off" data-selected="true">OFF</button>
+            </div>
+          </div>
+          
+          <div class="option-group">
+            <label>Allow Commands:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="commands-on">ON</button>
+              <button class="minecraft-button small" data-action="commands-off" data-selected="true">OFF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-create-world">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pause Menu -->
+  <div id="pauseMenu" class="menu-container hidden">
+    <div class="menu-background pause-bg"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Game Paused</h1>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="resume-game">Resume Game</button>
+        <button class="minecraft-button" data-action="pause-options">Options</button>
+        <button class="minecraft-button" data-action="pause-back-to-main">Back to Main Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mods Menu -->
+  <div id="modsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">MODS</h1>
+      <div class="mods-grid" id="modsGrid">
+        <div class="no-mods-message">
+          <p>No mods available</p>
+          <p style="font-size: 14px; color: #888;">Mod system coming soon!</p>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
+      </div>
+    </div>
+  </div>
+
+     <!-- Mod Details Menu -->
+   <div id="modDetailsMenu" class="menu-container hidden">
+     <div class="menu-background"></div>
+     <div class="menu-content">
+       <div class="mod-header">
+         <img id="modThumbnail" class="mod-thumbnail" src="" alt="">
+         <div class="mod-info">
+           <h2 id="modName" class="mod-name"></h2>
+           <p id="modDescription" class="mod-description"></p>
+           <p id="modVersion" class="mod-version"></p>
+           <p id="modAuthor" class="mod-author"></p>
+         </div>
+       </div>
+       <div class="mod-actions">
+         <button id="modToggleButton" class="minecraft-button" data-action="toggle-mod">Enable Mod</button>
+       </div>
+       <div class="menu-buttons">
+         <button class="minecraft-button" data-action="back-to-mods">Back to Mods</button>
+       </div>
+     </div>
+   </div>
+
+   <!-- Changelog Menu -->
+   <div id="changelogMenu" class="menu-container hidden">
+     <div class="menu-background"></div>
+     <div class="menu-content">
+       <h1 class="menu-title">CHANGELOG</h1>
+       <div class="changelog-content">
+         <p style="text-align: center; font-size: 24px; color: #cccccc; margin: 80px 0;">
+           🚧 WIP 🚧
+         </p>
+       </div>
+       <div class="menu-buttons">
+         <button class="minecraft-button" data-action="back-to-main">Back</button>
+       </div>
+     </div>
+   </div>
+
+   <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
+   <script type="module" src="script.js"></script>
 </body>
 </html>
