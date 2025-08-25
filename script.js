@@ -1819,10 +1819,6 @@ class MenuManager {
       // Configure PeerJS with more aggressive connection options
       const peerConfig = {
         debug: 3, // Enable debug logging
-        host: 'peerjs-server.herokuapp.com',
-        port: 443,
-        path: '/',
-        secure: true,
         config: {
           'iceServers': [
             { urls: 'stun:stun.l.google.com:19302' },
