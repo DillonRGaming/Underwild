@@ -1817,6 +1817,10 @@ class MenuManager {
       
       // Configure PeerJS with more aggressive connection options
       const peerConfig = {
+                host: '0.peerjs.com',
+        port: 443,
+        secure: true,
+        path: '/',
         debug: 3, // Enable debug logging
         config: {
           'iceServers': [
