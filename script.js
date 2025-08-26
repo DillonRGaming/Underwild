@@ -16,7 +16,12 @@ import { LeafParticle } from './src/entities/leaf_particle.js';
 import { ModManager } from './mods/index.js';
 
 import { ItemEntity } from './src/entities/item.js';
+import { peerConfig } from './peer.js';
 import { Bee } from './src/entities/bee.js';
+
+const ROOM_EXPIRATION_TIME = 10 * 1000; // Rooms expire after 10 seconds if not refreshed by host
+
+
 
 // Game version
 const GAME_VERSION = '0.5.0';
@@ -216,6 +221,9 @@ class MenuManager {
     this.reconnectAttempts = 0;
     this.reconnectDelay = 2000; // Initial delay of 2 seconds
     this.maxReconnectAttempts = 10; // Max 10 attempts
+    this.roomHeartbeatInterval = null;
+    this.lobbyConnection = null;
+    this.activeLobbyRooms = new Map();
   }
 
   initializeMenus() {
@@ -1767,8 +1775,8 @@ class MenuManager {
     console.log(`Randomized background with ${randomBlocks.length} blocks:`, randomBlocks);
   }
   
-  initializeMultiplayer() {
-    console.log('Initializing multiplayer system...');
+  async initializeMultiplayer() {
+    console.log('[MULTIPLAYER] Initializing multiplayer system...');
     
     // Load saved username and set it in the multiplayer menu
     const savedUsername = localStorage.getItem('playerUsername') || 'Player';
@@ -1782,10 +1790,14 @@ class MenuManager {
       });
     }
     
-    this.startRoomDiscovery();
-    
-    // Initialize network with retry mechanism
-    this.initializeMultiplayerNetworkWithRetry();
+    try {
+      await this.initializeMultiplayerNetworkWithRetry();
+      console.log('[MULTIPLAYER] Peer is ready, starting room discovery...');
+      this.startRoomDiscovery();
+    } catch (error) {
+      console.error('[MULTIPLAYER] Failed to initialize multiplayer after multiple attempts:', error);
+      alert('Failed to initialize multiplayer. Please check your connection and try again.');
+    }
   }
 
   initializeMultiplayerNetworkWithRetry() {
@@ -1805,131 +1817,91 @@ class MenuManager {
   }
   
   initializeMultiplayerNetwork() {
-    console.log('Initializing multiplayer network...');
-    
-    // Check if PeerJS is available
-    if (typeof Peer === 'undefined') {
-      console.error('PeerJS library not loaded!');
-      alert('Multiplayer is not available. Please refresh the page and try again.');
-      return;
-    }
-    
-    // Initialize PeerJS for room discovery and communication
-    if (!window.multiplayerPeer) {
-      console.log('Creating new PeerJS instance...');
+    return new Promise((resolve, reject) => {
+      console.log('[MULTIPLAYER] initializeMultiplayerNetwork called');
       
-      // Configure PeerJS with more aggressive connection options
-      const peerConfig = {
-        host: "ye-creatures-language-scheduled.trycloudflare.com",
-        port: 443,
-        path: "/myserver",
-        secure: true,
-        debug: 3, // Enable debug logging
-        config: {
-          'iceServers': [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' },
-            { urls: 'stun:stun.nextcloud.com:443' },
-            // Add TURN servers for better connectivity
-            {
-              urls: 'turn:openrelay.metered.ca:80',
-              username: 'openrelayproject',
-              credential: 'openrelayproject'
-            },
-            {
-              urls: 'turn:openrelay.metered.ca:443',
-              username: 'openrelayproject',
-              credential: 'openrelayproject'
-            }
-          ],
-          'iceTransportPolicy': 'all',
-          'bundlePolicy': 'max-bundle',
-          'rtcpMuxPolicy': 'require',
-          'iceCandidatePoolSize': 10
-        }
-      };
-      
-      try {
-        window.multiplayerPeer = new Peer(peerConfig);
-      } catch (error) {
-        console.error('Failed to create PeerJS instance:', error);
-        alert('Failed to initialize multiplayer. Please try again.');
-        return;
+      if (typeof Peer === 'undefined') {
+        console.error('[MULTIPLAYER] PeerJS library not loaded!');
+        alert('Multiplayer is not available. Please refresh the page and try again.');
+        return reject(new Error('PeerJS not loaded'));
       }
       
-      window.multiplayerPeer.on('open', (id) => {
-        console.log('Multiplayer peer ID:', id);
-        window.myPeerId = id;
-        console.log('PeerJS connection established successfully');
-        console.log('Peer is ready to accept connections');
-      });
-      
-      window.multiplayerPeer.on('connection', (conn) => {
-        console.log('Incoming connection from:', conn.peer);
-        this.handleIncomingConnection(conn);
-      });
-      
-      window.multiplayerPeer.on('error', (err) => {
-        console.error('Multiplayer peer error:', err);
+      if (!window.multiplayerPeer) {
+        console.log('[MULTIPLAYER] Creating new PeerJS instance...');
         
-        // If it's a connection error, try to reconnect
-        if (err.type === 'peer-unavailable' || err.type === 'network') {
-          if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts++;
-            const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1); // Exponential backoff
-            console.log(`Connection error, attempting to reconnect in ${delay / 1000} seconds (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-            setTimeout(() => {
-              if (window.multiplayerPeer) {
-                window.multiplayerPeer.destroy();
-                window.multiplayerPeer = null;
-                window.myPeerId = null;
-              }
-              this.initializeMultiplayerNetwork();
-            }, delay);
-          } else {
-            console.error('Max reconnection attempts reached. Multiplayer connection failed.');
-            alert('Multiplayer connection failed after multiple attempts. Please check your internet connection and try again later.');
-            // Reset attempts for next time user tries to connect
-            this.reconnectAttempts = 0;
-            this.reconnectDelay = 2000;
-          }
+        window.multiplayerPeer = new Peer(peerConfig);
+        
+        window.multiplayerPeer.on('open', (id) => {
+          console.log('[MULTIPLAYER] PeerJS connection established successfully');
+          console.log(`[MULTIPLAYER] Peer ID: ${id}`);
+          window.myPeerId = id;
+          resolve();
+        });
+        
+        window.multiplayerPeer.on('connection', (conn) => {
+          console.log(`[MULTIPLAYER] Incoming connection from: ${conn.peer}`);
+          this.handleIncomingConnection(conn);
+        });
+        
+        window.multiplayerPeer.on('error', (err) => {
+          console.error('[MULTIPLAYER] Peer error:', err);
+          reject(err);
+        });
+        
+        window.multiplayerPeer.on('disconnected', () => {
+          console.log('[MULTIPLAYER] PeerJS disconnected');
+        });
+        
+        window.multiplayerPeer.on('close', () => {
+          console.log('[MULTIPLAYER] PeerJS connection closed');
+          window.multiplayerPeer = null;
+        });
+      } else {
+        console.log(`[MULTIPLAYER] PeerJS already initialized, checking status. Peer ID: ${window.myPeerId}`);
+        if (window.multiplayerPeer.open && window.myPeerId) {
+          resolve();
+        } else if (window.multiplayerPeer.open && !window.myPeerId && window.multiplayerPeer.id) {
+          window.myPeerId = window.multiplayerPeer.id;
+          resolve();
         }
-      });
-      
-      window.multiplayerPeer.on('disconnected', () => {
-        console.log('PeerJS disconnected');
-      });
-      
-      window.multiplayerPeer.on('close', () => {
-        console.log('PeerJS connection closed');
-      });
-    } else {
-      console.log('PeerJS already initialized, peer ID:', window.myPeerId);
-    }
+        else {
+          window.multiplayerPeer.once('open', (id) => {
+            window.myPeerId = id;
+            resolve();
+          });
+        }
+      }
+    });
   }
   
   startRoomDiscovery() {
     console.log('Starting room discovery...');
     this.updateRoomsStatus('Searching for rooms...');
-    
+
     // Clear existing rooms
     this.clearRoomsList();
-    
-    // Start discovery process
-    this.discoverRooms();
-    
-    // Set up periodic refresh
+
+    // Read rooms from localStorage
+    const hostedRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
+    const now = Date.now();
+    const activeRooms = hostedRooms.filter(room => (now - room.timestamp) <= ROOM_EXPIRATION_TIME);
+    this.updateRoomsList(activeRooms);
+    localStorage.setItem('hostedRooms', JSON.stringify(activeRooms)); // Update localStorage to remove expired rooms
+
+    // Set up periodic refresh to read rooms from localStorage
     if (this.discoveryInterval) {
       clearInterval(this.discoveryInterval);
     }
     this.discoveryInterval = setInterval(() => {
-      this.discoverRooms();
-    }, 1000); // Refresh every 1 second
+      const hostedRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
+      const now = Date.now();
+      const activeRooms = hostedRooms.filter(room => (now - room.timestamp) <= ROOM_EXPIRATION_TIME);
+      localStorage.setItem('hostedRooms', JSON.stringify(activeRooms)); // Update localStorage to remove expired rooms
+      this.updateRoomsList(activeRooms);
+    }, 3000); // Refresh every 3 seconds
   }
+
+  
 
   stopRoomDiscovery() {
     console.log('Stopping room discovery...');
@@ -1945,31 +1917,7 @@ class MenuManager {
     this.updateRoomsStatus('Room discovery stopped');
   }
   
-  discoverRooms() {
-    console.log('Discovering active rooms...');
-    
-    try {
-      const hostedRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
-      const now = Date.now();
-      
-      // Filter for active rooms (within last 10 seconds - very short timeout)
-      const activeRooms = hostedRooms.filter(room => {
-        return (now - room.timestamp) < 10 * 1000; // 10 seconds
-      });
-      
-      // Remove expired rooms from localStorage
-      if (activeRooms.length < hostedRooms.length) {
-        localStorage.setItem('hostedRooms', JSON.stringify(activeRooms));
-        console.log(`Removed ${hostedRooms.length - activeRooms.length} expired rooms`);
-      }
-      
-      console.log(`Found ${activeRooms.length} active rooms`);
-      this.updateRoomsList(activeRooms);
-    } catch (error) {
-      console.error('Error discovering rooms:', error);
-      this.updateRoomsList([]);
-    }
-  }
+  
   
   updateRoomsList(rooms) {
     const roomsList = document.getElementById('roomsList');
@@ -2036,6 +1984,7 @@ class MenuManager {
   
   joinRoom(roomId, peerId) {
     console.log(`Joining room ${roomId} via peer ${peerId}`);
+    console.log(`[MULTIPLAYER] Attempting to join room ${roomId}`);
     const username = localStorage.getItem('playerUsername') || document.getElementById('playerUsername').value || 'Player';
     
     // Verify room is still active before attempting to join
@@ -2100,10 +2049,10 @@ class MenuManager {
       label: 'multiplayer-game-data'
     });
     
-    console.log('Connection object created:', conn);
-    console.log('Connection state:', conn.open);
-    console.log('Connection peer:', conn.peer);
-    console.log('Connection type:', conn.type);
+    console.log('[CLIENT-CONN] Connection object created:', conn);
+    console.log('[CLIENT-CONN] Initial connection state:', conn.open);
+    console.log('[CLIENT-CONN] Connection peer:', conn.peer);
+    console.log('[CLIENT-CONN] Connection type:', conn.type);
     
     // Mark creation time for ultra aggressive timeout
     conn._createTime = Date.now();
@@ -2111,32 +2060,37 @@ class MenuManager {
     // Set a shorter timeout for each attempt, but also check WebRTC state
     const attemptTimeout = setTimeout(() => {
       if (!conn.open) {
-        console.log(`Connection attempt ${attempt + 1} timed out, trying again...`);
-        console.log('WebRTC state at timeout:', conn.peerConnection?.connectionState);
-        console.log('ICE state at timeout:', conn.peerConnection?.iceConnectionState);
+        console.warn(`[CLIENT-CONN] Connection attempt ${attempt + 1} timed out, trying again...`);
+        console.warn('[CLIENT-CONN] WebRTC state at timeout:', conn.peerConnection?.connectionState);
+        console.warn('[CLIENT-CONN] ICE state at timeout:', conn.peerConnection?.iceConnectionState);
         
         try {
           conn.close();
+          console.log('[CLIENT-CONN] Closed timed out connection.');
         } catch (e) {
-          console.error('Error closing failed connection:', e);
+          console.error('[CLIENT-CONN] Error closing failed connection:', e);
         }
         
         // Clear the aggressive check interval if the timeout fires
         if (typeof aggressiveCheck !== 'undefined') {
           clearInterval(aggressiveCheck);
+          console.log('[CLIENT-CONN] Cleared aggressive check interval.');
         }
         
         // Wait 2 seconds before retry
         setTimeout(() => {
           this.attemptConnectionWithRetry(peerId, username, attempt + 1);
         }, 2000);
+      } else {
+        console.log('[CLIENT-CONN] Connection opened before timeout, clearing timeout.');
       }
-    }, 8000); // 8 second timeout per attempt
+    }, 15000); // 15 second timeout per attempt
     
     // Also add a more aggressive check - sometimes the connection state changes but open event doesn't fire
     const aggressiveCheck = setInterval(() => {
       if (conn.open) {
         clearInterval(aggressiveCheck);
+        console.log('[CLIENT-CONN] Aggressive check: Connection is open, stopping checks.');
         return;
       }
       
@@ -2145,10 +2099,10 @@ class MenuManager {
         const rtcState = conn.peerConnection.connectionState;
         const iceState = conn.peerConnection.iceConnectionState;
         
-        console.log(`Aggressive check - RTC: ${rtcState}, ICE: ${iceState}, Open: ${conn.open}`);
+        console.log(`[CLIENT-CONN] Aggressive check - RTC: ${rtcState}, ICE: ${iceState}, Open: ${conn.open}`);
         
         if ((rtcState === 'connected' || iceState === 'connected' || iceState === 'completed') && !conn.open) {
-          console.log('Aggressive check found connected WebRTC, waiting for PeerJS to update...');
+          console.log('[CLIENT-CONN] Aggressive check found connected WebRTC, waiting for PeerJS to update...');
           // Let PeerJS handle the connection state naturally
         }
         
@@ -2156,76 +2110,81 @@ class MenuManager {
         if (rtcState === 'new' && iceState === 'new' && !conn.open) {
           const timeSinceCreate = Date.now() - (conn._createTime || Date.now());
           if (timeSinceCreate > 5000) {
-            console.log('Connection appears stuck, but letting PeerJS handle it...');
+            console.warn('[CLIENT-CONN] Connection appears stuck (new/new for >5s), but letting PeerJS handle it...');
             // Modern PeerJS should handle this case better
           }
         }
+      } else {
+        console.log('[CLIENT-CONN] Aggressive check: peerConnection not yet available.');
       }
     }, 1000); // Check every second
     
     // Monitor WebRTC connection state changes
     if (conn.peerConnection) {
-      console.log('WebRTC peer connection found, adding state listeners');
+      console.log('[CLIENT-CONN] WebRTC peer connection found, adding state listeners');
       
       conn.peerConnection.addEventListener('connectionstatechange', () => {
-        console.log('WebRTC connection state changed:', conn.peerConnection.connectionState);
+        console.log('[CLIENT-CONN] WebRTC connection state changed:', conn.peerConnection.connectionState);
         
         // When WebRTC connects, check if we should proceed
         if (conn.peerConnection.connectionState === 'connected' && !conn.open) {
-          console.log('WebRTC connected, waiting for data channel to open...');
+          console.log('[CLIENT-CONN] WebRTC connected, waiting for data channel to open...');
           // Let PeerJS handle the connection state naturally
         }
       });
       
       conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
-        console.log('ICE connection state changed:', conn.peerConnection.iceConnectionState);
+        console.log('[CLIENT-CONN] ICE connection state changed:', conn.peerConnection.iceConnectionState);
         
         // Also monitor ICE connection status
         if ((conn.peerConnection.iceConnectionState === 'connected' || 
              conn.peerConnection.iceConnectionState === 'completed') && !conn.open) {
-          console.log('ICE connected, waiting for data channel to open...');
+          console.log('[CLIENT-CONN] ICE connected, waiting for data channel to open...');
           // Let PeerJS handle the connection state naturally
         }
       });
       
       conn.peerConnection.addEventListener('icegatheringstatechange', () => {
-        console.log('ICE gathering state changed:', conn.peerConnection.iceGatheringState);
+        console.log('[CLIENT-CONN] ICE gathering state changed:', conn.peerConnection.iceGatheringState);
       });
       
       conn.peerConnection.addEventListener('datachannel', (event) => {
-        console.log('Data channel received:', event.channel);
+        console.log('[CLIENT-CONN] Data channel received:', event.channel);
         const channel = event.channel;
         
         channel.addEventListener('open', () => {
-          console.log('Data channel opened - connection should be ready');
+          console.log('[CLIENT-CONN] Data channel opened - connection should be ready');
           clearTimeout(attemptTimeout);
+          clearInterval(aggressiveCheck); // Clear aggressive check on success
           // PeerJS will handle setting conn.open automatically
         });
         
         channel.addEventListener('close', () => {
-          console.log('Data channel closed');
+          console.log('[CLIENT-CONN] Data channel closed');
         });
         
         channel.addEventListener('error', (error) => {
-          console.error('Data channel error:', error);
+          console.error('[CLIENT-CONN] Data channel error:', error);
         });
       });
     } else {
-      console.log('No WebRTC peer connection found yet');
+      console.log('[CLIENT-CONN] No WebRTC peer connection found yet (initial check).');
       
       // Check for peerConnection later
       setTimeout(() => {
         if (conn.peerConnection) {
-          console.log('WebRTC peer connection found after delay');
+          console.log('[CLIENT-CONN] WebRTC peer connection found after delay.');
           // Add the same listeners here if needed
+        } else {
+          console.warn('[CLIENT-CONN] WebRTC peer connection still not found after delay.');
         }
       }, 1000);
     }
     
     conn.on('open', () => {
-      console.log(`Connected to room host successfully on attempt ${attempt + 1}`);
-      console.log('Connection state after open:', conn.open);
-      console.log('Sending join request with username:', username);
+      console.log(`[CLIENT-CONN] Connected to room host successfully on attempt ${attempt + 1}`);
+      console.log('[CLIENT-CONN] Connection state after open:', conn.open);
+      console.log('[CLIENT-CONN] Sending join request with username:', username);
       
       // Clear both timeout and aggressive check since we succeeded
       clearTimeout(attemptTimeout);
@@ -2240,23 +2199,23 @@ class MenuManager {
           username: username,
           timestamp: Date.now()
         });
-        console.log('Join request sent successfully');
+        console.log('[CLIENT-CONN] Join request sent successfully.');
       } catch (error) {
-        console.error('Error sending join request:', error);
+        console.error('[CLIENT-CONN] Error sending join request:', error);
         alert('Failed to send join request');
         this.showMenu('multiplayerMenu');
       }
     });
     
     conn.on('data', (data) => {
-      console.log('Received data from host:', data);
+      console.log('[CLIENT-CONN] Received data from host:', data);
       this.handleMultiplayerMessage(conn, data);
     });
     
     // Connection monitoring is now handled by the timeout in attemptConnectionWithRetry
     
     conn.on('close', () => {
-      console.log('Connection to host closed');
+      console.log('[CLIENT-CONN] Connection to host closed.');
       if (window.isMultiplayerClient) {
         // Clean up multiplayer state
         this.cleanupMultiplayerClient();
@@ -2266,7 +2225,7 @@ class MenuManager {
     });
     
     conn.on('error', (err) => {
-      console.error('Connection error:', err);
+      console.error('[CLIENT-CONN] Connection error:', err);
       if (window.isMultiplayerClient) {
         this.cleanupMultiplayerClient();
         alert(`Connection error: ${err.message || err.type || 'Unknown error'}`);
@@ -2540,18 +2499,24 @@ class MenuManager {
     });
   }
   
-  setupMultiplayerHosting(roomConfig) {
+  async setupMultiplayerHosting(roomConfig) {
     console.log('Setting up multiplayer hosting with room config:', roomConfig);
     
     if (!window.multiplayerPeer || !window.myPeerId) {
       console.log('Multiplayer peer not ready, initializing...');
-      this.initializeMultiplayerNetwork();
-      
-      // Wait for peer to be ready
-          setTimeout(() => {
-        this.setupMultiplayerHosting(roomConfig);
-          }, 1000);
-      return;
+      try {
+        await this.initializeMultiplayerNetworkWithRetry();
+      } catch (err) {
+        console.error("Error initializing multiplayer network", err);
+        alert("Could not initialize multiplayer. Please try again.");
+        return;
+      }
+    }
+
+    if (!window.myPeerId) {
+        console.error("Still no Peer ID after initialization!");
+        alert("Could not get a multiplayer ID. Please check your connection.");
+        return;
     }
     
     // Store room configuration
@@ -2580,7 +2545,12 @@ class MenuManager {
     
     console.log('Multiplayer room is now active and accepting connections');
     alert(`Room "${roomConfig.name}" is now hosting!\nOther players can now join your room.`);
+
+    // Connect to the lobby peer
+    
   }
+
+  
 
   registerRoomForDiscovery(room) {
     console.log('Registering room for discovery:', room);
@@ -2601,9 +2571,19 @@ class MenuManager {
       console.log(`Room "${room.name}" registered for discovery. Total rooms: ${filteredRooms.length}`);
       
       // Set up periodic room refresh to keep it active
-      if (room.refreshInterval) {
-        clearInterval(room.refreshInterval);
+      // Set up periodic room refresh to keep it active
+      if (this.roomHeartbeatInterval) { // Use the MenuManager's interval property
+        clearInterval(this.roomHeartbeatInterval);
       }
+      this.roomHeartbeatInterval = setInterval(() => {
+        if (window.hostedRoom) {
+          window.hostedRoom.timestamp = Date.now();
+          this.registerRoomForDiscovery(window.hostedRoom); // Re-register to update timestamp
+        } else {
+          clearInterval(this.roomHeartbeatInterval); // Stop if room is no longer hosted
+          this.roomHeartbeatInterval = null;
+        }
+      }, 5000); // Update every 5 seconds (less than 10s expiration)
       
       room.refreshInterval = setInterval(() => {
         this.refreshRoomTimestamp(room.id);
@@ -2854,15 +2834,17 @@ class MenuManager {
 
   // Handle incoming connections from other players
   handleIncomingConnection(conn) {
-    console.log('Handling incoming connection from:', conn.peer);
-    console.log('Connection state on host side:', conn.open);
-    console.log('Connection object on host side:', conn);
-    console.log('Host peer ID:', window.myPeerId);
-    console.log('Host is ready:', !!window.myPeerId);
+    console.log('[HOST-CONN] Handling incoming connection from:', conn.peer);
+    console.log(`[HOST-CONN] Incoming connection from ${conn.peer}`);
+    console.log('[HOST-CONN] Connected peers (before adding new):', window.hostedRoom ? window.hostedRoom.connectedPeers.map(p => p.peerId) : (window.multiplayerConnection ? [window.multiplayerConnection.peer] : []));
+    console.log('[HOST-CONN] Connection state on host side (initial):', conn.open);
+    console.log('[HOST-CONN] Connection object on host side:', conn);
+    console.log('[HOST-CONN] Host peer ID:', window.myPeerId);
+    console.log('[HOST-CONN] Host is ready:', !!window.myPeerId);
     
     // Check if connection is already open
     if (conn.open) {
-      console.log('Connection is already open on host side');
+      console.log('[HOST-CONN] Connection is already open on host side');
       // Send immediate ping if already open
       try {
         conn.send({ 
@@ -2870,55 +2852,57 @@ class MenuManager {
           message: 'Host connection immediate',
           timestamp: Date.now() 
         });
-        console.log('Sent immediate ping to already open connection');
+        console.log('[HOST-CONN] Sent immediate ping to already open connection');
       } catch (error) {
-        console.error('Failed to send immediate ping:', error);
+        console.error('[HOST-CONN] Failed to send immediate ping:', error);
       }
     } else {
-      console.log('Connection is not open yet, waiting for open event...');
+      console.log('[HOST-CONN] Connection is not open yet, waiting for open event...');
     }
     
     // Monitor WebRTC connection state on host side
     if (conn.peerConnection) {
-      console.log('Host: WebRTC peer connection found, adding state listeners');
+      console.log('[HOST-CONN] WebRTC peer connection found, adding state listeners');
       
       conn.peerConnection.addEventListener('connectionstatechange', () => {
-        console.log('Host: WebRTC connection state changed:', conn.peerConnection.connectionState);
+        console.log('[HOST-CONN] WebRTC connection state changed:', conn.peerConnection.connectionState);
         
         // When WebRTC connects on host side, monitor status
         if (conn.peerConnection.connectionState === 'connected' && !conn.open) {
-          console.log('Host: WebRTC connected, waiting for data channel to open...');
+          console.log('[HOST-CONN] WebRTC connected, waiting for data channel to open...');
           // Let PeerJS handle the connection state naturally
         }
       });
       
       conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
-        console.log('Host: ICE connection state changed:', conn.peerConnection.iceConnectionState);
+        console.log('[HOST-CONN] ICE connection state changed:', conn.peerConnection.iceConnectionState);
         
         // Also monitor ICE connection status on host side
         if ((conn.peerConnection.iceConnectionState === 'connected' || 
              conn.peerConnection.iceConnectionState === 'completed') && !conn.open) {
-          console.log('Host: ICE connected, waiting for data channel to open...');
+          console.log('[HOST-CONN] ICE connected, waiting for data channel to open...');
           // Let PeerJS handle the connection state naturally
         }
       });
       
       conn.peerConnection.addEventListener('icegatheringstatechange', () => {
-        console.log('Host: ICE gathering state changed:', conn.peerConnection.iceGatheringState);
+        console.log('[HOST-CONN] ICE gathering state changed:', conn.peerConnection.iceGatheringState);
       });
     } else {
-      console.log('Host: No WebRTC peer connection found yet');
+      console.log('[HOST-CONN] No WebRTC peer connection found yet (initial check).');
       
       setTimeout(() => {
         if (conn.peerConnection) {
-          console.log('Host: WebRTC peer connection found after delay');
+          console.log('[HOST-CONN] WebRTC peer connection found after delay.');
+        } else {
+          console.warn('[HOST-CONN] WebRTC peer connection still not found after delay.');
         }
       }, 1000);
     }
     
     conn.on('open', () => {
-      console.log('Incoming connection opened from:', conn.peer);
-      console.log('Connection state after open event:', conn.open);
+      console.log('[HOST-CONN] Incoming connection opened from:', conn.peer);
+      console.log('[HOST-CONN] Connection state after open event:', conn.open);
       
       // Send a welcome ping to confirm the connection is working
       try {
@@ -2927,7 +2911,7 @@ class MenuManager {
           message: 'Host connection confirmed',
           timestamp: Date.now() 
         });
-        console.log('Sent welcome ping to new connection');
+        console.log('[HOST-CONN] Sent welcome ping to new connection');
       // Send host's current player position to the newly connected client
       if (player) {
         conn.send({
@@ -2937,31 +2921,31 @@ class MenuManager {
           username: window.hostedRoom.host, // Host's username
           timestamp: Date.now()
         });
-        console.log('Sent host player position to new connection');
+        console.log('[HOST-CONN] Sent host player position to new connection');
       }
       } catch (error) {
-        console.error('Failed to send welcome ping or host position:', error);
+        console.error('[HOST-CONN] Failed to send welcome ping or host position:', error);
       }
     });
     
     conn.on('data', (data) => {
-      console.log('Received data from incoming connection:', data);
+      console.log('[HOST-CONN] Received data from incoming connection:', data);
       this.handleMultiplayerMessage(conn, data);
     });
 
     conn.on('error', (err) => {
-      console.error('Connection error for peer:', conn.peer, err);
+      console.error('[HOST-CONN] Connection error for peer:', conn.peer, err);
       // Optionally, handle specific error types or attempt to re-establish connection
       // For now, just log and let the 'close' event handle cleanup
     });
     
     conn.on('close', () => {
-      console.log('Player disconnected:', conn.peer);
+      console.log('[HOST-CONN] Player disconnected:', conn.peer);
       this.removePlayerFromRoom(conn.peer);
     });
     
     conn.on('error', (err) => {
-      console.error('Incoming connection error:', err);
+      console.error('[HOST-CONN] Incoming connection error:', err);
       // Treat connection errors as disconnects
       this.removePlayerFromRoom(conn.peer);
     });
@@ -2972,10 +2956,10 @@ class MenuManager {
     
     const checkHostConnection = () => {
       hostConnectionChecks++;
-      console.log(`Host connection check ${hostConnectionChecks}/${maxHostChecks}: state = ${conn.open}`);
+      console.log(`[HOST-CONN] Host connection check ${hostConnectionChecks}/${maxHostChecks}: state = ${conn.open}`);
       
       if (conn.open) {
-        console.log('Host connection is now open! Sending welcome ping...');
+        console.log('[HOST-CONN] Host connection is now open! Sending welcome ping...');
         try {
           conn.send({ 
             type: 'ping', 
@@ -2983,15 +2967,15 @@ class MenuManager {
             timestamp: Date.now() 
           });
         } catch (error) {
-          console.error('Failed to send welcome ping:', error);
+          console.error('[HOST-CONN] Failed to send welcome ping:', error);
         }
       } else if (hostConnectionChecks < maxHostChecks) {
         // Continue checking
         setTimeout(checkHostConnection, 1000);
       } else {
-        console.log('Host connection never opened after maximum attempts');
-        console.log('Host WebRTC state:', conn.peerConnection?.connectionState);
-        console.log('Host ICE state:', conn.peerConnection?.iceConnectionState);
+        console.warn('[HOST-CONN] Host connection never opened after maximum attempts');
+        console.warn('[HOST-CONN] Host WebRTC state:', conn.peerConnection?.connectionState);
+        console.warn('[HOST-CONN] Host ICE state:', conn.peerConnection?.iceConnectionState);
       }
     };
     
@@ -3001,6 +2985,7 @@ class MenuManager {
   
   handleMultiplayerMessage(conn, data) {
     console.log('Received multiplayer message:', data);
+    console.log(`[MULTIPLAYER] Received message of type ${data.type} from ${conn.peer}`);
     
     switch (data.type) {
       case 'join_request':
@@ -3034,6 +3019,7 @@ class MenuManager {
       case 'host_shutdown':
         this.handleHostShutdown(conn, data);
         break;
+      
       default:
         console.log('Unknown message type:', data.type);
     }
@@ -3271,7 +3257,7 @@ class MenuManager {
   }
   
   handleMultiplayerClientMessage(data) {
-    console.log('Client received message:', data);
+    console.log('[CLIENT-MSG] Client received message:', data);
     
     switch (data.type) {
       case 'player_movement':
@@ -3353,13 +3339,15 @@ class MenuManager {
   
   removePlayerFromRoom(peerId) {
     if (!window.hostedRoom) return;
-    
+
     const index = window.hostedRoom.connectedPeers.findIndex(p => p.peerId === peerId);
     if (index !== -1) {
       const player = window.hostedRoom.connectedPeers[index];
       window.hostedRoom.connectedPeers.splice(index, 1);
       window.hostedRoom.players--;
       console.log(`Player ${player.username} left the room`);
+      console.log(`[MULTIPLAYER] Player ${player.username} (${peerId}) disconnected.`);
+      console.log('[MULTIPLAYER] Connected peers:', window.hostedRoom.connectedPeers.map(p => p.peerId));
       
       // Remove from remote players tracking
       if (window.remotePlayers && window.remotePlayers.has(peerId)) {
@@ -3404,13 +3392,17 @@ class MenuManager {
       if (peer) username = peer.username;
     }
     
-    this.broadcastToAllExcept(conn.peer, {
-      type: 'player_movement',
-      peerId: conn.peer,
-      position: data.position,
-      username: username,
-      timestamp: Date.now()
-    });
+    try {
+      this.broadcastToAllExcept(conn.peer, {
+        type: 'player_movement',
+        peerId: conn.peer,
+        position: data.position,
+        username: username,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      console.error('Failed to broadcast player movement:', error);
+    }
   }
   
   handleBlockChange(conn, data) {
@@ -3435,15 +3427,19 @@ class MenuManager {
       console.log(`Applied block change from ${conn.peer}: (${data.x}, ${data.y}) -> ${blockType}`);
       
       // Broadcast to all other players (not the sender)
-      this.broadcastToAllExcept(conn.peer, {
-        type: 'block_change',
-        x: data.x,
-        y: data.y,
-        blockType: blockType,
-        blockId: data.blockId,
-        meta: data.meta,
-        timestamp: Date.now()
-      });
+      try {
+        this.broadcastToAllExcept(conn.peer, {
+          type: 'block_change',
+          x: data.x,
+          y: data.y,
+          blockType: blockType,
+          blockId: data.blockId,
+          meta: data.meta,
+          timestamp: Date.now()
+        });
+      } catch (error) {
+        console.error('Failed to broadcast block change:', error);
+      }
     }
   }
   
@@ -3528,23 +3524,25 @@ class MenuManager {
   }
   
   getBlockNumericId(blockId) {
-    // Convert block ID to numeric ID
     if (!blockId || blockId === 'air') return 0;
     
-    // Get the block from registry
     const block = registry.get(blockId);
     if (block && typeof block.id === 'number') {
       return block.id;
     }
     
-    // Fallback: try to find the block by iterating
-    for (const [id, blockData] of registry.map.entries()) {
-      if (blockData.id === blockId) {
-        return registry.getNumericId(blockId);
+    // If blockId is already a numeric ID (e.g., from a client that sent numeric ID directly)
+    // This is a defensive check, assuming blockId might sometimes be numeric
+    if (typeof blockId === 'number') {
+      // Check if this numeric ID corresponds to a registered block
+      for (const [key, value] of registry.map.entries()) {
+        if (value.id === blockId) {
+          return blockId;
+        }
       }
     }
-    
-    return 0; // Default to air
+
+    return 0; // Default to air if not found or invalid
   }
   
   // Cleanup functions for multiplayer
@@ -3594,6 +3592,12 @@ class MenuManager {
   cleanupMultiplayerHost() {
     console.log('Cleaning up multiplayer host state...');
     
+    // Clear the room heartbeat interval
+    if (this.roomHeartbeatInterval) {
+      clearInterval(this.roomHeartbeatInterval);
+      this.roomHeartbeatInterval = null;
+    }
+    
     // Disconnect all connected players
     if (window.hostedRoom && window.hostedRoom.connectedPeers) {
       window.hostedRoom.connectedPeers.forEach(peer => {
@@ -3611,6 +3615,9 @@ class MenuManager {
         }
       });
     }
+
+    // Remove the room from discovery
+    this.removeHostedRoom();
     
     // Clear hosted room
     window.hostedRoom = null;
