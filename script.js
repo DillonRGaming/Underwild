@@ -1817,7 +1817,10 @@ class MenuManager {
       
       // Configure PeerJS with more aggressive connection options
       const peerConfig = {
-                host: 'https://pg-task-associations-tag.trycloudflare.com',
+        host: "pads-many-authority-sets.trycloudflare.com",
+        port: 443,
+        path: "/myapp",
+        secure: true,
         debug: 3, // Enable debug logging
         config: {
           'iceServers': [
@@ -1836,7 +1839,7 @@ class MenuManager {
             },
             {
               urls: 'turn:openrelay.metered.ca:443',
-              username: 'openrelayproject', 
+              username: 'openrelayproject',
               credential: 'openrelayproject'
             }
           ],
