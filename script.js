@@ -213,6 +213,9 @@ class MenuManager {
     this.currentMenu = 'mainMenu';
     this.initializeMenus();
     this.bindEvents();
+    this.reconnectAttempts = 0;
+    this.reconnectDelay = 2000; // Initial delay of 2 seconds
+    this.maxReconnectAttempts = 10; // Max 10 attempts
   }
 
   initializeMenus() {
@@ -1875,15 +1878,25 @@ class MenuManager {
         
         // If it's a connection error, try to reconnect
         if (err.type === 'peer-unavailable' || err.type === 'network') {
-          console.log('Connection error, attempting to reconnect...');
-          setTimeout(() => {
-            if (window.multiplayerPeer) {
-              window.multiplayerPeer.destroy();
-              window.multiplayerPeer = null;
-              window.myPeerId = null;
+          if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1); // Exponential backoff
+            console.log(`Connection error, attempting to reconnect in ${delay / 1000} seconds (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+            setTimeout(() => {
+              if (window.multiplayerPeer) {
+                window.multiplayerPeer.destroy();
+                window.multiplayerPeer = null;
+                window.myPeerId = null;
+              }
               this.initializeMultiplayerNetwork();
-            }
-          }, 2000);
+            }, delay);
+          } else {
+            console.error('Max reconnection attempts reached. Multiplayer connection failed.');
+            alert('Multiplayer connection failed after multiple attempts. Please check your internet connection and try again later.');
+            // Reset attempts for next time user tries to connect
+            this.reconnectAttempts = 0;
+            this.reconnectDelay = 2000;
+          }
         }
       });
       
@@ -2106,6 +2119,11 @@ class MenuManager {
           conn.close();
         } catch (e) {
           console.error('Error closing failed connection:', e);
+        }
+        
+        // Clear the aggressive check interval if the timeout fires
+        if (typeof aggressiveCheck !== 'undefined') {
+          clearInterval(aggressiveCheck);
         }
         
         // Wait 2 seconds before retry
@@ -2930,6 +2948,12 @@ class MenuManager {
       console.log('Received data from incoming connection:', data);
       this.handleMultiplayerMessage(conn, data);
     });
+
+    conn.on('error', (err) => {
+      console.error('Connection error for peer:', conn.peer, err);
+      // Optionally, handle specific error types or attempt to re-establish connection
+      // For now, just log and let the 'close' event handle cleanup
+    });
     
     conn.on('close', () => {
       console.log('Player disconnected:', conn.peer);
@@ -3023,13 +3047,21 @@ class MenuManager {
     
     if (!window.hostedRoom) {
       console.log('No hosted room available, denying join');
-      conn.send({ type: 'join_denied', reason: 'Room not available' });
+      try {
+        conn.send({ type: 'join_denied', reason: 'Room not available' });
+      } catch (error) {
+        console.error('Failed to send join_denied (Room not available):', error);
+      }
       return;
     }
     
     if (window.hostedRoom.players >= window.hostedRoom.maxPlayers) {
       console.log('Room is full, denying join');
-      conn.send({ type: 'join_denied', reason: 'Room is full' });
+      try {
+        conn.send({ type: 'join_denied', reason: 'Room is full' });
+      } catch (error) {
+        console.error('Failed to send join_denied (Room is full):', error);
+      }
       return;
     }
     
@@ -3056,29 +3088,33 @@ class MenuManager {
     console.log('Sending join_accepted with world data and host player info...');
     
     // Send world data to joining player
-    conn.send({
-      type: 'join_accepted',
-      worldSettings: this.serializeWorldSettings(),
-      hostPlayerPosition: { x: player.x, y: player.y }, // Include host's current position
-      playerList: (() => {
-        const players = [];
-        // Add host's own player info to the list
-        players.push({
-          peerId: window.myPeerId,
-          username: window.hostedRoom.host,
-          position: { x: player.x, y: player.y }
-        });
-        // Add other connected peers
-        window.hostedRoom.connectedPeers.forEach(p => {
+    try {
+      conn.send({
+        type: 'join_accepted',
+        worldSettings: this.serializeWorldSettings(),
+        hostPlayerPosition: { x: player.x, y: player.y }, // Include host's current position
+        playerList: (() => {
+          const players = [];
+          // Add host's own player info to the list
           players.push({
-            peerId: p.peerId,
-            username: p.username,
-            position: { x: window.remotePlayers.get(p.peerId)?.x || 0, y: window.remotePlayers.get(p.peerId)?.y || 0 }
+            peerId: window.myPeerId,
+            username: window.hostedRoom.host,
+            position: { x: player.x, y: player.y }
           });
-        });
-        return players;
-      })()
-    });
+          // Add other connected peers
+          window.hostedRoom.connectedPeers.forEach(p => {
+            players.push({
+              peerId: p.peerId,
+              username: p.username,
+              position: { x: window.remotePlayers.get(p.peerId)?.x || 0, y: window.remotePlayers.get(p.peerId)?.y || 0 }
+            });
+          });
+          return players;
+        })()
+      });
+    } catch (error) {
+      console.error('Failed to send join_accepted:', error);
+    }
     
     console.log(`Player ${data.username} joined the room successfully`);
   }
@@ -3528,7 +3564,29 @@ class MenuManager {
     
     // Reset multiplayer flags
     window.isMultiplayerClient = false;
+    
+    // Close the multiplayer connection if it exists
+    if (window.multiplayerConnection && window.multiplayerConnection.open) {
+      try {
+        window.multiplayerConnection.close();
+        console.log('Multiplayer connection closed.');
+      } catch (e) {
+        console.error('Error closing multiplayer connection:', e);
+      }
+    }
     window.multiplayerConnection = null;
+
+    // Destroy the main PeerJS instance
+    if (window.multiplayerPeer) {
+      try {
+        window.multiplayerPeer.destroy();
+        console.log('Main PeerJS instance destroyed.');
+      } catch (e) {
+        console.error('Error destroying main PeerJS instance:', e);
+      }
+      window.multiplayerPeer = null;
+      window.myPeerId = null;
+    }
     
     console.log('Multiplayer client cleanup completed');
   }
@@ -3560,6 +3618,18 @@ class MenuManager {
     // Clear remote players
     if (window.remotePlayers) {
       window.remotePlayers.clear();
+    }
+
+    // Destroy the main PeerJS instance
+    if (window.multiplayerPeer) {
+      try {
+        window.multiplayerPeer.destroy();
+        console.log('Main PeerJS instance destroyed.');
+      } catch (e) {
+        console.error('Error destroying main PeerJS instance:', e);
+      }
+      window.multiplayerPeer = null;
+      window.myPeerId = null;
     }
     
     console.log('Multiplayer host cleanup completed');
