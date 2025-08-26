@@ -1817,7 +1817,7 @@ class MenuManager {
       
       // Configure PeerJS with more aggressive connection options
       const peerConfig = {
-                host: '0.peerjs.com',
+                host: 'pg-task-associations-tag.trycloudflare.com',
         port: 443,
         secure: true,
         path: '/',
