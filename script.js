@@ -1817,9 +1817,9 @@ class MenuManager {
       
       // Configure PeerJS with more aggressive connection options
       const peerConfig = {
-        host: "pads-many-authority-sets.trycloudflare.com",
+        host: "ye-creatures-language-scheduled.trycloudflare.com",
         port: 443,
-        path: "/myapp",
+        path: "/myserver",
         secure: true,
         debug: 3, // Enable debug logging
         config: {
