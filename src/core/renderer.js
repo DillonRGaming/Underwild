@@ -1041,13 +1041,14 @@ export class Renderer {
   }
   
   drawRemotePlayers() {
-    if (!window.remotePlayers || window.remotePlayers.size === 0) return;
+    const ui = this.getUI();
+    if (!ui.remotePlayers || ui.remotePlayers.size === 0) return;
     
     const { ctx, camera, world, player } = this;
     const currentTime = Date.now();
     
     // Draw each remote player
-    window.remotePlayers.forEach((remotePlayer, peerId) => {
+    ui.remotePlayers.forEach((remotePlayer, peerId) => {
       // Smooth movement interpolation
       if (!remotePlayer.renderX) remotePlayer.renderX = remotePlayer.x;
       if (!remotePlayer.renderY) remotePlayer.renderY = remotePlayer.y;

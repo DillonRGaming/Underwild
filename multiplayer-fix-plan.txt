@@ -1,0 +1,97 @@
+MULTIPLAYER SERVER INTEGRATION GUIDE
+
+Server Overview:
+- Built with Node.js, Express, and Socket.IO.
+- Listens on port 3000.
+- Supports:
+  1. Persistent "Main Server" world that is always available.
+  2. Player-hosted temporary rooms that disappear when the host leaves.
+  3. Generic event relay system for all game actions (movement, block updates, chat, inventory, etc.).
+- Main server data is saved to "data.json" every 10 seconds.
+- Temporary rooms live in memory only.
+- Players can auto-discover rooms and choose which to join.
+- Generic events are called "gameEvent" and include optional player state.
+
+Server Features and Client Hooks:
+
+1. Connecting to the Server:
+   - Include Socket.IO client in HTML:
+     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+   - Connect to the server (replace ngrok URL with the live one):
+     const socket = io("https://your-ngrok-url");
+
+2. Receiving Initial State:
+   - Event: "init"
+   - Data format:
+     {
+       mainWorld: { players: { [playerId]: playerState } },
+       rooms: { [roomId]: { id, name, host, players, state } }
+     }
+   - Use this to initialize the main world and display room list.
+
+3. Room List Updates:
+   - Event: "roomList"
+   - Payload: array of rooms:
+     [
+       { id: "main", name: "Main Server" },
+       { id: "room_123456", name: "Player Room" },
+       ...
+     ]
+   - Update the game UI to allow players to join any room.
+
+4. Creating a Temporary Room:
+   - Client emits: "createRoom"
+     Example: socket.emit("createRoom", { name: "My Fun Room" });
+   - Server generates a unique roomId and adds it to the room list.
+   - The creating player is automatically marked as the host.
+
+5. Joining a Room:
+   - Client emits: "joinRoom"
+     Example: socket.emit("joinRoom", { roomId: "room_123456" });
+   - Server adds the player to the room and sends the room state via "initRoom".
+   - Events within the room are scoped to that room.
+
+6. Sending and Receiving Game Events:
+   - Client sends: "gameEvent"
+     Example:
+       socket.emit("gameEvent", {
+         type: "move",                   // any event type
+         payload: { x: 10, y: 20 },     // event data
+         roomId: "room_123456",          // optional; defaults to main server
+         playerState: { x:10, y:20 }    // optional; saved in server state
+       });
+   - Server broadcasts "gameEvent" to all other clients in the same room or main world.
+   - Client listens:
+       socket.on("gameEvent", (data) => { handleEvent(data.id, data.type, data.payload); });
+
+7. Player Disconnections:
+   - Event: "playerDisconnected"
+   - Payload: disconnected playerId
+   - Client should remove the player from the game world/UI.
+
+8. Room Closure:
+   - Event: "roomClosed"
+   - Triggered when the host leaves a temporary room.
+   - Client should notify players and exit the room gracefully.
+
+9. Main Server Persistence:
+   - Only the main server world is persisted to data.json.
+   - Temporary rooms are in memory and are not saved.
+
+10. Additional Notes for Integration:
+    - The client does not need to know whether it is in the main world or a temporary room.
+    - All multiplayer actions go through the "gameEvent" system; the server handles room scoping.
+    - The room list always includes the permanent main server at the top, followed by active player rooms.
+    - The client only needs to handle joining, creating rooms, sending events, and receiving events; server handles persistence, relaying, and cleanup.
+
+Usage Summary:
+1. Connect to the server via Socket.IO.
+2. Display the room list received from "init" or "roomList".
+3. Player selects room:
+   - Main server: join default room.
+   - Player-hosted room: emit "joinRoom" with roomId.
+4. For actions (movement, block changes, chat, inventory, etc.), emit "gameEvent".
+5. Listen for "gameEvent", "playerDisconnected", and "roomClosed" to update the game UI.
+6. Main server persists automatically; temporary rooms clean up when host leaves.
+
+End of Instructions.

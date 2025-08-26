@@ -84,6 +84,13 @@ export class Breaker {
         }
       }
       world.setBlock(this.state.x, this.state.y, 'air', null);
+      // Emit block breaking event for multiplayer
+      if (typeof socket !== 'undefined' && socket.connected) {
+        socket.emit('gameEvent', {
+          type: 'block_break',
+          payload: { x: this.state.x, y: this.state.y, blockId: this.state.id }
+        });
+      }
       world.updateLighting(this.state.x, this.state.y);
       this.cancel();
       return result;

@@ -351,6 +351,15 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
 
   player.y = nextY;
 
+  // Emit player movement event for multiplayer
+  if (typeof socket !== 'undefined' && socket.connected) {
+    socket.emit('gameEvent', {
+      type: 'player_movement',
+      payload: { x: player.x, y: player.y },
+      playerState: { x: player.x, y: player.y, username: player.username || 'Player' }
+    });
+  }
+
   if (inWater && player.onGround) {
     player.y += Math.sin(Date.now() / 200) * 0.5;
   }

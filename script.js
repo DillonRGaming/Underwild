@@ -1,3 +1,5 @@
+const socket = io("https://cfcf5ca5fae8.ngrok-free.app", { transports: ["websocket", "polling"] });
+
 import { Engine } from './src/core/engine.js';
 import { Input } from './src/core/input.js';
 import { Renderer } from './src/core/renderer.js';
@@ -16,10 +18,7 @@ import { LeafParticle } from './src/entities/leaf_particle.js';
 import { ModManager } from './mods/index.js';
 
 import { ItemEntity } from './src/entities/item.js';
-import { peerConfig } from './peer.js';
 import { Bee } from './src/entities/bee.js';
-
-const ROOM_EXPIRATION_TIME = 10 * 1000; // Rooms expire after 10 seconds if not refreshed by host
 
 
 
@@ -249,6 +248,36 @@ class MenuManager {
     const versionElement = document.querySelector('.version-number');
     if (versionElement) {
       versionElement.textContent = `v${GAME_VERSION}`;
+    }
+  }
+
+  initializeCreateRoom() {
+    console.log('Initializing create room menu...');
+    const username = localStorage.getItem('playerUsername') || 'Player';
+    const usernameInput = document.getElementById('createRoomUsername');
+    if (usernameInput) {
+        usernameInput.value = username;
+    }
+    const roomNameInput = document.getElementById('roomName');
+    if(roomNameInput) {
+        roomNameInput.value = `${username}'s World`;
+    }
+  }
+
+  resetCreateRoomMenu() {
+    window.pendingMultiplayerRoom = null;
+    const worldInfo = document.getElementById('configuredWorldInfo');
+    if (worldInfo) {
+        worldInfo.classList.add('hidden');
+    }
+    const createWorldBtn = document.getElementById('createWorldBtn');
+    if (createWorldBtn) {
+        createWorldBtn.classList.remove('hidden');
+        createWorldBtn.textContent = 'Configure World';
+    }
+    const hostRoomBtn = document.getElementById('hostRoomBtn');
+    if (hostRoomBtn) {
+        hostRoomBtn.classList.add('hidden');
     }
   }
 
@@ -515,6 +544,7 @@ class MenuManager {
           
         case 'back-to-multiplayer':
           this.showMenu('multiplayerMenu');
+          window.pendingMultiplayerRoom = null;
           break;
           
         case 'max-players-2':
@@ -893,7 +923,7 @@ class MenuManager {
       spawnY = surfaceY * TILE_SIZE; // Assign to global spawnY
       console.log('Setting player spawn Y to:', spawnY, '(tile:', surfaceY, ')');
       
-      player = new Player(world, registry, spawnX, spawnY); // Use global spawnY
+      player = new Player(world, registry, spawnX, spawnY, localStorage.getItem('playerUsername') || 'Player'); // Use global spawnY
       player.onGround = false;
       console.log('Player created at position:', { x: player.x, y: player.y });
       console.log('Player tile position:', { 
@@ -955,6 +985,7 @@ class MenuManager {
             keybinds,
             rebindingKey,
             menuPatterns: null,
+            remotePlayers: window.remotePlayers,
             // Graphics settings
             renderDistance: renderDistance,
             textureQuality: textureQuality,
@@ -998,17 +1029,14 @@ class MenuManager {
             }
           }, 100);
           
-          console.log('=== COMPUTING SPAWN POSITION ===');
-          try {
-            const spawnResult = computeSeededSpawn(spawnTileX);
-            console.log('Spawn computation result:', spawnResult);
-          } catch (spawnError) {
-            console.error('ERROR in computeSeededSpawn:', spawnError);
-          }
+          console.log('=== COMPUTING SPAWN POSITION (simplified) ===');
+          const surfaceY = findSurfaceY(spawnTileX);
+          player.y = (surfaceY - 5) * TILE_SIZE; // Spawn 5 tiles above surface
+          player.x = spawnX;
           
           console.log('=== ENSURING PLAYER NOT IN SOLID ===');
           try {
-          ensurePlayerNotInSolid();
+            ensurePlayerNotInSolid();
           } catch (ensureError) {
             console.error('ERROR in ensurePlayerNotInSolid:', ensureError);
           }
@@ -1131,20 +1159,8 @@ class MenuManager {
       window.player = null;
     }
     
-    // Clean up multiplayer hosting
-    if (window.hostedRoom) {
-      console.log('Stopping multiplayer hosting...');
-      this.cleanupMultiplayerHost();
-    }
-    
-    // Clean up multiplayer client
-    if (window.multiplayerConnection || window.isMultiplayerClient) {
-      console.log('Disconnecting from multiplayer...');
-      this.cleanupMultiplayerClient();
-      if (window.multiplayerConnection && window.multiplayerConnection.open) {
-        window.multiplayerConnection.close();
-      }
-    }
+    // Clean up multiplayer state (Socket.IO will handle disconnections automatically)
+    // No specific client-side cleanup needed for Socket.IO beyond stopping game loop and resetting world/player
     if (window.inventory) {
       window.inventory = null;
     }
@@ -1155,6 +1171,71 @@ class MenuManager {
     }
     
     console.log('Returned to main menu - world unloaded');
+  }
+  
+  removeRemotePlayer(playerId) {
+    if (window.remotePlayers && window.remotePlayers.has(playerId)) {
+      window.remotePlayers.delete(playerId);
+      console.log(`[MULTIPLAYER] Removed remote player ${playerId}`);
+    }
+  }
+
+  handleGameEvent(data) {
+    // console.log('[GAME_EVENT] Handling game event:', data);
+    switch (data.type) {
+      case 'player_movement':
+        // Update remote player position
+        if (window.remotePlayers && data.id !== socket.id) { // Use socket.id for self
+          if (!window.remotePlayers.has(data.id)) {
+            window.remotePlayers.set(data.id, {
+              x: data.payload.x,
+              y: data.payload.y,
+              username: data.payload.username || 'Remote Player'
+            });
+          } else {
+            const remotePlayer = window.remotePlayers.get(data.id);
+            remotePlayer.x = data.payload.x;
+            remotePlayer.y = data.payload.y;
+            if (data.payload.username) {
+              remotePlayer.username = data.payload.username;
+            }
+          }
+        }
+        break;
+      case 'block_change':
+        // Apply block change to local world
+        if (world && data.payload.x >= 0 && data.payload.x < world.width && data.payload.y >= 0 && data.payload.y < world.height) {
+          const index = data.payload.y * world.width + data.payload.x;
+          let blockType = data.payload.blockType;
+          if (data.payload.blockId) {
+            blockType = this.getBlockNumericId(data.payload.blockId);
+          }
+          world.blocks[index] = blockType;
+          if (data.payload.meta && world.blockMeta) {
+            world.blockMeta.set(index, data.payload.meta);
+          }
+          console.log(`[GAME_EVENT] Applied block change: (${data.payload.x}, ${data.payload.y}) -> ${blockType} (${data.payload.blockId || 'unknown'})`);
+        }
+        break;
+      case 'chat_message':
+        // Handle chat message display
+        console.log(`[GAME_EVENT] Chat from ${data.payload.username}: ${data.payload.message}`);
+        // TODO: Integrate with actual chat display system
+        break;
+      case 'player_join':
+        console.log(`[GAME_EVENT] Player ${data.payload.username} (${data.id}) joined.`);
+        // Add new player to remotePlayers map
+        if (window.remotePlayers && data.id !== socket.id) {
+          window.remotePlayers.set(data.id, {
+            x: data.payload.x,
+            y: data.payload.y,
+            username: data.payload.username
+          });
+        }
+        break;
+      default:
+        console.log('[GAME_EVENT] Unknown game event type:', data.type);
+    }
   }
   
   showPauseMenu() {
@@ -1775,9 +1856,11 @@ class MenuManager {
     console.log(`Randomized background with ${randomBlocks.length} blocks:`, randomBlocks);
   }
   
-  async initializeMultiplayer() {
+  initializeMultiplayer() {
     console.log('[MULTIPLAYER] Initializing multiplayer system...');
     
+    const statusElement = document.getElementById('roomsStatus');
+
     // Load saved username and set it in the multiplayer menu
     const savedUsername = localStorage.getItem('playerUsername') || 'Player';
     const usernameInput = document.getElementById('playerUsername');
@@ -1789,130 +1872,162 @@ class MenuManager {
         localStorage.setItem('playerUsername', e.target.value);
       });
     }
-    
-    try {
-      await this.initializeMultiplayerNetworkWithRetry();
-      console.log('[MULTIPLAYER] Peer is ready, starting room discovery...');
-      this.startRoomDiscovery();
-    } catch (error) {
-      console.error('[MULTIPLAYER] Failed to initialize multiplayer after multiple attempts:', error);
-      alert('Failed to initialize multiplayer. Please check your connection and try again.');
-    }
-  }
 
-  initializeMultiplayerNetworkWithRetry() {
-    console.log('Initializing multiplayer network with retry...');
-    
-    try {
-      this.initializeMultiplayerNetwork();
-    } catch (error) {
-      console.error('Failed to initialize multiplayer network:', error);
-      
-      // Retry after a delay
-      setTimeout(() => {
-        console.log('Retrying multiplayer network initialization...');
-        this.initializeMultiplayerNetworkWithRetry();
-      }, 3000);
-    }
-  }
-  
-  initializeMultiplayerNetwork() {
-    return new Promise((resolve, reject) => {
-      console.log('[MULTIPLAYER] initializeMultiplayerNetwork called');
-      
-      if (typeof Peer === 'undefined') {
-        console.error('[MULTIPLAYER] PeerJS library not loaded!');
-        alert('Multiplayer is not available. Please refresh the page and try again.');
-        return reject(new Error('PeerJS not loaded'));
+    // Set up Socket.IO event listeners
+    socket.on('connect', () => {
+        console.log('[SOCKET.IO] Connected to server.');
+        if (statusElement) {
+            statusElement.textContent = 'Connected';
+            statusElement.style.color = '#4CAF50'; // Green
+        }
+        // Request initial state and room list from the server
+        socket.emit('requestInit');
+        console.log('[MULTIPLAYER] Socket.IO listeners set up and initial state requested.');
+    });
+
+    socket.on('disconnect', () => {
+        console.log('[SOCKET.IO] Disconnected from server.');
+        if (statusElement) {
+            statusElement.textContent = 'Disconnected';
+            statusElement.style.color = '#F44336'; // Red
+        }
+    });
+
+    socket.on('connect_error', (err) => {
+        console.error('[SOCKET.IO] Connection error:', err);
+        if (statusElement) {
+            statusElement.textContent = 'Connection Error';
+            statusElement.style.color = '#FF9800'; // Orange
+        }
+    });
+
+    socket.on('init', (data) => {
+      console.log('[SOCKET.IO] Received init data:', data);
+      // Handle initial state: mainWorld and rooms
+      this.updateRoomsList(data.rooms);
+
+      // Update player count
+      const playerCount = data.mainWorld ? Object.keys(data.mainWorld.players).length : 0;
+      const mainMenuPlayerCount = document.getElementById('mainMenuPlayerCount');
+      const multiplayerPlayerCount = document.getElementById('multiplayerPlayerCount');
+      if (mainMenuPlayerCount) {
+        mainMenuPlayerCount.innerHTML = `<span style="color: #4CAF50;">●</span> ${playerCount} Players Online`;
       }
-      
-      if (!window.multiplayerPeer) {
-        console.log('[MULTIPLAYER] Creating new PeerJS instance...');
-        
-        window.multiplayerPeer = new Peer(peerConfig);
-        
-        window.multiplayerPeer.on('open', (id) => {
-          console.log('[MULTIPLAYER] PeerJS connection established successfully');
-          console.log(`[MULTIPLAYER] Peer ID: ${id}`);
-          window.myPeerId = id;
-          resolve();
-        });
-        
-        window.multiplayerPeer.on('connection', (conn) => {
-          console.log(`[MULTIPLAYER] Incoming connection from: ${conn.peer}`);
-          this.handleIncomingConnection(conn);
-        });
-        
-        window.multiplayerPeer.on('error', (err) => {
-          console.error('[MULTIPLAYER] Peer error:', err);
-          reject(err);
-        });
-        
-        window.multiplayerPeer.on('disconnected', () => {
-          console.log('[MULTIPLAYER] PeerJS disconnected');
-        });
-        
-        window.multiplayerPeer.on('close', () => {
-          console.log('[MULTIPLAYER] PeerJS connection closed');
-          window.multiplayerPeer = null;
-        });
-      } else {
-        console.log(`[MULTIPLAYER] PeerJS already initialized, checking status. Peer ID: ${window.myPeerId}`);
-        if (window.multiplayerPeer.open && window.myPeerId) {
-          resolve();
-        } else if (window.multiplayerPeer.open && !window.myPeerId && window.multiplayerPeer.id) {
-          window.myPeerId = window.multiplayerPeer.id;
-          resolve();
-        }
-        else {
-          window.multiplayerPeer.once('open', (id) => {
-            window.myPeerId = id;
-            resolve();
-          });
-        }
+      if (multiplayerPlayerCount) {
+        multiplayerPlayerCount.innerHTML = `<span style="color: #4CAF50;">●</span> ${playerCount} Players Online`;
       }
     });
+
+    socket.on('roomList', (rooms) => {
+      console.log('[SOCKET.IO] Received roomList:', rooms);
+      this.updateRoomsList(rooms);
+    });
+
+    socket.on('initRoom', (data) => {
+        console.log('[SOCKET.IO] Received initRoom:', data);
+        this.loadMultiplayerWorld(data);
+    });
+
+    socket.on('gameEvent', (data) => {
+      // console.log('[SOCKET.IO] Received gameEvent:', data);
+      // Handle incoming game events (movement, block changes, etc.)
+      this.handleGameEvent(data);
+    });
+
+    socket.on('playerDisconnected', (playerId) => {
+      console.log('[SOCKET.IO] Player disconnected:', playerId);
+      // Remove player from game world/UI
+      this.removeRemotePlayer(playerId);
+    });
+
+    socket.on('roomClosed', (roomId) => {
+      console.log('[SOCKET.IO] Room closed:', roomId);
+      // Notify players and exit the room gracefully
+      alert(`Room ${roomId} has been closed by the host.`);
+      this.showMenu('multiplayerMenu');
+    });
   }
+
+  loadMultiplayerWorld(roomData) {
+    const worldSettings = roomData.state.worldSettings;
+    console.log('Loading multiplayer world with settings:', worldSettings);
+
+    if (!worldSettings) {
+        alert('Error: Received invalid world data from server.');
+        this.showMenu('multiplayerMenu');
+        return;
+    }
+
+    try {
+      // Set global world variables from host's world settings
+      worldName = worldSettings.name || 'Multiplayer World';
+      worldSeed = worldSettings.seed || '';
+      worldGameMode = worldSettings.gameMode || 'survival';
+      worldType = worldSettings.worldType || 'regular';
+      worldSize = worldSettings.worldSize || 'normal';
+      worldSuperflatLayers = worldSettings.superflatLayers || worldSuperflatLayers;
+
+      // Hide all menus before creating world
+      this.hideAllMenus();
+
+      // Create the world with host's settings
+      this.createWorld().then(() => {
+        console.log('Multiplayer world loaded successfully');
+
+        // Set player position to world spawn
+        if (player) {
+          player.x = spawnX; // Use the global spawnX
+          player.y = spawnY; // Use the global spawnY
+          console.log('Player spawned at world spawn:', { x: player.x, y: player.y });
+        }
+
+        // Initialize remote players
+        window.remotePlayers = new Map();
+        if (roomData.players) {
+          for (const playerId in roomData.players) {
+            if (playerId !== socket.id) {
+              const playerData = roomData.players[playerId];
+              window.remotePlayers.set(playerId, {
+                x: playerData.x,
+                y: playerData.y,
+                username: playerData.username
+              });
+            }
+          }
+        }
+        
+        // Store current room ID
+        window.currentRoomId = roomData.id;
+
+        console.log('Multiplayer world fully loaded and ready!');
+
+      }).catch(err => {
+        console.error('Failed to load multiplayer world:', err);
+        alert('Failed to load multiplayer world');
+        this.showMenu('multiplayerMenu');
+      });
+
+    } catch (error) {
+      console.error('Error loading multiplayer world:', error);
+      alert('Failed to load multiplayer world');
+      this.showMenu('multiplayerMenu');
+    }
+  }
+
+  
   
   startRoomDiscovery() {
-    console.log('Starting room discovery...');
+    console.log('[MULTIPLAYER] Requesting room list from server...');
     this.updateRoomsStatus('Searching for rooms...');
-
-    // Clear existing rooms
     this.clearRoomsList();
-
-    // Read rooms from localStorage
-    const hostedRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
-    const now = Date.now();
-    const activeRooms = hostedRooms.filter(room => (now - room.timestamp) <= ROOM_EXPIRATION_TIME);
-    this.updateRoomsList(activeRooms);
-    localStorage.setItem('hostedRooms', JSON.stringify(activeRooms)); // Update localStorage to remove expired rooms
-
-    // Set up periodic refresh to read rooms from localStorage
-    if (this.discoveryInterval) {
-      clearInterval(this.discoveryInterval);
-    }
-    this.discoveryInterval = setInterval(() => {
-      const hostedRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
-      const now = Date.now();
-      const activeRooms = hostedRooms.filter(room => (now - room.timestamp) <= ROOM_EXPIRATION_TIME);
-      localStorage.setItem('hostedRooms', JSON.stringify(activeRooms)); // Update localStorage to remove expired rooms
-      this.updateRoomsList(activeRooms);
-    }, 3000); // Refresh every 3 seconds
+    socket.emit('requestRoomList');
   }
 
   
 
   stopRoomDiscovery() {
-    console.log('Stopping room discovery...');
-    
-    // Clear the discovery interval
-    if (this.discoveryInterval) {
-      clearInterval(this.discoveryInterval);
-      this.discoveryInterval = null;
-    }
-    
-    // Clear the rooms list
+    console.log('[MULTIPLAYER] Stopping room discovery...');
+    // No interval to clear as server handles updates
     this.clearRoomsList();
     this.updateRoomsStatus('Room discovery stopped');
   }
@@ -1939,19 +2054,21 @@ class MenuManager {
   
   createRoomElement(room) {
     const isFull = room.players >= room.maxPlayers;
-    const worldName = room.worldName || 'Unknown World';
+    const worldName = room.name || 'Unknown World';
     const gameMode = room.gameMode || 'survival';
     const gameModeDisplay = gameMode.charAt(0).toUpperCase() + gameMode.slice(1);
     
+    const hostDisplay = room.id === 'main' ? 'Official Server' : `Host: ${room.host}`;
+
     return `
-      <div class="room-item" data-room-id="${room.id}">
+      <div class="room-item" data-room-id="${room.id}" style="${room.id === 'main' ? 'background-color: #4a4a5a;' : ''}">
         <div class="room-info">
           <div class="room-name">${worldName}</div>
-          <div class="room-details">Host: ${room.host} • ${gameModeDisplay}</div>
+          <div class="room-details">${hostDisplay} • ${gameModeDisplay}</div>
         </div>
         <div class="room-players">
           <span class="room-players-count ${isFull ? 'full' : ''}">${room.players}/${room.maxPlayers}</span>
-          <button class="room-join-btn" ${isFull ? 'disabled' : ''} onclick="menuManager.joinRoom('${room.id}', '${room.peerId}')">
+          <button class="room-join-btn" ${isFull ? 'disabled' : ''} onclick="menuManager.joinRoom('${room.id}')">
             ${isFull ? 'Full' : 'Join'}
           </button>
         </div>
@@ -1982,302 +2099,21 @@ class MenuManager {
     this.startRoomDiscovery();
   }
   
-  joinRoom(roomId, peerId) {
-    console.log(`Joining room ${roomId} via peer ${peerId}`);
+  joinRoom(roomId) {
     console.log(`[MULTIPLAYER] Attempting to join room ${roomId}`);
     const username = localStorage.getItem('playerUsername') || document.getElementById('playerUsername').value || 'Player';
-    
-    // Verify room is still active before attempting to join
-    const hostedRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
-    const room = hostedRooms.find(r => r.id === roomId);
-    
-    if (!room) {
-      console.log('Room not found in active rooms list');
-      alert('Room is no longer available');
-      this.showMenu('multiplayerMenu');
-      return;
-    }
-    
-    const now = Date.now();
-    if (now - room.timestamp > 10 * 1000) {
-      console.log('Room has expired');
-      alert('Room has expired');
-      this.showMenu('multiplayerMenu');
-      return;
-    }
-    
-    console.log('Room verified as active, proceeding with join');
     
     // Stop room discovery when joining a room
     this.stopRoomDiscovery();
     
-    // Check if peer is ready
-    if (!window.multiplayerPeer || !window.myPeerId) {
-      console.log('Peer not ready, initializing...');
-      this.initializeMultiplayerNetwork();
-      
-      // Wait for peer to be ready
-      setTimeout(() => {
-        this.joinRoom(roomId, peerId);
-      }, 1000);
-      return;
-    }
-    
-    console.log('Attempting to connect to peer:', peerId);
-    
-    // Test if we can reach the host first
-    console.log('Testing host connectivity...');
-    
-    // Connect to the room host with retry mechanism
-    console.log('Creating connection to peer:', peerId);
-    this.attemptConnectionWithRetry(peerId, username, 0);
+    // Emit joinRoom event to the server
+    socket.emit('joinRoom', { roomId: roomId, username: username });
   }
   
-  attemptConnectionWithRetry(peerId, username, attempt) {
-    const maxAttempts = 3;
-    console.log(`Connection attempt ${attempt + 1}/${maxAttempts} to peer:`, peerId);
-    
-    if (attempt >= maxAttempts) {
-      alert('Failed to connect after multiple attempts. Please try again or ask the host to restart their game.');
-      this.showMenu('multiplayerMenu');
-      return;
-    }
-    
-    const conn = window.multiplayerPeer.connect(peerId, {
-      reliable: true,
-      serialization: 'json',
-      label: 'multiplayer-game-data'
-    });
-    
-    console.log('[CLIENT-CONN] Connection object created:', conn);
-    console.log('[CLIENT-CONN] Initial connection state:', conn.open);
-    console.log('[CLIENT-CONN] Connection peer:', conn.peer);
-    console.log('[CLIENT-CONN] Connection type:', conn.type);
-    
-    // Mark creation time for ultra aggressive timeout
-    conn._createTime = Date.now();
-    
-    // Set a shorter timeout for each attempt, but also check WebRTC state
-    const attemptTimeout = setTimeout(() => {
-      if (!conn.open) {
-        console.warn(`[CLIENT-CONN] Connection attempt ${attempt + 1} timed out, trying again...`);
-        console.warn('[CLIENT-CONN] WebRTC state at timeout:', conn.peerConnection?.connectionState);
-        console.warn('[CLIENT-CONN] ICE state at timeout:', conn.peerConnection?.iceConnectionState);
-        
-        try {
-          conn.close();
-          console.log('[CLIENT-CONN] Closed timed out connection.');
-        } catch (e) {
-          console.error('[CLIENT-CONN] Error closing failed connection:', e);
-        }
-        
-        // Clear the aggressive check interval if the timeout fires
-        if (typeof aggressiveCheck !== 'undefined') {
-          clearInterval(aggressiveCheck);
-          console.log('[CLIENT-CONN] Cleared aggressive check interval.');
-        }
-        
-        // Wait 2 seconds before retry
-        setTimeout(() => {
-          this.attemptConnectionWithRetry(peerId, username, attempt + 1);
-        }, 2000);
-      } else {
-        console.log('[CLIENT-CONN] Connection opened before timeout, clearing timeout.');
-      }
-    }, 15000); // 15 second timeout per attempt
-    
-    // Also add a more aggressive check - sometimes the connection state changes but open event doesn't fire
-    const aggressiveCheck = setInterval(() => {
-      if (conn.open) {
-        clearInterval(aggressiveCheck);
-        console.log('[CLIENT-CONN] Aggressive check: Connection is open, stopping checks.');
-        return;
-      }
-      
-      // Check if WebRTC is actually connected but PeerJS missed it
-      if (conn.peerConnection) {
-        const rtcState = conn.peerConnection.connectionState;
-        const iceState = conn.peerConnection.iceConnectionState;
-        
-        console.log(`[CLIENT-CONN] Aggressive check - RTC: ${rtcState}, ICE: ${iceState}, Open: ${conn.open}`);
-        
-        if ((rtcState === 'connected' || iceState === 'connected' || iceState === 'completed') && !conn.open) {
-          console.log('[CLIENT-CONN] Aggressive check found connected WebRTC, waiting for PeerJS to update...');
-          // Let PeerJS handle the connection state naturally
-        }
-        
-        // Check for stuck connections
-        if (rtcState === 'new' && iceState === 'new' && !conn.open) {
-          const timeSinceCreate = Date.now() - (conn._createTime || Date.now());
-          if (timeSinceCreate > 5000) {
-            console.warn('[CLIENT-CONN] Connection appears stuck (new/new for >5s), but letting PeerJS handle it...');
-            // Modern PeerJS should handle this case better
-          }
-        }
-      } else {
-        console.log('[CLIENT-CONN] Aggressive check: peerConnection not yet available.');
-      }
-    }, 1000); // Check every second
-    
-    // Monitor WebRTC connection state changes
-    if (conn.peerConnection) {
-      console.log('[CLIENT-CONN] WebRTC peer connection found, adding state listeners');
-      
-      conn.peerConnection.addEventListener('connectionstatechange', () => {
-        console.log('[CLIENT-CONN] WebRTC connection state changed:', conn.peerConnection.connectionState);
-        
-        // When WebRTC connects, check if we should proceed
-        if (conn.peerConnection.connectionState === 'connected' && !conn.open) {
-          console.log('[CLIENT-CONN] WebRTC connected, waiting for data channel to open...');
-          // Let PeerJS handle the connection state naturally
-        }
-      });
-      
-      conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
-        console.log('[CLIENT-CONN] ICE connection state changed:', conn.peerConnection.iceConnectionState);
-        
-        // Also monitor ICE connection status
-        if ((conn.peerConnection.iceConnectionState === 'connected' || 
-             conn.peerConnection.iceConnectionState === 'completed') && !conn.open) {
-          console.log('[CLIENT-CONN] ICE connected, waiting for data channel to open...');
-          // Let PeerJS handle the connection state naturally
-        }
-      });
-      
-      conn.peerConnection.addEventListener('icegatheringstatechange', () => {
-        console.log('[CLIENT-CONN] ICE gathering state changed:', conn.peerConnection.iceGatheringState);
-      });
-      
-      conn.peerConnection.addEventListener('datachannel', (event) => {
-        console.log('[CLIENT-CONN] Data channel received:', event.channel);
-        const channel = event.channel;
-        
-        channel.addEventListener('open', () => {
-          console.log('[CLIENT-CONN] Data channel opened - connection should be ready');
-          clearTimeout(attemptTimeout);
-          clearInterval(aggressiveCheck); // Clear aggressive check on success
-          // PeerJS will handle setting conn.open automatically
-        });
-        
-        channel.addEventListener('close', () => {
-          console.log('[CLIENT-CONN] Data channel closed');
-        });
-        
-        channel.addEventListener('error', (error) => {
-          console.error('[CLIENT-CONN] Data channel error:', error);
-        });
-      });
-    } else {
-      console.log('[CLIENT-CONN] No WebRTC peer connection found yet (initial check).');
-      
-      // Check for peerConnection later
-      setTimeout(() => {
-        if (conn.peerConnection) {
-          console.log('[CLIENT-CONN] WebRTC peer connection found after delay.');
-          // Add the same listeners here if needed
-        } else {
-          console.warn('[CLIENT-CONN] WebRTC peer connection still not found after delay.');
-        }
-      }, 1000);
-    }
-    
-    conn.on('open', () => {
-      console.log(`[CLIENT-CONN] Connected to room host successfully on attempt ${attempt + 1}`);
-      console.log('[CLIENT-CONN] Connection state after open:', conn.open);
-      console.log('[CLIENT-CONN] Sending join request with username:', username);
-      
-      // Clear both timeout and aggressive check since we succeeded
-      clearTimeout(attemptTimeout);
-      if (typeof aggressiveCheck !== 'undefined') {
-        clearInterval(aggressiveCheck);
-      }
-      
-      // Send join request immediately when connection opens
-      try {
-        conn.send({
-          type: 'join_request',
-          username: username,
-          timestamp: Date.now()
-        });
-        console.log('[CLIENT-CONN] Join request sent successfully.');
-      } catch (error) {
-        console.error('[CLIENT-CONN] Error sending join request:', error);
-        alert('Failed to send join request');
-        this.showMenu('multiplayerMenu');
-      }
-    });
-    
-    conn.on('data', (data) => {
-      console.log('[CLIENT-CONN] Received data from host:', data);
-      this.handleMultiplayerMessage(conn, data);
-    });
-    
-    // Connection monitoring is now handled by the timeout in attemptConnectionWithRetry
-    
-    conn.on('close', () => {
-      console.log('[CLIENT-CONN] Connection to host closed.');
-      if (window.isMultiplayerClient) {
-        // Clean up multiplayer state
-        this.cleanupMultiplayerClient();
-        alert('Connection to host lost!');
-        this.returnToMainMenu();
-      }
-    });
-    
-    conn.on('error', (err) => {
-      console.error('[CLIENT-CONN] Connection error:', err);
-      if (window.isMultiplayerClient) {
-        this.cleanupMultiplayerClient();
-        alert(`Connection error: ${err.message || err.type || 'Unknown error'}`);
-        this.returnToMainMenu();
-      } else {
-        alert('Failed to join room');
-        this.showMenu('multiplayerMenu');
-      }
-    });
-    
-    // Connection error handling is now handled by the retry mechanism
-  }
   
-  // Room creation functionality
-  initializeCreateRoom() {
-    console.log('Initializing create room menu...');
-    
-    // Load saved username from localStorage
-    const savedUsername = localStorage.getItem('playerUsername') || 'Player';
-    
-    // Set username in create room menu
-    const createRoomUsernameInput = document.getElementById('createRoomUsername');
-    if (createRoomUsernameInput) {
-      createRoomUsernameInput.value = savedUsername;
-      
-      // Save username to localStorage when changed
-      createRoomUsernameInput.addEventListener('input', (e) => {
-        localStorage.setItem('playerUsername', e.target.value);
-      });
-    }
-    
-    // Set default world name if empty
-    const roomNameInput = document.getElementById('roomName');
-    if (roomNameInput && !roomNameInput.value) {
-      roomNameInput.value = `${savedUsername}'s World`;
-    }
-    
-    // Hide world configuration section initially
-    const worldInfo = document.getElementById('configuredWorldInfo');
-    if (worldInfo) {
-      worldInfo.classList.add('hidden');
-    }
-    
-    // Show Configure World button, hide Host Room button
-    const createWorldBtn = document.getElementById('createWorldBtn');
-    const hostRoomBtn = document.getElementById('hostRoomBtn');
-    if (createWorldBtn) createWorldBtn.classList.remove('hidden');
-    if (hostRoomBtn) hostRoomBtn.classList.add('hidden');
-  }
   
   createMultiplayerWorld() {
-    console.log('Setting up multiplayer world creation...');
+    console.log('[MULTIPLAYER] Setting up multiplayer world creation...');
     
     const roomName = document.getElementById('roomName').value || 'My World';
     const username = document.getElementById('createRoomUsername').value || 'Player';
@@ -2287,6 +2123,7 @@ class MenuManager {
     localStorage.setItem('playerUsername', username);
     
     // Store multiplayer room configuration for after world creation
+    // This will be sent to the server when hosting the room
     window.pendingMultiplayerRoom = {
       name: roomName,
       host: username,
@@ -2297,7 +2134,7 @@ class MenuManager {
     // Set the world name for the create world page
     worldName = roomName;
     
-    console.log('Redirecting to create world page for multiplayer setup...');
+    console.log('[MULTIPLAYER] Redirecting to create world page for multiplayer setup...');
     this.showMenu('createWorldMenu');
     
     // Update the world name input on the create world page
@@ -2440,1086 +2277,64 @@ class MenuManager {
   }
   
   hostMultiplayerRoom() {
-    console.log('Starting to host multiplayer room...');
-    
+    console.log('[MULTIPLAYER] Starting to host multiplayer room...');
+
     if (!window.pendingMultiplayerRoom || !window.pendingMultiplayerRoom.worldConfig) {
       alert('No room configuration found. Please configure the world first.');
       return;
     }
     
-    // Apply the world configuration and create the world
-    this.applyWorldConfigAndCreate();
-  }
-  
-  applyWorldConfigAndCreate() {
-    const config = window.pendingMultiplayerRoom.worldConfig;
-    
-    // Set global world variables from saved config
-    worldName = config.name;
-    worldSeed = config.seed;
-    worldGameMode = config.gameMode;
-    worldType = config.worldType;
-    worldSize = config.worldSize;
-    
-    console.log('Creating world with configuration:', config);
-    
-    // Create the world using existing createWorld logic
-    this.createWorld().then(() => {
-      console.log('Multiplayer world created successfully');
-      
-      // Wait for world to be fully loaded before setting up multiplayer
-      const waitForWorldBlocks = () => {
-        console.log('Checking world state...');
-        console.log('World exists:', !!world);
-        console.log('World blocks exists:', !!world?.blocks);
-        console.log('World blocks length:', world?.blocks?.length);
-        console.log('World width/height:', world?.width, 'x', world?.height);
-        
-        // Check if world has loaded chunks (the actual way this game stores world data)
-        if (world && world.chunks && world.chunks.size > 0) {
-          console.log('World chunks ready, setting up multiplayer hosting...');
-          this.setupMultiplayerHosting(window.pendingMultiplayerRoom);
-          window.pendingMultiplayerRoom = null;
-        } else if (world && world.width && world.height) {
-          // World exists but chunks not loaded yet
-          console.log('World exists but chunks not loaded yet...');
-          setTimeout(waitForWorldBlocks, 500);
-        } else {
-          console.log('Waiting for world to be generated...');
-          setTimeout(waitForWorldBlocks, 500);
-        }
-      };
-      
-      // Start checking after a brief delay
-      setTimeout(waitForWorldBlocks, 1000);
-      
-    }).catch(err => {
-      console.error('Failed to create multiplayer world:', err);
-      alert('Failed to create world for multiplayer');
+    const roomConfig = window.pendingMultiplayerRoom;
+    const username = localStorage.getItem('playerUsername') || 'Player';
+
+    socket.emit('createRoom', {
+        name: roomConfig.name,
+        worldSettings: roomConfig.worldConfig,
+        maxPlayers: this.getSelectedMaxPlayers()
     });
-  }
-  
-  async setupMultiplayerHosting(roomConfig) {
-    console.log('Setting up multiplayer hosting with room config:', roomConfig);
-    
-    if (!window.multiplayerPeer || !window.myPeerId) {
-      console.log('Multiplayer peer not ready, initializing...');
-      try {
-        await this.initializeMultiplayerNetworkWithRetry();
-      } catch (err) {
-        console.error("Error initializing multiplayer network", err);
-        alert("Could not initialize multiplayer. Please try again.");
-        return;
-      }
-    }
 
-    if (!window.myPeerId) {
-        console.error("Still no Peer ID after initialization!");
-        alert("Could not get a multiplayer ID. Please check your connection.");
-        return;
-    }
-    
-    // Store room configuration
-    window.hostedRoom = {
-      id: `room_${Date.now()}`,
-      ...roomConfig,
-      peerId: window.myPeerId,
-      players: 1,
-      connectedPeers: [],
-      worldSettings: this.serializeWorldSettings(),
-      worldName: worldName,
-      gameMode: worldGameMode,
-      timestamp: Date.now()
-    };
-
-    // Ensure remotePlayers map exists, but do not add host's own player
-    if (!window.remotePlayers) {
-      window.remotePlayers = new Map();
-    }
-    
-    // Register room for discovery
-    this.registerRoomForDiscovery(window.hostedRoom);
-    
-    // Initialize multiplayer sync systems
-    this.initializeMultiplayerSync();
-    
-    console.log('Multiplayer room is now active and accepting connections');
-    alert(`Room "${roomConfig.name}" is now hosting!\nOther players can now join your room.`);
-
-    // Connect to the lobby peer
-    
+    window.pendingMultiplayerRoom = null;
   }
 
-  
-
-  registerRoomForDiscovery(room) {
-    console.log('Registering room for discovery:', room);
-    
-    try {
-      // Get existing rooms from localStorage
-      const existingRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
-      
-      // Remove any existing room with the same ID to avoid duplicates
-      const filteredRooms = existingRooms.filter(existingRoom => existingRoom.id !== room.id);
-      
-      // Add the new room
-      filteredRooms.push(room);
-      
-      // Store back to localStorage
-      localStorage.setItem('hostedRooms', JSON.stringify(filteredRooms));
-      
-      console.log(`Room "${room.name}" registered for discovery. Total rooms: ${filteredRooms.length}`);
-      
-      // Set up periodic room refresh to keep it active
-      // Set up periodic room refresh to keep it active
-      if (this.roomHeartbeatInterval) { // Use the MenuManager's interval property
-        clearInterval(this.roomHeartbeatInterval);
-      }
-      this.roomHeartbeatInterval = setInterval(() => {
-        if (window.hostedRoom) {
-          window.hostedRoom.timestamp = Date.now();
-          this.registerRoomForDiscovery(window.hostedRoom); // Re-register to update timestamp
-        } else {
-          clearInterval(this.roomHeartbeatInterval); // Stop if room is no longer hosted
-          this.roomHeartbeatInterval = null;
-        }
-      }, 5000); // Update every 5 seconds (less than 10s expiration)
-      
-      room.refreshInterval = setInterval(() => {
-        this.refreshRoomTimestamp(room.id);
-      }, 5000); // Refresh every 5 seconds
-      
-    } catch (error) {
-      console.error('Error registering room for discovery:', error);
-    }
-  }
-
-  refreshRoomTimestamp(roomId) {
-    try {
-      const existingRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
-      const roomIndex = existingRooms.findIndex(room => room.id === roomId);
-      
-      if (roomIndex !== -1) {
-        existingRooms[roomIndex].timestamp = Date.now();
-        localStorage.setItem('hostedRooms', JSON.stringify(existingRooms));
-        console.log(`Refreshed timestamp for room ${roomId}`);
-      }
-    } catch (error) {
-      console.error('Error refreshing room timestamp:', error);
-    }
-  }
-
-  removeHostedRoom() {
-    if (!window.hostedRoom) return;
-    
-    try {
-      const existingRooms = JSON.parse(localStorage.getItem('hostedRooms') || '[]');
-      const filteredRooms = existingRooms.filter(room => room.id !== window.hostedRoom.id);
-      localStorage.setItem('hostedRooms', JSON.stringify(filteredRooms));
-      
-      // Clear refresh interval
-      if (window.hostedRoom.refreshInterval) {
-        clearInterval(window.hostedRoom.refreshInterval);
-      }
-      
-      console.log(`Removed hosted room ${window.hostedRoom.id} from discovery`);
-      window.hostedRoom = null;
-    } catch (error) {
-      console.error('Error removing hosted room:', error);
-    }
-  }
-  
-
-  
-
-  
-
-  
-  startHosting() {
-    console.log('Starting to host room...');
-    
-    // Stop room discovery when starting to host
-    this.stopRoomDiscovery();
-    
-    const roomName = document.getElementById('roomName').value || 'My World';
-    const username = document.getElementById('createRoomUsername').value || 'Player';
-    const maxPlayers = this.getSelectedMaxPlayers();
-    const worldType = this.getSelectedWorldType();
-    const existingWorld = document.getElementById('existingWorldSelect').value;
-    
-    if (worldType === 'existing' && !existingWorld) {
-      alert('Please select an existing world or choose "New World"');
-      return;
-    }
-    
-    console.log('Room configuration:', {
-      roomName,
-      username,
-      maxPlayers,
-      worldType,
-      existingWorld
-    });
-    
-    // Create the room
-    this.createAndHostRoom({
-      name: roomName,
-      host: username,
-      maxPlayers: maxPlayers,
-      worldType: worldType,
-      existingWorld: existingWorld
-    });
-  }
-  
   getSelectedMaxPlayers() {
-    const buttons = ['max-players-2', 'max-players-4', 'max-players-8'];
-    for (const buttonAction of buttons) {
-      const button = document.querySelector(`[data-action="${buttonAction}"]`);
-      if (button && button.hasAttribute('data-selected')) {
-        return parseInt(buttonAction.split('-')[2]);
-      }
+    const selectedButton = document.querySelector('[data-action^="max-players-"][data-selected="true"]');
+    if (selectedButton) {
+      return parseInt(selectedButton.dataset.action.split('-')[2]);
     }
-    return 2; // Default
+    return 4; // Default
   }
   
-  getSelectedWorldType() {
-    const newWorldBtn = document.querySelector('[data-action="room-world-new"]');
-    const existingWorldBtn = document.querySelector('[data-action="room-world-existing"]');
-    
-    if (existingWorldBtn && existingWorldBtn.hasAttribute('data-selected')) {
-      return 'existing';
-    }
-    return 'new';
-  }
   
-  createAndHostRoom(roomConfig) {
-    console.log('Creating and hosting room:', roomConfig);
-    
-    if (!window.multiplayerPeer || !window.myPeerId) {
-      alert('Multiplayer not initialized. Please try again.');
-      return;
-    }
-    
-    // Store room configuration
-    window.hostedRoom = {
-      id: `room_${Date.now()}`,
-      ...roomConfig,
-      peerId: window.myPeerId,
-      players: 1,
-      connectedPeers: [],
-      worldData: null
-    };
-    
-    // Initialize world for multiplayer
-    this.initializeMultiplayerWorld(roomConfig);
-  }
-  
-  initializeMultiplayerWorld(roomConfig) {
-    console.log('Initializing multiplayer world...');
-    
-    if (roomConfig.worldType === 'existing' && roomConfig.existingWorld) {
-      // Load existing world
-      console.log('Loading existing world:', roomConfig.existingWorld);
-      // TODO: Load world from localStorage
-      this.startMultiplayerGame();
-    } else {
-      // Create new world
-      console.log('Creating new world for multiplayer');
-      this.createMultiplayerWorldWithConfig(roomConfig);
-    }
-  }
-  
-  createMultiplayerWorldWithConfig(roomConfig) {
-    // Use existing world creation logic but mark as multiplayer
-    console.log('Creating new world for multiplayer hosting...');
-    
-    // Set world configuration
-    worldName = roomConfig.name;
-    worldGameMode = 'survival'; // Default for multiplayer
-    worldType = 'regular';
-    worldSize = 'normal';
-    
-    // Create the world using existing createWorld logic
-    this.createWorld().then(() => {
-      console.log('Multiplayer world created successfully');
-      this.startMultiplayerGame();
-      }).catch(err => {
-      console.error('Failed to create multiplayer world:', err);
-      alert('Failed to create world for multiplayer');
-    });
-  }
-  
-  startMultiplayerGame() {
-    console.log('Starting multiplayer game as host...');
-    
-    // Initialize multiplayer sync systems
-    this.initializeMultiplayerSync();
-    
-    // Hide menus and show game
-    this.hideAllMenus();
-    
-    console.log('Multiplayer room is now active and accepting connections');
-    alert(`Room "${window.hostedRoom.name}" is now hosting!\nOther players can now join your room.`);
-  }
-  
-  initializeMultiplayerSync() {
-    console.log('Initializing multiplayer synchronization...');
-    
-    // Store original game functions to wrap them with multiplayer sync
-    window.multiplayerSync = {
-      enabled: true,
-      isHost: true,
-      connectedPeers: [],
-      worldSettings: this.serializeWorldSettings(),
-      playerData: new Map(),
-      lastSentHostX: 0,
-      lastSentHostY: 0,
-      lastHostSyncTime: 0
-    };
-    
-    // Implement data synchronization
-    console.log('Multiplayer sync initialized');
 
-    // Start periodic world data synchronization for host
-    if (window.hostedRoom) {
-      if (this.worldSyncInterval) {
-        clearInterval(this.worldSyncInterval);
-      }
-      this.worldSyncInterval = setInterval(() => {
-        this.syncWorldData();
-      }, 1000); // Sync every 1 second
-    }
-  }
   
-  serializeWorldSettings() {
-    console.log('Serializing world settings...');
-    if (!world) {
-      console.log('No world available for serialization');
-      return null;
-    }
-
-    const worldSettings = {
-      worldName: worldName,
-      seed: world.seed,
-      gameMode: worldGameMode,
-      worldType: worldType,
-      worldSize: worldSize,
-      width: world.width,
-      height: world.height,
-      time: world.time,
-      weather: world.weather || 'clear',
-      dayLength: world.dayLength || 24000,
-      superflatLayers: world.superflatLayers
-    };
-
-    console.log('Serialized world settings:', worldSettings);
-    return worldSettings;
-  }
   
-  syncWorldData() {
-    if (!window.hostedRoom || !world) return;
-
-    const worldData = {
-      time: world.time,
-      weather: world.weather,
-      dayLength: world.dayLength
-      // Add other world properties to sync as needed
-    };
-
-    this.broadcastToAll({
-      type: 'world_data_sync',
-      data: worldData,
-      timestamp: Date.now()
-    });
-  }
-
-  // Handle incoming connections from other players
-  handleIncomingConnection(conn) {
-    console.log('[HOST-CONN] Handling incoming connection from:', conn.peer);
-    console.log(`[HOST-CONN] Incoming connection from ${conn.peer}`);
-    console.log('[HOST-CONN] Connected peers (before adding new):', window.hostedRoom ? window.hostedRoom.connectedPeers.map(p => p.peerId) : (window.multiplayerConnection ? [window.multiplayerConnection.peer] : []));
-    console.log('[HOST-CONN] Connection state on host side (initial):', conn.open);
-    console.log('[HOST-CONN] Connection object on host side:', conn);
-    console.log('[HOST-CONN] Host peer ID:', window.myPeerId);
-    console.log('[HOST-CONN] Host is ready:', !!window.myPeerId);
-    
-    // Check if connection is already open
-    if (conn.open) {
-      console.log('[HOST-CONN] Connection is already open on host side');
-      // Send immediate ping if already open
-      try {
-        conn.send({ 
-          type: 'ping', 
-          message: 'Host connection immediate',
-          timestamp: Date.now() 
-        });
-        console.log('[HOST-CONN] Sent immediate ping to already open connection');
-      } catch (error) {
-        console.error('[HOST-CONN] Failed to send immediate ping:', error);
-      }
-    } else {
-      console.log('[HOST-CONN] Connection is not open yet, waiting for open event...');
-    }
-    
-    // Monitor WebRTC connection state on host side
-    if (conn.peerConnection) {
-      console.log('[HOST-CONN] WebRTC peer connection found, adding state listeners');
-      
-      conn.peerConnection.addEventListener('connectionstatechange', () => {
-        console.log('[HOST-CONN] WebRTC connection state changed:', conn.peerConnection.connectionState);
-        
-        // When WebRTC connects on host side, monitor status
-        if (conn.peerConnection.connectionState === 'connected' && !conn.open) {
-          console.log('[HOST-CONN] WebRTC connected, waiting for data channel to open...');
-          // Let PeerJS handle the connection state naturally
-        }
-      });
-      
-      conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
-        console.log('[HOST-CONN] ICE connection state changed:', conn.peerConnection.iceConnectionState);
-        
-        // Also monitor ICE connection status on host side
-        if ((conn.peerConnection.iceConnectionState === 'connected' || 
-             conn.peerConnection.iceConnectionState === 'completed') && !conn.open) {
-          console.log('[HOST-CONN] ICE connected, waiting for data channel to open...');
-          // Let PeerJS handle the connection state naturally
-        }
-      });
-      
-      conn.peerConnection.addEventListener('icegatheringstatechange', () => {
-        console.log('[HOST-CONN] ICE gathering state changed:', conn.peerConnection.iceGatheringState);
-      });
-    } else {
-      console.log('[HOST-CONN] No WebRTC peer connection found yet (initial check).');
-      
-      setTimeout(() => {
-        if (conn.peerConnection) {
-          console.log('[HOST-CONN] WebRTC peer connection found after delay.');
-        } else {
-          console.warn('[HOST-CONN] WebRTC peer connection still not found after delay.');
-        }
-      }, 1000);
-    }
-    
-    conn.on('open', () => {
-      console.log('[HOST-CONN] Incoming connection opened from:', conn.peer);
-      console.log('[HOST-CONN] Connection state after open event:', conn.open);
-      
-      // Send a welcome ping to confirm the connection is working
-      try {
-        conn.send({ 
-          type: 'ping', 
-          message: 'Host connection confirmed',
-          timestamp: Date.now() 
-        });
-        console.log('[HOST-CONN] Sent welcome ping to new connection');
-      // Send host's current player position to the newly connected client
-      if (player) {
-        conn.send({
-          type: 'player_movement',
-          peerId: window.myPeerId, // Host's peer ID
-          position: { x: player.x, y: player.y },
-          username: window.hostedRoom.host, // Host's username
-          timestamp: Date.now()
-        });
-        console.log('[HOST-CONN] Sent host player position to new connection');
-      }
-      } catch (error) {
-        console.error('[HOST-CONN] Failed to send welcome ping or host position:', error);
-      }
-    });
-    
-    conn.on('data', (data) => {
-      console.log('[HOST-CONN] Received data from incoming connection:', data);
-      this.handleMultiplayerMessage(conn, data);
-    });
-
-    conn.on('error', (err) => {
-      console.error('[HOST-CONN] Connection error for peer:', conn.peer, err);
-      // Optionally, handle specific error types or attempt to re-establish connection
-      // For now, just log and let the 'close' event handle cleanup
-    });
-    
-    conn.on('close', () => {
-      console.log('[HOST-CONN] Player disconnected:', conn.peer);
-      this.removePlayerFromRoom(conn.peer);
-    });
-    
-    conn.on('error', (err) => {
-      console.error('[HOST-CONN] Incoming connection error:', err);
-      // Treat connection errors as disconnects
-      this.removePlayerFromRoom(conn.peer);
-    });
-    
-    // Add periodic checks for connection state (workaround for PeerJS data channel issues)
-    let hostConnectionChecks = 0;
-    const maxHostChecks = 10;
-    
-    const checkHostConnection = () => {
-      hostConnectionChecks++;
-      console.log(`[HOST-CONN] Host connection check ${hostConnectionChecks}/${maxHostChecks}: state = ${conn.open}`);
-      
-      if (conn.open) {
-        console.log('[HOST-CONN] Host connection is now open! Sending welcome ping...');
-        try {
-          conn.send({ 
-            type: 'ping', 
-            message: 'Host connection finally open',
-            timestamp: Date.now() 
-          });
-        } catch (error) {
-          console.error('[HOST-CONN] Failed to send welcome ping:', error);
-        }
-      } else if (hostConnectionChecks < maxHostChecks) {
-        // Continue checking
-        setTimeout(checkHostConnection, 1000);
-      } else {
-        console.warn('[HOST-CONN] Host connection never opened after maximum attempts');
-        console.warn('[HOST-CONN] Host WebRTC state:', conn.peerConnection?.connectionState);
-        console.warn('[HOST-CONN] Host ICE state:', conn.peerConnection?.iceConnectionState);
-      }
-    };
-    
-    // Start checking after initial delay
-    setTimeout(checkHostConnection, 2000);
-  }
   
-  handleMultiplayerMessage(conn, data) {
-    console.log('Received multiplayer message:', data);
-    console.log(`[MULTIPLAYER] Received message of type ${data.type} from ${conn.peer}`);
-    
-    switch (data.type) {
-      case 'join_request':
-        this.handleJoinRequest(conn, data);
-        break;
-      case 'join_accepted':
-        this.handleJoinAccepted(conn, data);
-        break;
-      case 'join_denied':
-        this.handleJoinDenied(conn, data);
-        break;
-      case 'ping':
-        console.log('Received ping from:', conn.peer);
-        conn.send({ type: 'pong', timestamp: Date.now() });
-        break;
-      case 'pong':
-        console.log('Received pong from:', conn.peer);
-        break;
-      case 'player_movement':
-        this.handlePlayerMovement(conn, data);
-        break;
-      case 'block_change':
-        this.handleBlockChange(conn, data);
-        break;
-      case 'chat_message':
-        this.handleChatMessage(conn, data);
-        break;
-      case 'player_disconnect':
-        this.handlePlayerDisconnect(conn, data);
-        break;
-      case 'host_shutdown':
-        this.handleHostShutdown(conn, data);
-        break;
-      
-      default:
-        console.log('Unknown message type:', data.type);
-    }
-  }
   
-  handleJoinRequest(conn, data) {
-    console.log('Player requesting to join:', data.username);
-    console.log('Current hosted room:', window.hostedRoom);
-    console.log('Host peer ID:', window.myPeerId);
-    console.log('Client peer ID:', conn.peer);
-    
-    if (!window.hostedRoom) {
-      console.log('No hosted room available, denying join');
-      try {
-        conn.send({ type: 'join_denied', reason: 'Room not available' });
-      } catch (error) {
-        console.error('Failed to send join_denied (Room not available):', error);
-      }
-      return;
-    }
-    
-    if (window.hostedRoom.players >= window.hostedRoom.maxPlayers) {
-      console.log('Room is full, denying join');
-      try {
-        conn.send({ type: 'join_denied', reason: 'Room is full' });
-      } catch (error) {
-        console.error('Failed to send join_denied (Room is full):', error);
-      }
-      return;
-    }
-    
-    console.log('Accepting player join request');
-    
-    // Accept the player
-    window.hostedRoom.players++;
-    window.hostedRoom.connectedPeers.push({
-      peerId: conn.peer,
-      username: data.username,
-      connection: conn
-    });
-    
-    // Add to remote players tracking for the host
-    if (!window.remotePlayers) {
-      window.remotePlayers = new Map();
-    }
-    window.remotePlayers.set(conn.peer, {
-      x: player ? player.x : 0,
-      y: player ? player.y : 0,
-      username: data.username
-    });
-    
-    console.log('Sending join_accepted with world data and host player info...');
-    
-    // Send world data to joining player
-    try {
-      conn.send({
-        type: 'join_accepted',
-        worldSettings: this.serializeWorldSettings(),
-        hostPlayerPosition: { x: player.x, y: player.y }, // Include host's current position
-        playerList: (() => {
-          const players = [];
-          // Add host's own player info to the list
-          players.push({
-            peerId: window.myPeerId,
-            username: window.hostedRoom.host,
-            position: { x: player.x, y: player.y }
-          });
-          // Add other connected peers
-          window.hostedRoom.connectedPeers.forEach(p => {
-            players.push({
-              peerId: p.peerId,
-              username: p.username,
-              position: { x: window.remotePlayers.get(p.peerId)?.x || 0, y: window.remotePlayers.get(p.peerId)?.y || 0 }
-            });
-          });
-          return players;
-        })()
-      });
-    } catch (error) {
-      console.error('Failed to send join_accepted:', error);
-    }
-    
-    console.log(`Player ${data.username} joined the room successfully`);
-  }
   
-  handleJoinAccepted(conn, data) {
-    console.log('Join request accepted! Loading multiplayer world...');
-    
-    // Store connection for multiplayer
-    window.multiplayerConnection = conn;
-    window.isMultiplayerClient = true;
-    
-    // Store host player position for initial spawn
-    window.hostPlayerPosition = data.hostPlayerPosition;
-
-    // Initialize remote players tracking with the received player list
-    if (!window.remotePlayers) {
-      window.remotePlayers = new Map();
-    }
-    data.playerList.forEach(p => {
-      if (p.peerId !== window.myPeerId) { // Don't add self to remote players
-        window.remotePlayers.set(p.peerId, {
-          x: p.position.x,
-          y: p.position.y,
-          username: p.username
-        });
-      }
-    });
-
-    // Load the world data from the host
-    this.loadMultiplayerWorldFromSettings(data.worldSettings);
-  }
   
-  handleJoinDenied(conn, data) {
-    console.log('Join request denied:', data.reason);
-    alert(`Failed to join room: ${data.reason}`);
-    
-    // Go back to multiplayer menu
-    this.showMenu('multiplayerMenu');
-  }
   
-  loadMultiplayerWorldFromSettings(worldSettings) {
-    console.log('Loading multiplayer world with settings:', worldSettings);
-    
-    try {
-      // Set global world variables from host's world settings
-      worldName = worldSettings.worldName || 'Multiplayer World';
-      worldSeed = worldSettings.seed || '';
-      worldGameMode = worldSettings.gameMode || 'survival';
-      worldType = worldSettings.worldType || 'regular';
-      worldSize = worldSettings.worldSize || 'normal';
-      worldSuperflatLayers = worldSettings.superflatLayers || worldSuperflatLayers;
-      
-      // Explicitly set superflat layers if world type is superflat
-      if (worldType === 'superflat') {
-        // If host sent specific superflat layers, use them. Otherwise, use the default.
-        worldSuperflatLayers = worldSettings.superflatLayers || [
-          { blockId: 'grass', height: 1 },
-          { blockId: 'dirt', height: 2 },
-          { blockId: 'bedrock', height: 2 }
-        ];
-      } else {
-        // If not superflat, ensure superflatLayers is null or empty to avoid conflicts
-        worldSuperflatLayers = [];
-      }
-      
-      // Hide all menus before creating world
-      this.hideAllMenus();
-      
-      // Create the world with host's settings
-      this.createWorld().then(() => {
-        console.log('Multiplayer world loaded successfully');
-        
-        // Set player position to world spawn
-        if (player) {
-          player.x = spawnX; // Use the global spawnX
-          player.y = spawnY; // Use the global spawnY
-          console.log('Player spawned at world spawn:', { x: player.x, y: player.y });
-        }
-        
-        // Initialize multiplayer client sync
-        this.initializeMultiplayerClientSync();
-        
-        console.log('Multiplayer world fully loaded and ready!');
-        
-      }).catch(err => {
-        console.error('Failed to load multiplayer world:', err);
-        alert('Failed to load multiplayer world');
-        this.showMenu('multiplayerMenu');
-      });
-      
-    } catch (error) {
-      console.error('Error loading multiplayer world:', error);
-      alert('Failed to load multiplayer world');
-      this.showMenu('multiplayerMenu');
-    }
-  }
-  
-  findSafeSpawnPosition() {
-    // Find a safe spawn position (not inside blocks)
-    const centerX = Math.floor(world.width / 2);
-    const centerY = Math.floor(world.height / 2);
-    
-    // Start from center and search for air
-    for (let y = centerY; y < world.height - 10; y++) {
-      for (let x = centerX - 10; x < centerX + 10; x++) {
-        if (x >= 0 && x < world.width && y >= 0 && y < world.height) {
-          // Use the proper world access method instead of direct array access
-          const blockId = world.getBlockId(x, y);
-          if (blockId === 'air') { // Air block
-            return { x: x * TILE_SIZE, y: y * TILE_SIZE };
-          }
-        }
-      }
-    }
-    
-    // Fallback to center
-    return { x: centerX * TILE_SIZE, y: centerY * TILE_SIZE };
-  }
-  
-  initializeMultiplayerClientSync() {
-    console.log('Initializing multiplayer client synchronization...');
-    
-    // Initialize remote players tracking
-    if (!window.remotePlayers) {
-      window.remotePlayers = new Map();
-    }
-    
-    // Set up periodic position updates
-    if (!window.multiplayerPositionInterval) {
-      window.multiplayerPositionInterval = setInterval(() => {
-        if (player && window.multiplayerConnection && window.multiplayerConnection.open) {
-          try {
-            window.multiplayerConnection.send({
-              type: 'player_movement',
-              position: { x: player.x, y: player.y },
-              username: localStorage.getItem('playerUsername') || 'Player', // Include username
-              timestamp: Date.now()
-            });
-          } catch (error) {
-            console.error('Failed to send player movement:', error);
-          }
-        }
-      }, 100); // Send position every 100ms
-    }
-    
-    // Set up message handling for client
-    if (window.multiplayerConnection) {
-      window.multiplayerConnection.on('data', (data) => {
-        this.handleMultiplayerClientMessage(data);
-      });
-    }
-    
-    console.log('Multiplayer client sync initialized');
-  }
-  
-  handleMultiplayerClientMessage(data) {
-    console.log('[CLIENT-MSG] Client received message:', data);
-    
-    switch (data.type) {
-      case 'player_movement':
-        // Update remote player position
-        if (window.remotePlayers && data.peerId !== window.myPeerId) {
-          if (!window.remotePlayers.has(data.peerId)) {
-            window.remotePlayers.set(data.peerId, {
-              x: data.position.x,
-              y: data.position.y,
-              username: data.username || 'Remote Player'
-            });
-          } else {
-            const remotePlayer = window.remotePlayers.get(data.peerId);
-            remotePlayer.x = data.position.x;
-            remotePlayer.y = data.position.y;
-            // Update username if provided
-            if (data.username) {
-              remotePlayer.username = data.username;
-            }
-          }
-        }
-        break;
-      case 'block_change':
-        // Apply block change to local world
-        if (world && data.x >= 0 && data.x < world.width && data.y >= 0 && data.y < world.height) {
-          const index = data.y * world.width + data.x;
-          
-          // Handle both numeric and string block IDs
-          let blockType = data.blockType;
-          if (data.blockId) {
-            blockType = menuManager.getBlockNumericId(data.blockId);
-          }
-          
-          world.blocks[index] = blockType;
-          
-          // Apply metadata if provided
-          if (data.meta && world.blockMeta) {
-            world.blockMeta.set(index, data.meta);
-          }
-          
-          console.log(`Applied block change: (${data.x}, ${data.y}) -> ${blockType} (${data.blockId || 'unknown'})`);
-        }
-        break;
-      case 'chat_message':
-        // Handle chat message display
-        console.log(`Chat from ${data.username}: ${data.message}`);
-        break;
-      case 'player_disconnect':
-        // Remove disconnected player from remote players
-        if (window.remotePlayers && window.remotePlayers.has(data.peerId)) {
-          window.remotePlayers.delete(data.peerId);
-          console.log(`Player ${data.username} disconnected`);
-        }
-        break;
-      case 'host_shutdown':
-        // Host is shutting down
-        console.log('Host is shutting down:', data.message);
-        this.cleanupMultiplayerClient();
-        alert('Host has shut down the server');
-        this.returnToMainMenu();
-        break;
-      case 'world_data_sync':
-        if (world && data.data) {
-          world.time = data.data.time;
-          world.weather = data.data.weather;
-          world.dayLength = data.data.dayLength;
-          // Apply other synced world properties
-          console.log('Client synced world data:', data.data);
-        }
-        break;
-      default:
-        console.log('Unknown client message type:', data.type);
-    }
-  }
   
 
   
 
   
-  removePlayerFromRoom(peerId) {
-    if (!window.hostedRoom) return;
-
-    const index = window.hostedRoom.connectedPeers.findIndex(p => p.peerId === peerId);
-    if (index !== -1) {
-      const player = window.hostedRoom.connectedPeers[index];
-      window.hostedRoom.connectedPeers.splice(index, 1);
-      window.hostedRoom.players--;
-      console.log(`Player ${player.username} left the room`);
-      console.log(`[MULTIPLAYER] Player ${player.username} (${peerId}) disconnected.`);
-      console.log('[MULTIPLAYER] Connected peers:', window.hostedRoom.connectedPeers.map(p => p.peerId));
-      
-      // Remove from remote players tracking
-      if (window.remotePlayers && window.remotePlayers.has(peerId)) {
-        window.remotePlayers.delete(peerId);
-        console.log(`Removed remote player ${peerId} from tracking`);
-      }
-      
-      // Notify other players about disconnection
-      this.broadcastToAll({
-        type: 'player_disconnect',
-        peerId: peerId,
-        username: player.username,
-        timestamp: Date.now()
-      });
-    }
-  }
   
-  handlePlayerMovement(conn, data) {
-    // Update remote player position if we have a system for tracking remote players
-    if (window.remotePlayers) {
-      if (!window.remotePlayers.has(conn.peer)) {
-        window.remotePlayers.set(conn.peer, {
-          x: data.position.x,
-          y: data.position.y,
-          username: data.username || 'Remote Player' // Use username from data
-        });
-      } else {
-        const remotePlayer = window.remotePlayers.get(conn.peer);
-        remotePlayer.x = data.position.x;
-        remotePlayer.y = data.position.y;
-        if (data.username) { // Update username if provided
-          remotePlayer.username = data.username;
-        }
-      }
-    }
-    
-    // Broadcast player movement to all other connected players
-    // Find username for the moving player
-    let username = 'Remote Player';
-    if (window.hostedRoom && window.hostedRoom.connectedPeers) {
-      const peer = window.hostedRoom.connectedPeers.find(p => p.peerId === conn.peer);
-      if (peer) username = peer.username;
-    }
-    
-    try {
-      this.broadcastToAllExcept(conn.peer, {
-        type: 'player_movement',
-        peerId: conn.peer,
-        position: data.position,
-        username: username,
-        timestamp: Date.now()
-      });
-    } catch (error) {
-      console.error('Failed to broadcast player movement:', error);
-    }
-  }
-  
-  handleBlockChange(conn, data) {
-    // Apply block change to world and broadcast to all players
-    if (world && data.x >= 0 && data.x < world.width && data.y >= 0 && data.y < world.height) {
-      const index = data.y * world.width + data.x;
-      
-      // Handle both numeric and string block IDs
-      let blockType = data.blockType;
-      if (data.blockId) {
-        // If we have a string ID, use it to get the proper numeric ID
-        blockType = this.getBlockNumericId(data.blockId);
-      }
-      
-      world.blocks[index] = blockType;
-      
-      // Apply metadata if provided
-      if (data.meta && world.blockMeta) {
-        world.blockMeta.set(index, data.meta);
-      }
-      
-      console.log(`Applied block change from ${conn.peer}: (${data.x}, ${data.y}) -> ${blockType}`);
-      
-      // Broadcast to all other players (not the sender)
-      try {
-        this.broadcastToAllExcept(conn.peer, {
-          type: 'block_change',
-          x: data.x,
-          y: data.y,
-          blockType: blockType,
-          blockId: data.blockId,
-          meta: data.meta,
-          timestamp: Date.now()
-        });
-      } catch (error) {
-        console.error('Failed to broadcast block change:', error);
-      }
-    }
-  }
-  
-  handleChatMessage(conn, data) {
-    // Broadcast chat message to all players
-    this.broadcastToAll({
-      type: 'chat_message',
-      username: data.username,
-      message: data.message,
-      timestamp: Date.now()
-    });
-  }
-  
-  handlePlayerDisconnect(conn, data) {
-    console.log(`Received player disconnect notification: ${data.username}`);
-    // This is just a notification, actual cleanup happens in connection close event
-  }
-  
-  handleHostShutdown(conn, data) {
-    console.log('Received host shutdown notification:', data.message);
-    // This is handled in the client message handler
-  }
-  
-  broadcastToAll(message) {
-    if (!window.hostedRoom) return;
-    
-    window.hostedRoom.connectedPeers.forEach(peer => {
-      if (peer.connection && peer.connection.open) {
-        peer.connection.send(message);
-      }
-    });
-  }
-  
-  broadcastToAllExcept(excludePeerId, message) {
-    if (!window.hostedRoom) return;
-    
-    window.hostedRoom.connectedPeers.forEach(peer => {
-      if (peer.peerId !== excludePeerId && peer.connection && peer.connection.open) {
-        try {
-          peer.connection.send(message);
-        } catch (error) {
-          console.error('Failed to send message to peer:', peer.peerId, error);
-        }
-      }
-    });
-  }
   
   // Multiplayer sync functions for block changes
   syncBlockChange(x, y, blockId, meta = null) {
     console.log(`Syncing block change: (${x}, ${y}) -> ${blockId}`);
-    
-    // Convert block ID to numeric ID for transmission
-    const blockType = this.getBlockNumericId(blockId);
-    
-    if (window.hostedRoom) {
-      // Host: broadcast to all clients
-      this.broadcastToAll({
-        type: 'block_change',
-        x: x,
-        y: y,
-        blockType: blockType,
-        blockId: blockId,
-        meta: meta,
-        timestamp: Date.now()
-      });
-    } else if (window.multiplayerConnection && window.multiplayerConnection.open) {
-      // Client: send to host
-      try {
-        window.multiplayerConnection.send({
-          type: 'block_change',
-          x: x,
-          y: y,
-          blockType: blockType,
-          blockId: blockId,
-          meta: meta,
-          timestamp: Date.now()
+
+    if (socket.connected && window.currentRoomId) {
+        socket.emit('gameEvent', {
+            type: 'block_change',
+            payload: {
+                x: x,
+                y: y,
+                blockId: blockId,
+                meta: meta
+            },
+            roomId: window.currentRoomId
         });
-      } catch (error) {
-        console.error('Failed to sync block change:', error);
-      }
     }
   }
   
@@ -3545,189 +2360,9 @@ class MenuManager {
     return 0; // Default to air if not found or invalid
   }
   
-  // Cleanup functions for multiplayer
-  cleanupMultiplayerClient() {
-    console.log('Cleaning up multiplayer client state...');
-    
-    // Clear intervals
-    if (window.multiplayerPositionInterval) {
-      clearInterval(window.multiplayerPositionInterval);
-      window.multiplayerPositionInterval = null;
-    }
-    
-    // Clear remote players
-    if (window.remotePlayers) {
-      window.remotePlayers.clear();
-    }
-    
-    // Reset multiplayer flags
-    window.isMultiplayerClient = false;
-    
-    // Close the multiplayer connection if it exists
-    if (window.multiplayerConnection && window.multiplayerConnection.open) {
-      try {
-        window.multiplayerConnection.close();
-        console.log('Multiplayer connection closed.');
-      } catch (e) {
-        console.error('Error closing multiplayer connection:', e);
-      }
-    }
-    window.multiplayerConnection = null;
-
-    // Destroy the main PeerJS instance
-    if (window.multiplayerPeer) {
-      try {
-        window.multiplayerPeer.destroy();
-        console.log('Main PeerJS instance destroyed.');
-      } catch (e) {
-        console.error('Error destroying main PeerJS instance:', e);
-      }
-      window.multiplayerPeer = null;
-      window.myPeerId = null;
-    }
-    
-    console.log('Multiplayer client cleanup completed');
-  }
   
-  cleanupMultiplayerHost() {
-    console.log('Cleaning up multiplayer host state...');
-    
-    // Clear the room heartbeat interval
-    if (this.roomHeartbeatInterval) {
-      clearInterval(this.roomHeartbeatInterval);
-      this.roomHeartbeatInterval = null;
-    }
-    
-    // Disconnect all connected players
-    if (window.hostedRoom && window.hostedRoom.connectedPeers) {
-      window.hostedRoom.connectedPeers.forEach(peer => {
-        if (peer.connection && peer.connection.open) {
-          try {
-            peer.connection.send({
-              type: 'host_shutdown',
-              message: 'Host is shutting down',
-              timestamp: Date.now()
-            });
-            peer.connection.close();
-          } catch (error) {
-            console.error('Error notifying peer of shutdown:', error);
-          }
-        }
-      });
-    }
-
-    // Remove the room from discovery
-    this.removeHostedRoom();
-    
-    // Clear hosted room
-    window.hostedRoom = null;
-    
-    // Clear remote players
-    if (window.remotePlayers) {
-      window.remotePlayers.clear();
-    }
-
-    // Destroy the main PeerJS instance
-    if (window.multiplayerPeer) {
-      try {
-        window.multiplayerPeer.destroy();
-        console.log('Main PeerJS instance destroyed.');
-      } catch (e) {
-        console.error('Error destroying main PeerJS instance:', e);
-      }
-      window.multiplayerPeer = null;
-      window.myPeerId = null;
-    }
-    
-    console.log('Multiplayer host cleanup completed');
-  }
   
-  // Attempt to manually trigger data channel opening (workaround for PeerJS issues)
-  attemptDataChannelOpen(conn) {
-    console.log('Attempting to manually open data channel...');
-    
-    try {
-      // Check if there are any data channels in the peer connection
-      if (conn.peerConnection && conn.peerConnection.sctp) {
-        console.log('SCTP transport found, attempting to nudge...');
-      }
-      
-      // Try to access the internal data channel
-      if (conn.dataChannel) {
-        console.log('Data channel found:', conn.dataChannel);
-        console.log('Data channel state:', conn.dataChannel.readyState);
-        
-        if (conn.dataChannel.readyState === 'connecting') {
-          console.log('Data channel is connecting, waiting...');
-          
-          // Add listeners if not already added
-          if (!conn.dataChannel.onopen) {
-            conn.dataChannel.onopen = () => {
-              console.log('Manual data channel opened!');
-              // PeerJS will handle setting conn.open automatically
-              
-              // Trigger the open event manually if needed
-              if (conn._events && conn._events.open && !conn.open) {
-                setTimeout(() => {
-                  if (!conn.open) {
-                conn.emit('open');
-                  }
-                }, 100);
-              }
-            };
-          }
-        }
-      }
-      
-      // Try sending a ping to trigger the connection
-      setTimeout(() => {
-        if (!conn.open && conn.send) {
-          try {
-            console.log('Attempting ping to trigger connection...');
-            conn.send({ type: 'ping', test: true });
-          } catch (e) {
-            console.log('Ping failed, connection not ready yet');
-          }
-        }
-      }, 500);
-      
-    } catch (error) {
-      console.error('Error in manual data channel open attempt:', error);
-    }
-  }
   
-  // Aggressive reconnection as last resort
-  attemptAggressiveReconnection(peerId, username) {
-    console.log('Attempting aggressive reconnection to:', peerId);
-    
-    // Destroy current peer and create fresh one
-    if (window.multiplayerPeer) {
-      try {
-        window.multiplayerPeer.destroy();
-      } catch (e) {
-        console.error('Error destroying peer:', e);
-      }
-      window.multiplayerPeer = null;
-      window.myPeerId = null;
-    }
-    
-    // Wait a moment and reinitialize
-    setTimeout(() => {
-      console.log('Reinitializing multiplayer network for aggressive reconnection...');
-      this.initializeMultiplayerNetwork();
-      
-      // Wait for peer to be ready and try connection again
-      setTimeout(() => {
-        if (window.multiplayerPeer && window.myPeerId) {
-          console.log('Retrying connection after peer reset...');
-          this.joinRoom('room_' + Date.now(), peerId); // Use a new room ID to avoid caching issues
-        } else {
-          alert('Failed to reconnect. Please refresh the page and try again.');
-          this.showMenu('multiplayerMenu');
-        }
-      }, 3000);
-    }, 1000);
-  }
 
   initializeKeybindButtons() {
     // Reset temp keybinds to current saved keybinds
@@ -4014,7 +2649,7 @@ function fillArea(x1, y1, x2, y2, blockId, fillType = 'solid', replaceBlock = nu
         world.updateLighting(x, y);
         
         // Sync command block changes in multiplayer
-        if (window.hostedRoom || window.multiplayerConnection) {
+        if (socket.connected && window.currentRoomId) {
           menuManager.syncBlockChange(x, y, blockId, null);
         }
       }
@@ -4597,6 +3232,24 @@ function mergeSameToSlot(targetIndex) {
 function throwSelectedBlock() {
   const hotSlot = inventory.getSlot(selectedIndex);
   if (!hotSlot) return;
+
+  // Remove item from inventory
+  inventory.takeOne(selectedIndex);
+
+  // Emit item drop event for multiplayer
+  if (typeof socket !== 'undefined' && socket.connected) {
+    socket.emit('gameEvent', {
+      type: 'item_drop',
+      payload: {
+        itemId: hotSlot.type === 'block' ? hotSlot.blockId : hotSlot.itemId,
+        count: 1, // Dropping one item at a time
+        x: player.x, // Player's current position
+        y: player.y,
+        vx: player.vx, // Player's current velocity
+        vy: player.vy
+      }
+    });
+  }
 
   const mouseWorldX = camera.screenToWorldX(input.mouse.x);
   const mouseWorldY = camera.screenToWorldY(input.mouse.y);
@@ -5290,7 +3943,7 @@ function processTextInputCommand(command) {
         world.updateLighting(playerX, playerY);
         
         // Sync torch placement in multiplayer
-        if (window.hostedRoom || window.multiplayerConnection) {
+        if (socket.connected && window.currentRoomId) {
           menuManager.syncBlockChange(playerX, playerY, 'torch', null);
         }
         
@@ -5380,7 +4033,7 @@ function processTextInputCommand(command) {
               world.updateLighting(x, y);
               
               // Sync fill command block changes in multiplayer
-              if (window.hostedRoom || window.multiplayerConnection) {
+              if (socket.connected && window.currentRoomId) {
                 menuManager.syncBlockChange(x, y, blockId, null);
               }
               
@@ -5439,7 +4092,7 @@ function processTextInputCommand(command) {
             world.updateLighting(x, y);
             
             // Sync sphere fill command block changes in multiplayer
-            if (window.hostedRoom || window.multiplayerConnection) {
+            if (socket.connected && window.currentRoomId) {
               menuManager.syncBlockChange(x, y, blockId, null);
             }
             
@@ -6939,7 +5592,7 @@ canvas.addEventListener('mousedown', (e) => {
     });
     if (placed) {
       // Sync block placement in multiplayer
-      if (window.hostedRoom || window.multiplayerConnection) {
+      if (socket.connected && window.currentRoomId) {
         const cell = world.getCell(tileX, tileY);
         menuManager.syncBlockChange(tileX, tileY, hotSlot.blockId, cell ? cell.meta : null);
       }
@@ -7127,6 +5780,13 @@ window.addEventListener('keydown', (e) => {
     
     if (e.code === 'Enter') {
       if (textInputValue.trim()) {
+        // Emit chat message for multiplayer
+        if (typeof socket !== 'undefined' && socket.connected) {
+          socket.emit('gameEvent', {
+            type: 'chat_message',
+            payload: { message: textInputValue, username: localStorage.getItem('playerUsername') || 'Player' }
+          });
+        }
         // Add to chat history
         chatHistory.push(textInputValue);
         if (chatHistory.length > 20) {
@@ -7479,31 +6139,17 @@ engine = new Engine((dt, time) => {
   if (!inventoryOpen && !openContainer && world && player) {
     player.update(input, dt, time, noClipMode, creativeMode);
 
-    // Host: Broadcast own player position to all connected clients
-    if (window.hostedRoom && window.hostedRoom.connectedPeers) {
-      // Only send if position has changed significantly or periodically
-      const currentX = player.x;
-      const currentY = player.y;
-      const lastSentX = window.multiplayerSync.lastSentHostX || 0;
-      const lastSentY = window.multiplayerSync.lastSentHostY || 0;
-
-      // Send every 100ms or if position changed by more than 1 pixel
-      if (time - (window.multiplayerSync.lastHostSyncTime || 0) > 100 ||
-          Math.abs(currentX - lastSentX) > 1 ||
-          Math.abs(currentY - lastSentY) > 1) {
-
-        menuManager.broadcastToAll({
-          type: 'player_movement',
-          peerId: window.myPeerId, // Host's own peer ID
-          position: { x: currentX, y: currentY },
-          username: window.hostedRoom.host, // Host's username
-          timestamp: Date.now()
-        });
-
-        window.multiplayerSync.lastSentHostX = currentX;
-        window.multiplayerSync.lastSentHostY = currentY;
-        window.multiplayerSync.lastHostSyncTime = time;
-      }
+    if (socket.connected && window.currentRoomId) {
+        // Send every 100ms
+        if (!window.lastMovementSync || time - window.lastMovementSync > 100) {
+            socket.emit('gameEvent', {
+                type: 'player_movement',
+                payload: { x: player.x, y: player.y, username: player.username },
+                roomId: window.currentRoomId,
+                playerState: { x: player.x, y: player.y, username: player.username }
+            });
+            window.lastMovementSync = time;
+        }
     }
   }
   
@@ -7575,7 +6221,7 @@ engine = new Engine((dt, time) => {
       world.updateLighting(broke.x, broke.y);
       
       // Sync block breaking in multiplayer
-      if (window.hostedRoom || window.multiplayerConnection) {
+      if (socket.connected && window.currentRoomId) {
         menuManager.syncBlockChange(broke.x, broke.y, 'air', null);
       }
     }
@@ -7623,11 +6269,25 @@ engine = new Engine((dt, time) => {
           items.push(dropped);
         }
         
+        // Emit item pickup event for multiplayer
+        if (typeof socket !== 'undefined' && socket.connected) {
+          socket.emit('gameEvent', {
+            type: 'item_pickup',
+            payload: { itemId: item.blockId || item.itemId, count: item.count }
+          });
+        }
         items.splice(i, 1);
         continue;
       }
     }
     if (shouldRemove) {
+      // Emit item pickup event for multiplayer (if it was picked up)
+      if (typeof socket !== 'undefined' && socket.connected) {
+        socket.emit('gameEvent', {
+          type: 'item_pickup',
+          payload: { itemId: item.blockId || item.itemId, count: item.count }
+        });
+      }
       items.splice(i, 1);
     }
   }

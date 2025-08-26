@@ -1,0 +1,137 @@
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const fs = require("fs");
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+const DATA_FILE = "data.json";
+let mainWorld = { players: {} };
+let rooms = {};
+
+// Load main world safely
+try {
+  if (fs.existsSync(DATA_FILE)) {
+    const data = fs.readFileSync(DATA_FILE, "utf8");
+    mainWorld = data ? JSON.parse(data) : { players: {} };
+    console.log("[DEBUG] Main world loaded:", mainWorld);
+  }
+} catch (err) {
+  console.error("[ERROR] Failed to load main world:", err);
+}
+
+// Save main world every 10 seconds
+setInterval(() => {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(mainWorld, null, 2));
+    console.log("[DEBUG] Main world saved.");
+  } catch (err) {
+    console.error("[ERROR] Failed to save main world:", err);
+  }
+}, 10000);
+
+app.get("/", (req, res) => {
+  res.send("Multiplayer server running!");
+});
+
+io.on("connection", (socket) => {
+  console.log(`[DEBUG] Player connected: ${socket.id}`);
+
+  mainWorld.players[socket.id] = {};
+
+  // Send current state and room list
+  socket.emit("init", { mainWorld, rooms });
+  io.emit("roomList", [{ id: "main", name: "Main Server", host: "Server", players: Object.keys(mainWorld.players).length, maxPlayers: 100 }, ...Object.values(rooms).map(r => ({ id: r.id, name: r.name, host: r.host, players: Object.keys(r.players).length, maxPlayers: r.maxPlayers }))]);
+
+  // Generic event relay
+  socket.on("gameEvent", (data) => {
+    console.log(`[DEBUG] gameEvent from ${socket.id}:`, data);
+    const roomId = data.roomId || "main";
+
+    if (roomId === "main") {
+      if (data.playerState) mainWorld.players[socket.id] = data.playerState;
+      socket.broadcast.emit("gameEvent", { id: socket.id, ...data });
+    } else {
+      const room = rooms[roomId];
+      if (!room) {
+        console.warn(`[WARN] gameEvent for non-existent room ${roomId}`);
+        return;
+      }
+      if (data.playerState) room.players[socket.id] = data.playerState;
+      socket.to(roomId).emit("gameEvent", { id: socket.id, ...data });
+    }
+  });
+
+  // Join a temporary room
+  socket.on("joinRoom", ({ roomId }) => {
+    const room = rooms[roomId];
+    if (!room) {
+      console.warn(`[WARN] Attempt to join non-existent room ${roomId} by ${socket.id}`);
+      return;
+    }
+    socket.join(roomId);
+    room.players[socket.id] = {};
+    console.log(`[DEBUG] ${socket.id} joined room ${roomId}`);
+    
+    // Send the full room object to the joining player
+    socket.emit("initRoom", room); 
+
+    // Update room list for everyone
+    io.emit("roomList", [{ id: "main", name: "Main Server", host: "Server", players: Object.keys(mainWorld.players).length, maxPlayers: 100 }, ...Object.values(rooms).map(r => ({ id: r.id, name: r.name, host: r.host, players: Object.keys(r.players).length, maxPlayers: r.maxPlayers }))]);
+  });
+
+  // Create a temporary room
+  socket.on("createRoom", ({ name, worldSettings, maxPlayers }) => {
+    const roomId = "room_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+    rooms[roomId] = { 
+      id: roomId, 
+      name, 
+      host: socket.id, 
+      players: {},
+      state: { worldSettings }, // Save worldSettings here
+      maxPlayers: maxPlayers
+    };
+    socket.join(roomId);
+    console.log(`[DEBUG] Room created: ${roomId} by ${socket.id}`);
+    
+    // Send the full room object to the creator
+    socket.emit("initRoom", rooms[roomId]);
+
+    // Update room list for everyone
+    io.emit("roomList", [{ id: "main", name: "Main Server", host: "Server", players: Object.keys(mainWorld.players).length, maxPlayers: 100 }, ...Object.values(rooms).map(r => ({ id: r.id, name: r.name, host: r.host, players: Object.keys(r.players).length, maxPlayers: r.maxPlayers }))]);
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`[DEBUG] Player disconnected: ${socket.id}`);
+    delete mainWorld.players[socket.id];
+
+    for (const roomId in rooms) {
+      const room = rooms[roomId];
+      delete room.players[socket.id];
+      if (room.host === socket.id) {
+        console.log(`[DEBUG] Host left, closing room: ${roomId}`);
+        io.to(roomId).emit("roomClosed");
+        delete rooms[roomId];
+      }
+    }
+
+    io.emit("roomList", [{ id: "main", name: "Main Server", host: "Server", players: Object.keys(mainWorld.players).length, maxPlayers: 100 }, ...Object.values(rooms).map(r => ({ id: r.id, name: r.name, host: r.host, players: Object.keys(r.players).length, maxPlayers: r.maxPlayers }))]);
+    io.emit("playerDisconnected", socket.id);
+  });
+
+  // Catch-all error handling
+  socket.on("error", (err) => {
+    console.error(`[ERROR] Socket error from ${socket.id}:`, err);
+  });
+});
+
+server.listen(3000, () => {
+  console.log("Server listening on http://localhost:3000");
+});

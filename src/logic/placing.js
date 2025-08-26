@@ -57,6 +57,13 @@ export class Placer {
       meta = { placed: true };
     }
     world.setBlock(tileX, tileY, type.id, meta);
+    // Emit block placement event for multiplayer
+    if (typeof socket !== 'undefined' && socket.connected) {
+      socket.emit('gameEvent', {
+        type: 'block_place',
+        payload: { x: tileX, y: tileY, blockId: type.id, meta: meta }
+      });
+    }
     if (type.onPlace) type.onPlace(world, tileX, tileY, meta);
     
     const belowX = tileX;

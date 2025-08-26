@@ -2,7 +2,8 @@ import { TILE_SIZE } from '../core/utils.js';
 import { resolvePlayerPhysics } from '../core/physics.js';
 
 export class Player {
-  constructor(world, registry, x, y) {
+  constructor(world, registry, x, y, username = 'Player') {
+    this.username = username;
     this.world = world;
     this.registry = registry;
     this.x = x;
