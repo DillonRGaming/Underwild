@@ -1817,10 +1817,7 @@ class MenuManager {
       
       // Configure PeerJS with more aggressive connection options
       const peerConfig = {
-                host: 'pg-task-associations-tag.trycloudflare.com',
-        port: 443,
-        secure: true,
-        path: '/',
+                host: 'https://pg-task-associations-tag.trycloudflare.com',
         debug: 3, // Enable debug logging
         config: {
           'iceServers': [
