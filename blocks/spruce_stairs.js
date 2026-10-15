@@ -5,5 +5,8 @@ export default {
   shape: 'stairs',
   solid: true,
   transparent: false,
-  maxStack: 64
+  maxStack: 64,
+  isSolid(meta) {
+    return true;
+  }
 };

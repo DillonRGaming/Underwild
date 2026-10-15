@@ -8,7 +8,7 @@ export class Camera {
   constructor() {
     this.x = 0;
     this.y = 0;
-    this.zoom = 3.0; // Increased zoom for closer view
+    this.zoom = 3.0;
   }
   worldToScreenX(wx) { return (wx - this.x) * this.zoom; }
   worldToScreenY(wy) { return (wy - this.y) * this.zoom; }

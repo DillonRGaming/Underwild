@@ -4,18 +4,12 @@ export default {
   shape: 'full',
   solid: true,
   color: '#a9a9a9',
-  hardness: 0.6,
+  hardness: 2.0,
   isSolid() {
     return true;
   },
-  tick(world, x, y, meta, time) {
-    if (!meta) meta = {};
-    if (!meta.fallDelay) meta.fallDelay = 0;
-    meta.fallDelay++;
-    
-    if (meta.fallDelay < 10) return;
-    meta.fallDelay = 0;
-    
+  falls: true,
+  tick(world, x, y) {
     if (y < world.height - 1) {
       const below = world.getBlockId(x, y + 1);
       if (below === 'air' || below === 'water') {

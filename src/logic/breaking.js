@@ -12,12 +12,14 @@ function makeShards() {
   return shards;
 }
 
+const SUPPORTED_PLANTS = new Set(['poppy', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble']);
+
 export class Breaker {
   constructor(registry) {
     this.registry = registry;
     this.state = { active: false, progress: 0, x: 0, y: 0, id: null, shards: makeShards() };
   }
-  begin(world, x, y, creativeMode = false) {
+  begin(world, x, y, creativeMode = false, heldItem = null) {
     const id = world.getBlockId(x, y);
     if (id === 'air') {
       this.cancel();
@@ -30,9 +32,11 @@ export class Breaker {
       this.state.id = id;
       this.state.progress = 0;
       this.state.shards = makeShards();
-      if (creativeMode) {
-        this.state.progress = 1;
-      }
+    }
+    this.state.heldItem = heldItem;
+    this.state.creative = creativeMode;
+    if (creativeMode) {
+      this.state.progress = 1;
     }
   }
   cancel() {
@@ -46,37 +50,55 @@ export class Breaker {
       this.cancel();
       return null;
     }
-    const hardness = Math.max(0.1, Math.min(9999, type.hardness ?? 1));
-    if (hardness >= 9999) {
+    const hardness = Math.max(0.1, type.hardness ?? 1);
+    if (!Number.isFinite(hardness) && !this.state.creative) {
       this.cancel();
       return null;
     }
-    const rate = 1 / (hardness * 0.8);
-    this.state.progress += dt * rate;
-    if (this.state.progress >= 1) {
-      const cell = world.getCell(this.state.x, this.state.y);
-      const result = { id: cell.id, meta: cell.meta, x: this.state.x, y: this.state.y };
-      
-      const type = this.registry.get(cell.id);
-      if (type && type.onBreak) {
-        type.onBreak(world, this.state.x, this.state.y, cell.meta);
-      }
-      
-    // Check block above to see if it needs to break as well (for plants)
-      const aboveX = this.state.x;
-      const aboveY = this.state.y - 1;
-      if (world.inBounds(aboveX, aboveY)) {
-        const aboveId = world.getBlockId(aboveX, aboveY);
-        const aboveType = this.registry.get(aboveId);
-        if (aboveType && (aboveType.id === 'poppy' || aboveType.id === 'short_grass' || aboveType.id === 'fern')) {
-          world.setBlock(aboveX, aboveY, 'air', null);
+    let speedMultiplier = 1;
+    if (this.state.heldItem && this.state.heldItem.type === 'item') {
+      const itemType = this.registry.get(this.state.heldItem.itemId);
+      if (itemType && itemType.type === 'tool') {
+        const blockId = world.getBlockId(this.state.x, this.state.y);
+        if (itemType.miningSpeed && itemType.miningSpeed[blockId]) {
+          speedMultiplier = itemType.miningSpeed[blockId];
+        }
+        else if (itemType.toolType !== 'sword' && itemType.effectiveAgainst && itemType.effectiveAgainst.includes(blockId)) {
+          speedMultiplier = (itemType.baseSpeedMultiplier || 1) * (itemType.materialMultiplier || 1);
         }
       }
-      
-      // Remove the block and return full break result so caller can spawn drops
-      world.setBlock(this.state.x, this.state.y, 'air', null);
-      // Update lighting around the removed block
-      world.updateLighting(this.state.x, this.state.y);
+    }
+    if (!this.state.creative) {
+      const rate = (speedMultiplier * 1.5) / (hardness * 0.5);
+      this.state.progress += dt * rate;
+    }
+    if (this.state.progress >= 1) {
+      const x = this.state.x;
+      const y = this.state.y;
+      const cell = world.getCell(x, y);
+      const brokenType = this.registry.get(cell.id);
+      if (brokenType && brokenType.onBreak) {
+        brokenType.onBreak(world, x, y, cell.meta);
+      }
+      const result = { id: cell.id, drop: brokenType?.drop ?? cell.id, meta: cell.meta, x, y, extraDrops: [] };
+      if (world.inBounds(x, y - 1)) {
+        const aboveId = world.getBlockId(x, y - 1);
+        const aboveType = this.registry.get(aboveId);
+        const aboveMeta = world.getCell(x, y - 1).meta;
+        if (aboveType && ((aboveType.needsSupport && !aboveMeta?.wall) || SUPPORTED_PLANTS.has(aboveId))) {
+          result.extraDrops.push({ id: aboveType.drop ?? aboveId, x, y: y - 1 });
+          world.setBlock(x, y - 1, 'air', null);
+        }
+      }
+      for (const [sx, side] of [[x - 1, 'right'], [x + 1, 'left']]) {
+        if (!world.inBounds(sx, y)) continue;
+        const sideCell = world.getCell(sx, y);
+        if ((this.registry.get(sideCell.id)?.shape === 'torch' || sideCell.id === 'ladder') && sideCell.meta?.wall === side) {
+          result.extraDrops.push({ id: sideCell.id, x: sx, y });
+          world.setBlock(sx, y, 'air', null);
+        }
+      }
+      world.setBlock(x, y, 'air', null);
       this.cancel();
       return result;
     }

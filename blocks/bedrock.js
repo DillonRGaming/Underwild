@@ -4,5 +4,5 @@ export default {
   shape: 'full',
   solid: true,
   color: '#222222',
-  hardness: 9999
+  hardness: Infinity
 };

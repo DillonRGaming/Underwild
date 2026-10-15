@@ -4,10 +4,864 @@
   <meta charset="utf-8">
   <title>Underwild</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <link rel="icon" type="image/png" href="textures/grass.png">
   <link rel="stylesheet" href="style.css">
+  <link id="themeStylesheet" rel="stylesheet" href="themes/minimal/theme.css">
 </head>
 <body>
-  <canvas id="game"></canvas>
-  <script type="module" src="script.js"></script>
+  <div id="window-controls">
+    <button id="btn-minimize" class="win-btn" title="Minimize">
+      <svg width="10" height="10" viewBox="0 0 10 10"><rect y="4" width="10" height="2" fill="currentColor"/></svg>
+    </button>
+    <button id="btn-maximize" class="win-btn" title="Maximize">
+      <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+    </button>
+    <button id="btn-close" class="win-btn win-btn-close" title="Close">
+      <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5"/></svg>
+    </button>
+  </div>
+  <div id="drag-zone"></div>
+
+   <canvas id="gameCanvas"></canvas>
+
+    <div class="hotbar-slots hidden" id="hotbar">
+      <div class="hotbar-slot" data-index="0"></div>
+      <div class="hotbar-slot" data-index="1"></div>
+      <div class="hotbar-slot" data-index="2"></div>
+      <div class="hotbar-slot" data-index="3"></div>
+      <div class="hotbar-slot" data-index="4"></div>
+      <div class="hotbar-slot" data-index="5"></div>
+      <div class="hotbar-slot" data-index="6"></div>
+      <div class="hotbar-slot" data-index="7"></div>
+      <div class="hotbar-slot" data-index="8"></div>
+    </div>
+
+   <div id="inventory" class="inventory-overlay hidden">
+     <div class="inventory-background"></div>
+     <div class="inventory-frame">
+     <div id="creativeTabs" class="creative-tabs creative-tabs-top"></div>
+     <div class="inventory-content">
+       <div id="creativePanel" class="creative-panel hidden">
+         <div class="creative-header">
+           <div id="creativeTitle" class="inventory-title"></div>
+           <input type="text" id="creativeSearch" class="creative-search" maxlength="40" autocomplete="off" spellcheck="false">
+         </div>
+         <div id="creativeGrid" class="creative-grid"></div>
+       </div>
+       <div class="inventory-header">
+         <div class="inventory-title">Inventory</div>
+         <div class="crafting-grid">
+           <div class="crafting-area small">
+             <div class="crafting-slot" data-index="0"></div>
+             <div class="crafting-slot" data-index="1"></div>
+             <div class="crafting-slot" data-index="2"></div>
+             <div class="crafting-slot" data-index="3"></div>
+           </div>
+           <div class="crafting-arrow">&#8594;</div>
+           <div class="crafting-output-area">
+             <div class="crafting-output-slot" data-index="0"></div>
+           </div>
+         </div>
+       </div>
+       <div class="inventory-grid">
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="9"></div>
+           <div class="inventory-slot" data-index="10"></div>
+           <div class="inventory-slot" data-index="11"></div>
+           <div class="inventory-slot" data-index="12"></div>
+           <div class="inventory-slot" data-index="13"></div>
+           <div class="inventory-slot" data-index="14"></div>
+           <div class="inventory-slot" data-index="15"></div>
+           <div class="inventory-slot" data-index="16"></div>
+           <div class="inventory-slot" data-index="17"></div>
+         </div>
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="18"></div>
+           <div class="inventory-slot" data-index="19"></div>
+           <div class="inventory-slot" data-index="20"></div>
+           <div class="inventory-slot" data-index="21"></div>
+           <div class="inventory-slot" data-index="22"></div>
+           <div class="inventory-slot" data-index="23"></div>
+           <div class="inventory-slot" data-index="24"></div>
+           <div class="inventory-slot" data-index="25"></div>
+           <div class="inventory-slot" data-index="26"></div>
+         </div>
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="27"></div>
+           <div class="inventory-slot" data-index="28"></div>
+           <div class="inventory-slot" data-index="29"></div>
+           <div class="inventory-slot" data-index="30"></div>
+           <div class="inventory-slot" data-index="31"></div>
+           <div class="inventory-slot" data-index="32"></div>
+           <div class="inventory-slot" data-index="33"></div>
+           <div class="inventory-slot" data-index="34"></div>
+           <div class="inventory-slot" data-index="35"></div>
+         </div>
+       </div>
+       <div class="inventory-hotbar">
+         <div class="hotbar-slots">
+           <div class="hotbar-slot" data-index="0"></div>
+           <div class="hotbar-slot" data-index="1"></div>
+           <div class="hotbar-slot" data-index="2"></div>
+           <div class="hotbar-slot" data-index="3"></div>
+           <div class="hotbar-slot" data-index="4"></div>
+           <div class="hotbar-slot" data-index="5"></div>
+           <div class="hotbar-slot" data-index="6"></div>
+           <div class="hotbar-slot" data-index="7"></div>
+           <div class="hotbar-slot" data-index="8"></div>
+         </div>
+       </div>
+     </div>
+     <div id="creativeTabsBottom" class="creative-tabs creative-tabs-bottom"></div>
+     </div>
+   </div>
+
+   <div id="craftingTable" class="inventory-overlay hidden">
+     <div class="inventory-background"></div>
+     <div class="inventory-content">
+       <div class="inventory-title">Crafting Table</div>
+       <div class="crafting-grid">
+         <div class="crafting-area">
+           <div class="crafting-slot" data-index="0"></div>
+           <div class="crafting-slot" data-index="1"></div>
+           <div class="crafting-slot" data-index="2"></div>
+           <div class="crafting-slot" data-index="3"></div>
+           <div class="crafting-slot" data-index="4"></div>
+           <div class="crafting-slot" data-index="5"></div>
+           <div class="crafting-slot" data-index="6"></div>
+           <div class="crafting-slot" data-index="7"></div>
+           <div class="crafting-slot" data-index="8"></div>
+         </div>
+         <div class="crafting-arrow">&#8594;</div>
+         <div class="crafting-output-area">
+           <div class="crafting-output-slot" data-index="0"></div>
+         </div>
+       </div>
+       <div class="inventory-grid">
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="9"></div>
+           <div class="inventory-slot" data-index="10"></div>
+           <div class="inventory-slot" data-index="11"></div>
+           <div class="inventory-slot" data-index="12"></div>
+           <div class="inventory-slot" data-index="13"></div>
+           <div class="inventory-slot" data-index="14"></div>
+           <div class="inventory-slot" data-index="15"></div>
+           <div class="inventory-slot" data-index="16"></div>
+           <div class="inventory-slot" data-index="17"></div>
+         </div>
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="18"></div>
+           <div class="inventory-slot" data-index="19"></div>
+           <div class="inventory-slot" data-index="20"></div>
+           <div class="inventory-slot" data-index="21"></div>
+           <div class="inventory-slot" data-index="22"></div>
+           <div class="inventory-slot" data-index="23"></div>
+           <div class="inventory-slot" data-index="24"></div>
+           <div class="inventory-slot" data-index="25"></div>
+           <div class="inventory-slot" data-index="26"></div>
+         </div>
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="27"></div>
+           <div class="inventory-slot" data-index="28"></div>
+           <div class="inventory-slot" data-index="29"></div>
+           <div class="inventory-slot" data-index="30"></div>
+           <div class="inventory-slot" data-index="31"></div>
+           <div class="inventory-slot" data-index="32"></div>
+           <div class="inventory-slot" data-index="33"></div>
+           <div class="inventory-slot" data-index="34"></div>
+           <div class="inventory-slot" data-index="35"></div>
+         </div>
+       </div>
+       <div class="inventory-hotbar">
+         <div class="hotbar-slots">
+           <div class="hotbar-slot" data-index="0"></div>
+           <div class="hotbar-slot" data-index="1"></div>
+           <div class="hotbar-slot" data-index="2"></div>
+           <div class="hotbar-slot" data-index="3"></div>
+           <div class="hotbar-slot" data-index="4"></div>
+           <div class="hotbar-slot" data-index="5"></div>
+           <div class="hotbar-slot" data-index="6"></div>
+           <div class="hotbar-slot" data-index="7"></div>
+           <div class="hotbar-slot" data-index="8"></div>
+         </div>
+       </div>
+     </div>
+   </div>
+
+   <div id="chestUI" class="inventory-overlay hidden">
+     <div class="inventory-background"></div>
+     <div class="inventory-content">
+       <div id="chestTitle" class="inventory-title">Chest</div>
+       <div id="chestGrid" class="chest-grid"></div>
+       <div class="inventory-grid">
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="9"></div>
+           <div class="inventory-slot" data-index="10"></div>
+           <div class="inventory-slot" data-index="11"></div>
+           <div class="inventory-slot" data-index="12"></div>
+           <div class="inventory-slot" data-index="13"></div>
+           <div class="inventory-slot" data-index="14"></div>
+           <div class="inventory-slot" data-index="15"></div>
+           <div class="inventory-slot" data-index="16"></div>
+           <div class="inventory-slot" data-index="17"></div>
+         </div>
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="18"></div>
+           <div class="inventory-slot" data-index="19"></div>
+           <div class="inventory-slot" data-index="20"></div>
+           <div class="inventory-slot" data-index="21"></div>
+           <div class="inventory-slot" data-index="22"></div>
+           <div class="inventory-slot" data-index="23"></div>
+           <div class="inventory-slot" data-index="24"></div>
+           <div class="inventory-slot" data-index="25"></div>
+           <div class="inventory-slot" data-index="26"></div>
+         </div>
+         <div class="inventory-row">
+           <div class="inventory-slot" data-index="27"></div>
+           <div class="inventory-slot" data-index="28"></div>
+           <div class="inventory-slot" data-index="29"></div>
+           <div class="inventory-slot" data-index="30"></div>
+           <div class="inventory-slot" data-index="31"></div>
+           <div class="inventory-slot" data-index="32"></div>
+           <div class="inventory-slot" data-index="33"></div>
+           <div class="inventory-slot" data-index="34"></div>
+           <div class="inventory-slot" data-index="35"></div>
+         </div>
+       </div>
+       <div class="inventory-hotbar">
+         <div class="hotbar-slots">
+           <div class="hotbar-slot" data-index="0"></div>
+           <div class="hotbar-slot" data-index="1"></div>
+           <div class="hotbar-slot" data-index="2"></div>
+           <div class="hotbar-slot" data-index="3"></div>
+           <div class="hotbar-slot" data-index="4"></div>
+           <div class="hotbar-slot" data-index="5"></div>
+           <div class="hotbar-slot" data-index="6"></div>
+           <div class="hotbar-slot" data-index="7"></div>
+           <div class="hotbar-slot" data-index="8"></div>
+         </div>
+       </div>
+     </div>
+   </div>
+
+   <div id="coordinates" class="coordinates hidden">
+      <span id="coordText">X: 0 Y: 0</span>
+      <span id="fpsCounter" class="fps-counter">FPS: 60</span>
+   </div>
+
+   <!-- Health and Hunger UI -->
+   <div id="healthDisplay" class="ui-health hidden"></div>
+
+   <div id="hungerDisplay" class="ui-hunger hidden"></div>
+
+   <div id="chat" class="chat-container hidden">
+     <div class="chat-input-wrapper">
+       <span id="chatPreview" class="chat-preview"></span>
+       <input type="text" id="chatInput" class="chat-input" maxlength="128" autocomplete="off" spellcheck="false">
+     </div>
+     <div id="chatSuggestions" class="suggestions-dropdown hidden"></div>
+   </div>
+
+   <div id="mainMenu" class="menu-container">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="game-title">UNDERWILD</h1>
+      <div class="menu-buttons">
+         <button class="minecraft-button" data-action="single-player">Single Player</button>
+         <button class="minecraft-button" data-action="load-world">Load World</button>
+        <button class="minecraft-button" data-action="options">Options</button>
+        <button class="minecraft-button" data-action="mods">Mods</button>
+        <button class="minecraft-button" data-action="skins-options">Skins</button>
+        <button class="minecraft-button" data-action="quit">Quit Game</button>
+      </div>
+      <div class="changelog-section">
+        <span class="version-number">v0.1.0</span>
+        <button class="minecraft-button changelog-button" data-action="changelog">Changelog</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="createWorldMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Create New World</h1>
+      <div class="form-section">
+        <label for="worldName">World Name:</label>
+        <input type="text" id="worldName" class="minecraft-input" placeholder="New World">
+        <label for="worldSeed">Seed (Optional):</label>
+        <input type="text" id="worldSeed" class="minecraft-input" placeholder="Random">
+        <div class="option-group">
+          <label>Game Mode:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="game-mode-survival" data-selected="true">Survival</button>
+            <button class="minecraft-button small" data-action="game-mode-creative">Creative</button>
+          </div>
+        </div>
+        
+        <div class="menu-buttons">
+          <button class="minecraft-button" data-action="show-advanced-options">Advanced Options</button>
+        </div>
+      </div>
+      <div class="menu-buttons">
+         <button class="minecraft-button" data-action="create-world" id="createWorldButton">Create World</button>
+         <button class="minecraft-button" data-action="back-to-main" id="backToMainButton">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="optionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Options</h1>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="graphics-options">Graphics</button>
+        <button class="minecraft-button" data-action="background-options">Background</button>
+        <button class="minecraft-button" data-action="gameplay-options">Gameplay</button>
+        <button class="minecraft-button" data-action="audio-options">Audio</button>
+        <button class="minecraft-button" data-action="controls-options">Controls</button>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="backgroundOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Background Settings</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Add New Block:</label>
+          <div class="dropdown-container">
+            <input type="text" id="backgroundBlockInput" class="minecraft-input" placeholder="Type block name...">
+            <div id="backgroundSuggestions" class="suggestions-dropdown hidden"></div>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Current Background Blocks:</label>
+          <div class="background-blocks" id="backgroundBlocks">
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="apply-background">Apply Changes</button>
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+
+
+
+
+  <div id="graphicsOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Graphics</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Theme:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="theme-minimal" data-selected="true">Minimal</button>
+            <button class="minecraft-button small" data-action="theme-java">Java Edition</button>
+            <button class="minecraft-button small" data-action="theme-modern">Modern</button>
+            <button class="minecraft-button small" data-action="theme-bedrock">Bedrock Edition</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Render Distance:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="render-tiny">Tiny</button>
+            <button class="minecraft-button small" data-action="render-short">Short</button>
+            <button class="minecraft-button small" data-action="render-normal" data-selected="true">Normal</button>
+            <button class="minecraft-button small" data-action="render-far">Far</button>
+            <button class="minecraft-button small" data-action="render-extreme">Extreme</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Texture Quality:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="texture-fast">Fast</button>
+            <button class="minecraft-button small" data-action="texture-fancy" data-selected="true">Fancy</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Render Falling Leaves:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="leaves-on" data-selected="true">ON</button>
+            <button class="minecraft-button small" data-action="leaves-off">OFF</button>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gameplayOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Gameplay</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Auto Jump:</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="auto-jump-on" data-selected="true">ON</button>
+            <button class="minecraft-button small" data-action="auto-jump-off">OFF</button>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="audioOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Audio</h1>
+      <div class="form-section">
+        <div class="slider-group">
+          <label>Master Volume: <span id="masterVolumeValue">100</span>%</label>
+          <input type="range" id="masterVolume" class="minecraft-slider" min="0" max="100" value="100">
+        </div>
+        <div class="slider-group">
+          <label>Music Volume: <span id="musicVolumeValue">50</span>%</label>
+          <input type="range" id="musicVolume" class="minecraft-slider" min="0" max="100" value="50">
+        </div>
+        <div class="slider-group">
+          <label>Sound Effects: <span id="sfxVolumeValue">75</span>%</label>
+          <input type="range" id="sfxVolume" class="minecraft-slider" min="0" max="100" value="75">
+        </div>
+        <div class="option-group">
+          <label>Music Track:</label>
+          <div class="music-track-selector">
+            <div class="music-track-item" data-track="underwild-mystic">
+              <img src="ui/underwild-mystic.png" alt="Mystic" class="music-thumb">
+              <span class="music-name">Underwild - Mystic</span>
+              <div class="track-select-indicator"></div>
+            </div>
+            <div class="music-track-item" data-track="underwild-skynight">
+              <img src="ui/underwild-skynight.png" alt="Sky and Night" class="music-thumb">
+              <span class="music-name">Underwild - Sky &amp; Night</span>
+              <div class="track-select-indicator"></div>
+            </div>
+            <div class="music-track-item" data-track="underwild-sodium">
+              <img src="ui/underwild-sodium.png" alt="Sodium" class="music-thumb">
+              <span class="music-name">Underwild - Sodium</span>
+              <div class="track-select-indicator"></div>
+            </div>
+            <div class="music-track-item" data-track="underwild-thoughts">
+              <img src="ui/underwild-thoughts.png" alt="Thoughts" class="music-thumb">
+              <span class="music-name">Underwild - Thoughts</span>
+              <div class="track-select-indicator"></div>
+            </div>
+            <div class="music-track-item" data-track="underwild-fairy">
+              <img src="ui/underwild-fairy.png" alt="Fairy" class="music-thumb">
+              <span class="music-name">Underwild - Fairy</span>
+              <div class="track-select-indicator"></div>
+            </div>
+            <div class="music-track-item" data-track="underwild-adventure">
+              <img src="ui/underwild-adventure.png" alt="Adventure" class="music-thumb">
+              <span class="music-name">Underwild - Adventure</span>
+              <div class="track-select-indicator"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+<div id="controlsOptionsMenu" class="menu-container hidden">
+     <div class="menu-background"></div>
+     <div class="menu-content">
+       <h1 class="menu-title">Controls</h1>
+       <div class="form-section">
+        <div class="option-group">
+           <label>Movement Controls</label>
+           <div class="controls-list">
+             <div class="keybind-row">
+               <span>Forward</span>
+               <button class="keybind-button" data-action="bind-forward" data-key="KeyW">W</button>
+             </div>
+             <div class="keybind-row">
+               <span>Backward</span>
+               <button class="keybind-button" data-action="bind-backward" data-key="KeyS">S</button>
+             </div>
+             <div class="keybind-row">
+               <span>Left</span>
+               <button class="keybind-button" data-action="bind-left" data-key="KeyA">A</button>
+             </div>
+             <div class="keybind-row">
+               <span>Right</span>
+               <button class="keybind-button" data-action="bind-right" data-key="KeyD">D</button>
+             </div>
+             <div class="keybind-row">
+               <span>Jump</span>
+               <button class="keybind-button" data-action="bind-jump" data-key="Space">Space</button>
+             </div>
+             <div class="keybind-row">
+               <span>Sprint</span>
+               <button class="keybind-button" data-action="bind-sprint" data-key="ShiftLeft">Shift</button>
+             </div>
+             <div class="keybind-row">
+               <span>Crouch</span>
+               <button class="keybind-button" data-action="bind-crouch" data-key="ControlLeft">Ctrl</button>
+             </div>
+           </div>
+         </div>
+         <div class="option-group">
+           <label>Game Controls</label>
+           <div class="controls-list">
+             <div class="keybind-row">
+               <span>Inventory</span>
+               <button class="keybind-button" data-action="bind-inventory" data-key="KeyE">E</button>
+             </div>
+             <div class="keybind-row">
+               <span>Chat/Commands</span>
+               <button class="keybind-button" data-action="bind-chat" data-key="KeyT">T</button>
+             </div>
+             <div class="keybind-row">
+               <span>Drop Item</span>
+               <button class="keybind-button" data-action="bind-drop" data-key="KeyQ">Q</button>
+             </div>
+             <div class="keybind-row">
+               <span>Pause</span>
+               <button class="keybind-button" data-action="bind-pause" data-key="Escape">Escape</button>
+             </div>
+           </div>
+         </div>
+         <div class="option-group">
+           <label>Building Controls</label>
+           <div class="controls-list">
+             <div class="keybind-row">
+               <span>Background Build</span>
+               <button class="keybind-button" data-action="bind-background" data-key="KeyZ">Z</button>
+             </div>
+             <div class="keybind-row">
+               <span>Rotate Block</span>
+               <button class="keybind-button" data-action="bind-rotate" data-key="KeyR">R</button>
+             </div>
+             <div class="keybind-row">
+               <span>Flip Block</span>
+               <button class="keybind-button" data-action="bind-flip" data-key="KeyF">F</button>
+             </div>
+           </div>
+         </div>
+       </div>
+       <div class="menu-buttons">
+         <button class="minecraft-button" data-action="apply-controls">Apply Changes</button>
+         <button class="minecraft-button" data-action="reset-controls">Reset to Defaults</button>
+         <button class="minecraft-button" data-action="back-to-options">Back</button>
+       </div>
+     </div>
+   </div>
+
+  <div id="advancedOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Advanced World Options</h1>
+      <div class="advanced-options-grid">
+        <div class="grid-column">
+          <div class="option-group">
+            <label>World Type:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="world-type-regular" data-selected="true">Regular</button>
+              <button class="minecraft-button small" data-action="world-type-superflat">Superflat</button>
+              <button class="minecraft-button small" data-action="world-type-mountains">Mountains</button>
+            </div>
+          </div>
+          <div class="option-group">
+            <label>World Size:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="world-size-tiny">Tiny</button>
+              <button class="minecraft-button small" data-action="world-size-small">Small</button>
+              <button class="minecraft-button small" data-action="world-size-normal" data-selected="true">Normal</button>
+              <button class="minecraft-button small" data-action="world-size-large">Large</button>
+            </div>
+          </div>
+          <div class="option-group">
+            <label>Difficulty:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="difficulty-peaceful">Peaceful</button>
+              <button class="minecraft-button small" data-action="difficulty-easy" data-selected="true">Easy</button>
+              <button class="minecraft-button small" data-action="difficulty-normal">Normal</button>
+              <button class="minecraft-button small" data-action="difficulty-hard">Hard</button>
+            </div>
+          </div>
+        </div>
+        <div class="grid-column">
+          <div class="option-group">
+            <label>Starting Time:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="time-day" data-selected="true">Day</button>
+              <button class="minecraft-button small" data-action="time-night">Night</button>
+              <button class="minecraft-button small" data-action="time-sunset">Sunset</button>
+              <button class="minecraft-button small" data-action="time-dawn">Dawn</button>
+            </div>
+          </div>
+          <div class="option-group">
+            <label>Generate Structures:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="structures-on" data-selected="true">ON</button>
+              <button class="minecraft-button small" data-action="structures-off">OFF</button>
+            </div>
+          </div>
+        </div>
+        <div class="grid-column">
+          <div class="option-group">
+            <label>Enable Cheats:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="cheats-on">ON</button>
+              <button class="minecraft-button small" data-action="cheats-off" data-selected="true">OFF</button>
+            </div>
+          </div>
+          <div class="option-group">
+            <label>Allow Commands:</label>
+            <div class="button-group">
+              <button class="minecraft-button small" data-action="commands-on">ON</button>
+              <button class="minecraft-button small" data-action="commands-off" data-selected="true">OFF</button>
+            </div>
+          </div>
+        </div>
+        <div class="grid-column">
+          <div class="option-group">
+            <label>Starting Health:</label>
+            <div class="button-grid health-selector">
+              <button class="minecraft-button small" data-action="start-health-1" data-value="1">1</button>
+              <button class="minecraft-button small" data-action="start-health-2" data-value="2">2</button>
+              <button class="minecraft-button small" data-action="start-health-3" data-value="3">3</button>
+              <button class="minecraft-button small" data-action="start-health-4" data-value="4">4</button>
+              <button class="minecraft-button small" data-action="start-health-5" data-value="5">5</button>
+              <button class="minecraft-button small" data-action="start-health-6" data-value="6">6</button>
+              <button class="minecraft-button small" data-action="start-health-7" data-value="7">7</button>
+              <button class="minecraft-button small" data-action="start-health-8" data-value="8">8</button>
+              <button class="minecraft-button small" data-action="start-health-9" data-value="9">9</button>
+              <button class="minecraft-button small" data-action="start-health-10" data-value="10">10</button>
+              <button class="minecraft-button small" data-action="start-health-11" data-value="11">11</button>
+              <button class="minecraft-button small" data-action="start-health-12" data-value="12">12</button>
+              <button class="minecraft-button small" data-action="start-health-13" data-value="13">13</button>
+              <button class="minecraft-button small" data-action="start-health-14" data-value="14">14</button>
+              <button class="minecraft-button small" data-action="start-health-15" data-value="15">15</button>
+            </div>
+          </div>
+          
+          <div class="option-group">
+            <label>Starting Hunger:</label>
+            <div class="button-grid hunger-selector">
+              <button class="minecraft-button small" data-action="start-hunger-1" data-value="1">1</button>
+              <button class="minecraft-button small" data-action="start-hunger-2" data-value="2">2</button>
+              <button class="minecraft-button small" data-action="start-hunger-3" data-value="3">3</button>
+              <button class="minecraft-button small" data-action="start-hunger-4" data-value="4">4</button>
+              <button class="minecraft-button small" data-action="start-hunger-5" data-value="5">5</button>
+              <button class="minecraft-button small" data-action="start-hunger-6" data-value="6">6</button>
+              <button class="minecraft-button small" data-action="start-hunger-7" data-value="7">7</button>
+              <button class="minecraft-button small" data-action="start-hunger-8" data-value="8">8</button>
+              <button class="minecraft-button small" data-action="start-hunger-9" data-value="9">9</button>
+              <button class="minecraft-button small" data-action="start-hunger-10" data-value="10">10</button>
+              <button class="minecraft-button small" data-action="start-hunger-11" data-value="11">11</button>
+              <button class="minecraft-button small" data-action="start-hunger-12" data-value="12">12</button>
+              <button class="minecraft-button small" data-action="start-hunger-13" data-value="13">13</button>
+              <button class="minecraft-button small" data-action="start-hunger-14" data-value="14">14</button>
+              <button class="minecraft-button small" data-action="start-hunger-15" data-value="15">15</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-create-world">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pauseMenu" class="menu-container hidden">
+    <div class="menu-background pause-bg"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Game Paused</h1>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="resume-game">Resume Game</button>
+        <button class="minecraft-button" data-action="pause-options">Options</button>
+        <button class="minecraft-button" data-action="pause-back-to-main">Back to Main Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Mods</h1>
+      <div class="mods-grid" id="modsGrid">
+        <div class="no-mods-message">
+          <p>No mods available</p>
+          <p style="font-size: 14px; color: #888;">WIP</p>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modDetailsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <div class="mod-header">
+        <img id="modThumbnail" class="mod-thumbnail" src="" alt="">
+        <div class="mod-info">
+          <h2 id="modName" class="mod-name"></h2>
+          <p id="modDescription" class="mod-description"></p>
+          <p id="modVersion" class="mod-version"></p>
+          <p id="modAuthor" class="mod-author"></p>
+        </div>
+      </div>
+      <div class="mod-actions">
+        <button id="modToggleButton" class="minecraft-button" data-action="toggle-mod">Enable Mod</button>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-mods">Back to Mods</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="changelogMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Info</h1>
+      <div class="info-tabs">
+        <button class="minecraft-button small info-tab" data-action="info-tab" data-tab="changelog" data-selected="true">Changelog</button>
+        <button class="minecraft-button small info-tab" data-action="info-tab" data-tab="credits">Credits</button>
+      </div>
+      <div class="info-panel" data-panel="changelog">
+        <div class="info-scroll">
+          <div class="info-section">
+            <div class="info-section-header">v0.1.0 — The Underwild Update</div>
+            <ul>
+              <li>Complete world generator rewrite — new biome distribution system</li>
+              <li>Added 6 ambient music tracks by man-o-valor</li>
+              <li>MovType font integration — custom pixel font across all UI</li>
+              <li>New block types: copper (and all its oxidation stages), mud, maple wood</li>
+              <li>Multiplayer support with dedicated server executable</li>
+              <li>Background block customization system</li>
+              <li>Falling leaf particles for birch and maple trees</li>
+              <li>Mod support framework with enable/disable toggling</li>
+              <li>Controls remapping — all keybinds are now customizable</li>
+              <li>Skin selection menu with multiple character skins</li>
+              <li>Fixed chunk loading stuttering when moving fast</li>
+              <li>Fixed lighting engine not updating after block placement</li>
+              <li>Fixed inventory desync in multiplayer sessions</li>
+              <li>Optimized render distance scaling for larger worlds</li>
+            </ul>
+          </div>
+          <div class="info-section">
+            <div class="info-section-header">v0.0.9 — Crafting & Copper</div>
+            <ul>
+              <li>Introduced crafting table UI with 3x3 grid</li>
+              <li>Added copper tools: sword, pickaxe, axe, shovel</li>
+              <li>Implemented tool durability and breaking</li>
+              <li>Added UI overlay effects for health, hunger, and status effects</li>
+              <li>New world generation option: superflat and mountains world types</li>
+              <li>Advanced world options menu with difficulty, time, and structure toggles</li>
+              <li>Background blocks now support custom block IDs</li>
+              <li>Improved chunk loading — reduced memory usage by 40%</li>
+              <li>Fixed crash when generating large worlds with structures</li>
+              <li>Added /spawn and /tp command support</li>
+            </ul>
+          </div>
+          <div class="info-section">
+            <div class="info-section-header">v0.0.8 — Multiplayer Alpha</div>
+            <ul>
+              <li>Multiplayer support via WebSocket connections</li>
+              <li>Dedicated server UI with world management</li>
+              <li>Player position syncing across clients</li>
+              <li>Block breaking and placement synced in real-time</li>
+              <li>Server-side world saving every 30 seconds</li>
+              <li>UPnP router tunneling support for easy hosting</li>
+              <li>Added player name tags above heads</li>
+              <li>Chat system with /command support</li>
+              <li>Fixed multiple memory leaks in the networking layer</li>
+              <li>Added server console with command input</li>
+            </ul>
+          </div>
+          <div class="info-section">
+            <div class="info-section-header">v0.0.7 — Worlds Take Shape</div>
+            <ul>
+              <li>Persistent world saving and loading to local files</li>
+              <li>Player health and hunger systems with UI indicators</li>
+              <li>Day/night cycle with smooth lighting transitions</li>
+              <li>Chunk-based world generation with trees and flowers</li>
+              <li>First-person block placing and breaking with raycasting</li>
+              <li>Hotbar selection and inventory management</li>
+              <li>Basic audio system with placeholder sound effects</li>
+              <li>Framerate-independent game loop</li>
+              <li>Window controls for Electron desktop mode</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="info-panel hidden" data-panel="credits">
+        <div class="info-scroll">
+          <div class="credits-content">
+            <div class="credits-author">
+              <img src="ui/mov.png" alt="man-o-valor" class="credits-avatar">
+              <span class="credits-name">man-o-valor</span>
+            </div>
+            <p><strong>MovType Font</strong> — MIT License</p>
+            <div class="license-text">
+              <p>Copyright (c) 2026 Man-o-Valor</p>
+              <p>Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:</p>
+              <p>The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.</p>
+              <p>THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
+      </div>
+    </div>
+  </div>
+
+   <!-- Skin Selection UI -->
+   <div id="skinMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Skins</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Select Skin:</label>
+          <div class="skins-grid" id="skinsGrid">
+            <!-- Skin selection buttons will be added dynamically -->
+          </div>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="apply-skin">Apply Skin</button>
+        <button class="minecraft-button" data-action="back-to-main-from-skin">Back</button>
+      </div>
+    </div>
+  </div>
+
+   <div id="dragging-item" class="dragging-item hidden"></div>
+   <script>
+     (function() {
+       const isElectron = typeof window !== 'undefined' && window.electronAPI && window.electronAPI.window;
+       if (!isElectron) {
+         document.getElementById('window-controls').style.display = 'none';
+         document.getElementById('drag-zone').style.display = 'none';
+         return;
+       }
+       document.getElementById('btn-minimize').addEventListener('click', () => window.electronAPI.window.minimize());
+       document.getElementById('btn-maximize').addEventListener('click', () => window.electronAPI.window.maximize());
+       document.getElementById('btn-close').addEventListener('click', () => window.electronAPI.window.close());
+     })();
+   </script>
+   <script type="module" src="script.js"></script>
 </body>
 </html>

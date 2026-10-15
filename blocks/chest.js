@@ -1,10 +1,12 @@
-export default {
-  id: 'chest',
-  displayName: 'Chest',
+export const isChest = (id) => typeof id === 'string' && id.endsWith('_chest');
+
+export const createChest = (id, displayName, color) => ({
+  id,
+  displayName,
   shape: 'full',
   solid: true,
-  color: '#b07d4e',
-  hardness: 1,
+  color,
+  hardness: 3,
   onPlace: function(world, x, y, meta) {
     const cell = world.getCell(x, y);
     if (!cell.meta) cell.meta = {};
@@ -19,7 +21,7 @@ export default {
     const cell = world.getCell(x, y);
     if (!cell.meta) cell.meta = {};
     
-    if (world.inBounds(x + 1, y) && world.getBlockId(x + 1, y) === 'chest') {
+    if (world.inBounds(x + 1, y) && world.getBlockId(x + 1, y) === this.id) {
       const rightCell = world.getCell(x + 1, y);
       if (!rightCell.meta || (!rightCell.meta.chestType || rightCell.meta.chestType === 'single')) {
         cell.meta.chestType = 'left';
@@ -55,7 +57,7 @@ export default {
       }
     }
     
-    if (world.inBounds(x - 1, y) && world.getBlockId(x - 1, y) === 'chest') {
+    if (world.inBounds(x - 1, y) && world.getBlockId(x - 1, y) === this.id) {
       const leftCell = world.getCell(x - 1, y);
       if (!leftCell.meta || (!leftCell.meta.chestType || leftCell.meta.chestType === 'single')) {
         if (!leftCell.meta) leftCell.meta = {};
@@ -107,37 +109,32 @@ export default {
     }
   },
   onBreak: function(world, x, y, meta) {
-    // Preserve the inventory data when breaking the chest
-    // The inventory data will be handled in the breaking logic in script.js
     if (meta && meta.chestType) {
       if (meta.chestType === 'left') {
-        if (world.inBounds(x + 1, y) && world.getBlockId(x + 1, y) === 'chest') {
+        if (world.inBounds(x + 1, y) && world.getBlockId(x + 1, y) === this.id) {
           const rightCell = world.getCell(x + 1, y);
           if (rightCell.meta && rightCell.meta.chestType === 'right') {
             rightCell.meta.chestType = 'single';
             if (meta.inv && meta.inv.length === 54) {
+              rightCell.meta.inv = meta.inv.slice(27);
+              meta.inv = meta.inv.slice(0, 27);
+            } else {
               rightCell.meta.inv = new Array(27).fill(null);
-              for (let i = 0; i < 27; i++) {
-                rightCell.meta.inv[i] = meta.inv[i + 27];
-              }
             }
           }
         }
       } else if (meta.chestType === 'right') {
-        if (world.inBounds(x - 1, y) && world.getBlockId(x - 1, y) === 'chest') {
+        if (world.inBounds(x - 1, y) && world.getBlockId(x - 1, y) === this.id) {
           const leftCell = world.getCell(x - 1, y);
           if (leftCell.meta && leftCell.meta.chestType === 'left') {
             leftCell.meta.chestType = 'single';
             if (leftCell.meta.inv && leftCell.meta.inv.length === 54) {
-              const singleInv = new Array(27).fill(null);
-              for (let i = 0; i < 27; i++) {
-                singleInv[i] = leftCell.meta.inv[i];
-              }
-              leftCell.meta.inv = singleInv;
+              meta.inv = leftCell.meta.inv.slice(27);
+              leftCell.meta.inv = leftCell.meta.inv.slice(0, 27);
             }
           }
         }
       }
     }
   }
-};
+});

@@ -3,6 +3,12 @@ export default {
   displayName: 'Crafting Table',
   shape: 'full',
   solid: true,
-  color: '#806040',
-  hardness: 2
+  color: '#8B4513',
+  texture: 'crafting_table.png',
+  hardness: 2.5,
+  lightLevel: 0,
+  maxStack: 64,
+  canPlaceOnGround: true,
+  canPlaceOn: true,
+  tick: null
 };

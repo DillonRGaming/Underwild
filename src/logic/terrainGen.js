@@ -1,4 +1,5 @@
-// Perlin noise implementation
+import { treeChanceAt, biomeTreeKind, biomePlantAt, isTreeSlot, BUSH_SIZES, rockMeta } from './biomes.js';
+
 function fade(t) {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
@@ -14,34 +15,26 @@ function grad(hash, x, y) {
   return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
 }
 
-// Fixed permutation table
-function createPermutation(seed) {
-  const permutation = [];
-  for (let i = 0; i < 256; i++) {
-    permutation[i] = i;
-  }
+const permutationCache = new Map();
 
-  // Shuffle the permutation array using the seed
+function createPermutation(seed) {
+  const p = new Array(256).fill(0).map((_, i) => i);
   for (let i = 255; i > 0; i--) {
-    // Simple seeded random shuffle
     const j = Math.floor(hash32(i + seed * 1000) * (i + 1));
-    [permutation[i], permutation[j]] = [permutation[j], permutation[i]];
+    [p[i], p[j]] = [p[j], p[i]];
   }
-  
-  return permutation;
+  const p2 = p.concat(p);
+  permutationCache.set(seed, p2);
+  return p2;
 }
 
+function getPermutation(seed) {
+  return permutationCache.get(seed) || createPermutation(seed);
+}
 
 function perlinNoise(x, y, seed) {
-  // Create permutation table based on seed
-  const permutation = createPermutation(seed);
-  // Duplicate the permutation array for easier indexing
-  const p = new Array(512);
-  for (let i = 0; i < 256; i++) {
-    p[i] = p[i + 256] = permutation[i];
-  }
+  const p = getPermutation(seed);
   
-  // Apply seed by adding it to coordinates
   x += seed * 1000;
   y += seed * 1000;
   
@@ -93,313 +86,411 @@ function rand01From(x, seed) {
   return hash32(Math.floor(x) + seed * 733);
 }
 
-export function generateTerrain(world, { seed = 1234 } = {}) {
-  const HEIGHT = world.height;
-  const BASE = 50 + Math.floor(rand01From(seed, seed) * 10); // Ground level between 50-60
+const MAX_TREE_INFLUENCE = 10;
 
-  function heightAt(x) {
-    // Use Perlin noise for more natural terrain
-    const noise1 = perlinNoise(x * 0.01, 0, seed) * 15;
-    const noise2 = perlinNoise(x * 0.03, 0, seed * 2) * 8;
-    const noise3 = perlinNoise(x * 0.08, 0, seed * 3) * 4;
-    const mountain = perlinNoise(x * 0.005, 0, seed * 4) * 30;
-    const h = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-    return clamp(h, 6, HEIGHT - 4);
+function heightAtGen(xLocal, seedLocal, HEIGHT) {
+  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
+  const noise1 = perlinNoise(xLocal * 0.01, 0, seedLocal) * 25;
+  const noise2 = perlinNoise(xLocal * 0.03, 0, seedLocal * 2) * 12;
+  const noise3 = perlinNoise(xLocal * 0.08, 0, seedLocal * 3) * 6;
+  const mountain = perlinNoise(xLocal * 0.005, 0, seedLocal * 4) * 40;
+  const h = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+  return clamp(h, 6, HEIGHT - 4);
+}
+
+const TREE_CHANCE = 0.45;
+// A roll inside each tree type's range in treeBlockFor's plain mix.
+const TREE_KIND_ROLL = { maple: 0.05, oak: 0.25, big_oak: 0.25, birch: 0.5, spruce: 0.7, pine: 0.9 };
+
+function treeChance(x, seed) {
+  return treeChanceAt(x, seed) ?? TREE_CHANCE;
+}
+
+// Big trees drawn as ASCII art ('#' = leaves), centred on the trunk. `visible` is how
+// many trunk blocks show below the crown; the trunk runs up into the crown's lower part.
+function artTreeBlock(shape, centerX, x, y, top, logType, leavesType) {
+  const art = shape.art;
+  const crownBottom = top - shape.visible - 1;
+  const crownTop = crownBottom - art.length + 1;
+  if (crownTop < 2) return null;
+  const trunkTop = crownTop + Math.floor(art.length * 0.45);
+  if (x === centerX && y < top && y >= trunkTop) return { id: logType, meta: { noCollision: true } };
+  const row = y - crownTop;
+  if (row < 0 || row >= art.length) return null;
+  const col = x - centerX + (art[row].length >> 1);
+  if (art[row][col] === '#') return { id: leavesType, meta: { noCollision: true } };
+  return null;
+}
+
+// Five shapes per tree type so forests don't look copy-pasted. Each row is
+// [dy, left, right]: leaves span centerX-left..centerX+right at leafStart+dy,
+// where leafStart = ground - trunk. Keep left/right <= 3 so trees never touch
+// (big_oak uses wider slots; see treeLayout in biomes.js).
+const TREE_SHAPES = {
+  // Broad, lumpy-edged oaks (up to 7 out from the trunk) for the Forest and Meadow.
+  big_oak: [
+    { visible: 3, art: [
+      '.....##.###....',
+      '...#########...',
+      '.############..',
+      '##############.',
+      '###############',
+      '###############',
+      '.##############',
+      '..############.',
+      '....###..###...'] },
+    { visible: 4, art: [
+      '....###..##....',
+      '..##########...',
+      '.#############.',
+      '###############',
+      '###############',
+      '###############',
+      '.#############.',
+      '...##.....##...'] },
+    { visible: 3, art: [
+      '......###......',
+      '....#######....',
+      '..##########...',
+      '.############..',
+      '##############.',
+      '###############',
+      '###############',
+      '.#############.',
+      '..###########..',
+      '....##...##....'] },
+    { visible: 3, art: [
+      '......####.....',
+      '...##########..',
+      '..############.',
+      '.##############',
+      '###############',
+      '###############',
+      '..#############',
+      '....#########..',
+      '......##..##...'] },
+    { visible: 4, art: [
+      '..###....###...',
+      '.#####..#####..',
+      '##############.',
+      '###############',
+      '###############',
+      '.##############',
+      '..############.',
+      '...####..####..'] }
+  ],
+  oak: [
+    { trunk: 5, rows: [[-3, 1, 1], [-2, 2, 2], [-1, 3, 2], [0, 3, 3], [1, 2, 3], [2, 2, 2], [3, 1, 1]] },
+    { trunk: 4, rows: [[-2, 2, 2], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 2, 2]] },
+    { trunk: 6, rows: [[-4, 1, 1], [-3, 2, 2], [-2, 2, 3], [-1, 3, 3], [0, 3, 2], [1, 2, 2], [2, 1, 1]] },
+    { trunk: 5, rows: [[-3, 1, 2], [-2, 2, 3], [-1, 2, 3], [0, 3, 3], [1, 2, 2], [2, 1, 1]] },
+    { trunk: 4, rows: [[-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 2, 2], [2, 1, 1]] }
+  ],
+  // Aspen-like: long bare white trunk, slim teardrop crown widest low down.
+  birch: [
+    { trunk: 11, rows: [[-3, 0, 0], [-2, 1, 1], [-1, 1, 1], [0, 1, 1], [1, 2, 1], [2, 2, 2], [3, 2, 2], [4, 2, 2], [5, 2, 2], [6, 1, 2], [7, 1, 1]] },
+    { trunk: 10, rows: [[-2, 0, 0], [-1, 1, 1], [0, 1, 1], [1, 1, 2], [2, 2, 2], [3, 2, 2], [4, 2, 2], [5, 1, 1], [6, 1, 1]] },
+    { trunk: 12, rows: [[-3, 0, 0], [-2, 0, 0], [-1, 1, 1], [0, 1, 1], [1, 1, 1], [2, 2, 1], [3, 2, 2], [4, 2, 2], [5, 2, 2], [6, 2, 2], [7, 1, 1], [8, 1, 1]] },
+    { trunk: 9, rows: [[-2, 0, 0], [-1, 1, 1], [0, 1, 1], [1, 2, 2], [2, 2, 2], [3, 2, 2], [4, 1, 1], [5, 1, 1]] },
+    { trunk: 11, rows: [[-2, 0, 0], [-1, 1, 0], [0, 1, 1], [1, 1, 1], [2, 1, 2], [3, 2, 2], [4, 2, 2], [5, 2, 1], [6, 1, 1], [7, 1, 1]] }
+  ],
+  spruce: [
+    { trunk: 6, rows: [[-6, 0, 0], [-5, 1, 1], [-4, 1, 1], [-3, 2, 2], [-2, 2, 2], [-1, 3, 3], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
+    { trunk: 5, rows: [[-5, 0, 0], [-4, 1, 1], [-3, 2, 2], [-2, 1, 1], [-1, 2, 2], [0, 3, 3], [1, 1, 1]] },
+    { trunk: 7, rows: [[-7, 0, 0], [-6, 1, 1], [-5, 1, 1], [-4, 2, 2], [-3, 1, 1], [-2, 2, 2], [-1, 3, 3], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
+    { trunk: 6, rows: [[-5, 0, 0], [-4, 1, 1], [-3, 1, 1], [-2, 2, 2], [-1, 2, 2], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
+    { trunk: 8, rows: [[-7, 0, 0], [-6, 1, 1], [-5, 1, 1], [-4, 1, 1], [-3, 2, 2], [-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 1, 1]] }
+  ],
+  // Pines: tall bare trunks with a crown bunched near the top.
+  pine: [
+    { trunk: 8, rows: [[-4, 0, 0], [-3, 1, 1], [-2, 2, 2], [-1, 2, 2], [0, 1, 1], [1, 2, 2], [2, 1, 1]] },
+    { trunk: 9, rows: [[-3, 0, 0], [-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 1, 1], [2, 2, 2], [3, 1, 1]] },
+    { trunk: 7, rows: [[-4, 0, 0], [-3, 1, 1], [-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
+    { trunk: 8, rows: [[-3, 1, 1], [-2, 2, 1], [-1, 2, 2], [0, 1, 2], [1, 2, 2], [2, 1, 1]] },
+    { trunk: 9, rows: [[-5, 0, 0], [-4, 1, 1], [-3, 1, 1], [-2, 2, 2], [-1, 1, 1], [0, 2, 2], [1, 2, 2], [2, 1, 1]] }
+  ],
+  maple: [
+    { trunk: 8, rows: [[-4, 1, 1], [-3, 2, 2], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 3, 3], [3, 2, 2], [4, 1, 1]] },
+    { trunk: 7, rows: [[-3, 2, 2], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 3, 2], [3, 2, 2], [4, 1, 1]] },
+    { trunk: 9, rows: [[-5, 1, 1], [-4, 2, 2], [-3, 3, 3], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 2, 3], [2, 2, 2], [3, 1, 1]] },
+    { trunk: 8, rows: [[-4, 1, 2], [-3, 2, 3], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 3, 2], [2, 2, 2], [3, 2, 1], [4, 1, 1]] },
+    { trunk: 7, rows: [[-3, 1, 1], [-2, 2, 2], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 2, 2], [3, 2, 2], [4, 1, 1]] }
+  ]
+};
+
+function isTreeCenterAt(xCenter, seedLocal, worldWidth, HEIGHT, worldType = 'regular') {
+  if (xCenter < 2 || xCenter > worldWidth - 3) return false;
+  
+  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
+  let top;
+  
+  if (worldType === 'mountains') {
+    const noise1 = perlinNoise(xCenter * 0.01, 0, seedLocal) * 25;
+    const noise2 = perlinNoise(xCenter * 0.03, 0, seedLocal * 2) * 15;
+    const noise3 = perlinNoise(xCenter * 0.08, 0, seedLocal * 3) * 8;
+    const mountain = perlinNoise(xCenter * 0.005, 0, seedLocal * 4) * 80;
+    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+    top = clamp(top, 6, HEIGHT - 4);
+  } else {
+    const noise1 = perlinNoise(xCenter * 0.01, 0, seedLocal) * 25;
+    const noise2 = perlinNoise(xCenter * 0.03, 0, seedLocal * 2) * 12;
+    const noise3 = perlinNoise(xCenter * 0.08, 0, seedLocal * 3) * 6;
+    const mountain = perlinNoise(xCenter * 0.005, 0, seedLocal * 4) * 40;
+    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+    top = clamp(top, 6, HEIGHT - 4);
   }
+  
+  const slopeTolerance = worldType === 'mountains' ? 8 : 3;
+  
+  const leftTop = heightAtGen(xCenter - 1, seedLocal, HEIGHT);
+  const rightTop = heightAtGen(xCenter + 1, seedLocal, HEIGHT);
+  const slope = Math.abs(leftTop - top) + Math.abs(rightTop - top);
+  if (slope > slopeTolerance) return false;
 
-  function generateCaves(x, y, h) {
-    if (y <= h + 1) return false;
-    
-    // Use Perlin noise for cave generation
-    const caveNoise = perlinNoise(x * 0.05, y * 0.05, seed + 311);
-    const depthFactor = Math.min(1, (y - (h + 1)) / 20);
-    const threshold = 0.3 + 0.2 * depthFactor;
-    
-    return caveNoise > threshold;
+  if (!isTreeSlot(xCenter, seedLocal, n => rand01From(n, seedLocal))) return false;
+  if (rand01From(xCenter * 991 + 5, seedLocal) >= treeChance(xCenter, seedLocal)) return false;
+
+  return true;
+}
+
+function treeBlockFor(centerX, x, y, seedLocal, worldWidth, worldHeight, HEIGHT, worldType = 'regular') {
+  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
+  let top;
+  
+  if (worldType === 'mountains') {
+    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
+    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 15;
+    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 8;
+    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 80;
+    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+    top = clamp(top, 6, HEIGHT - 4);
+  } else {
+    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
+    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 12;
+    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 6;
+    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 40;
+    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+    top = clamp(top, 6, HEIGHT - 4);
   }
+  
+  let treeTypeNoise = rand01From(centerX * 17.3, seedLocal);
+  const biomeKind = biomeTreeKind(centerX, seedLocal, treeTypeNoise);
+  if (biomeKind) treeTypeNoise = TREE_KIND_ROLL[biomeKind];
+  let logType = 'oak_log';
+  let leavesType = 'oak_leaves';
+  let leafPattern = 'oak';
 
-  function generateOre(x, y, h, oreType, rarity, minHeight, maxHeight) {
-    if (y < minHeight || y > Math.min(h - 1, maxHeight)) return false;
-    
-    const oreNoise = perlinNoise(x * 0.3, y * 0.3, seed + 1000 + rarity * 100);
-    return oreNoise > (1 - rarity * 0.05);
-  }
-
-  function generateGravel(x, y, h) {
-    const gravelNoise = perlinNoise(x * 0.8, y * 0.8, seed + 800);
-    // Place gravel both above and below ground, more frequently underground
-    if (y < h) {
-      // Underground gravel - more common
-      return gravelNoise > 0.4 && y > 5 && y < HEIGHT - 5;
+  if (treeTypeNoise < 0.1) {
+    logType = 'maple_log';
+    const leafColorNoise = rand01From(centerX * 23.7, seedLocal);
+    if (leafColorNoise < 0.33) {
+      leavesType = 'maple_green_leaves';
+    } else if (leafColorNoise < 0.66) {
+      leavesType = 'maple_orange_leaves';
     } else {
-      // Surface gravel - less common
-      return gravelNoise > 0.7 && y > h + 3 && y < HEIGHT - 5;
+      leavesType = 'maple_red_leaves';
     }
+    leafPattern = 'maple';
+  } else if (treeTypeNoise < 0.4) {
+    logType = 'oak_log';
+    leavesType = 'oak_leaves';
+    leafPattern = 'oak';
+  } else if (treeTypeNoise < 0.6) {
+    logType = 'birch_log';
+    leavesType = 'birch_leaves';
+    leafPattern = 'birch';
+  } else if (treeTypeNoise < 0.8) {
+    logType = 'spruce_log';
+    leavesType = 'spruce_leaves';
+    leafPattern = 'spruce';
+  } else {
+    logType = 'pine_log';
+    leavesType = 'pine_leaves';
+    leafPattern = 'pine';
   }
 
-  function isBeach(x, y) {
-    const beachNoise = perlinNoise(x * 0.03, 0, seed + 500);
-    const beachThresholdY = BASE + 5;
-    return beachNoise > 0.6 && y < beachThresholdY;
+  if (biomeKind === 'big_oak') leafPattern = 'big_oak';
+  const shapes = TREE_SHAPES[leafPattern];
+  const shape = shapes[Math.floor(rand01From(centerX * 41.7, seedLocal + 13) * shapes.length) % shapes.length];
+  if (shape.art) return artTreeBlock(shape, centerX, x, y, top, logType, leavesType);
+  const trunk = shape.trunk;
+  const leafStartY = top - trunk;
+  const rows = shape.rows;
+  if (leafStartY + rows[0][0] < 2 || leafStartY + rows[rows.length - 1][0] >= top) return null;
+
+  if (x === centerX && y < top && y >= top - trunk) {
+    const id = y === top - 1 && logType === 'birch_log' ? 'birch_log_base' : logType;
+    return { id, meta: { noCollision: true } };
   }
 
-  for (let x = 0; x < world.width; x++) {
-    const h = heightAt(x);
-    
-    for (let y = 0; y < HEIGHT; y++) {
-      const beach = isBeach(x, y);
-      if (y >= HEIGHT - 2) {
-        world.setBlock(x, y, 'bedrock');
-      } else if (y < h) {
-        world.setBlock(x, y, 'air');
-      } else if (y === h) {
-        if (beach) {
-          world.setBlock(x, y, 'sand');
-        } else {
-          world.setBlock(x, y, 'grass');
-        }
-      } else if (y <= h + (4 + Math.floor(rand01From(x, seed) * 2))) {
-        if (beach && y <= h + 2) {
-          world.setBlock(x, y, 'sand');
-        } else {
-          const dirtType = rand01From(x * y + seed, seed + y);
-          if (dirtType < 0.2) {
-            world.setBlock(x, y, 'coarse_dirt');
-          } else if (dirtType < 0.4) {
-            world.setBlock(x, y, 'mud');
-          } else {
-            world.setBlock(x, y, 'dirt');
-          }
-        }
-      } else {
-        if (generateGravel(x, y, h)) {
-          world.setBlock(x, y, 'gravel');
-        } else if (generateOre(x, y, h, 'diamond', 1, 30, HEIGHT - 20)) {
-          world.setBlock(x, y, 'diamond');
-        } else if (generateOre(x, y, h, 'gold', 3, 20, HEIGHT - 15)) {
-          world.setBlock(x, y, 'gold');
-        } else if (generateOre(x, y, h, 'iron', 5, 15, HEIGHT - 10)) {
-          world.setBlock(x, y, 'iron');
-        } else if (generateOre(x, y, h, 'coal', 8, 10, HEIGHT - 5)) {
-          world.setBlock(x, y, 'coal');
-        } else {
-          world.setBlock(x, y, 'stone');
-        }
-      }
-    }
+  const dx = x - centerX;
+  for (const [dy, left, right] of rows) {
+    if (y !== leafStartY + dy) continue;
+    if (dx >= -left && dx <= right) return { id: leavesType, meta: { noCollision: true } };
+    break;
+  }
+  return null;
+}
+
+function generateCaves(x, y, h, seed) {
+  if (y <= h) return false;
+
+  const depth = y - h;
+  if (depth > 55) return false;
+  if (depth < 15) return false;
+
+  const sx = x * 0.02;
+  const sy = y * 0.02;
+  const n1 = perlinNoise(sx, sy, seed + 2000);
+  const n2 = perlinNoise(sx * 1.5 + 50, sy * 1.2 + 30, seed + 3000);
+  const n3 = perlinNoise(sx * 0.7 - 20, sy * 0.8 + 10, seed + 4000);
+
+  const val = n1 * 0.5 + n2 * 0.3 + n3 * 0.2;
+
+  if (depth < 25) {
+    return val > 0.15;
+  }
+  if (depth < 45) {
+    return val > 0.1;
+  }
+  return val > 0.12;
+}
+
+const DEFAULT_SUPERFLAT_LAYERS = [
+  { blockId: 'grass', height: 1 },
+  { blockId: 'dirt', height: 3 },
+  { blockId: 'stone', height: Infinity }
+];
+
+function superflatVegetation(x, seed) {
+  if (rand01From(x * 1007, seed) > 0.6) return null;
+  if (rand01From(x * 1009, seed) < 0.6) {
+    const choose = rand01From(x * 1011, seed);
+    if (choose < 0.15) return 'fern';
+    if (choose < 0.4) return 'flower_short_grass';
+    return 'short_grass';
+  }
+  return rand01From(x * 1013, seed) < 0.4 ? 'poppy' : 'flower_short_grass';
+}
+
+function sampleSuperflat(x, y, seed, HEIGHT, surfaceY, superflatLayers) {
+  const custom = Array.isArray(superflatLayers) && superflatLayers.length > 0;
+  if (!custom && y >= HEIGHT - 2) return { id: 'bedrock', meta: null };
+
+  const layers = custom ? superflatLayers : DEFAULT_SUPERFLAT_LAYERS;
+  if (y === surfaceY - 1 && layers[0]?.blockId === 'grass') {
+    const plant = superflatVegetation(x, seed);
+    return { id: plant || 'air', meta: null };
+  }
+  if (y < surfaceY) return { id: 'air', meta: null };
+
+  let depth = y - surfaceY;
+  for (const layer of layers) {
+    const height = Math.max(0, Number(layer.height) || 0);
+    if (depth < height) return { id: layer.blockId || 'air', meta: null };
+    depth -= height;
+  }
+  return { id: 'air', meta: null };
+}
+
+export function naturalHeightAt(x, seed, worldHeight, worldType = 'regular') {
+  const BASE = 50 + Math.floor(rand01From(seed, seed) * 10);
+  if (worldType === 'superflat') return BASE;
+  const mountains = worldType === 'mountains';
+  const noise1 = perlinNoise(x * 0.01, 0, seed) * 25;
+  const noise2 = perlinNoise(x * 0.03, 0, seed * 2) * (mountains ? 15 : 12);
+  const noise3 = perlinNoise(x * 0.08, 0, seed * 3) * (mountains ? 8 : 6);
+  const mountain = perlinNoise(x * 0.005, 0, seed * 4) * (mountains ? 80 : 40);
+  const h = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+  return clamp(h, 6, worldHeight - 4);
+}
+
+export function naturalDirtDepthAt(x, seed, worldType = 'regular') {
+  return worldType === 'mountains' ? 8 + Math.floor(rand01From(x, seed) * 4) : 4 + Math.floor(rand01From(x, seed) * 2);
+}
+
+export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = 'regular', superflatLayers = null) {
+  const HEIGHT = worldHeight;
+  const BASE = 50 + Math.floor(rand01From(seed, seed) * 10);
+
+  function heightAtLocal(xLocal) {
+    return naturalHeightAt(xLocal, seed, worldHeight, worldType);
   }
 
-  function tryPlaceTree(x, topY) {
-    if (x < 2 || x > world.width - 3 || topY < 5) return false;
-    if (isBeach(x)) return false;
-    
-    const treeTypeNoise = rand01From(x * 17.3, seed);
-    let logType = 'oak_log';
-    let leavesType = 'oak_leaves';
-    let trunkHeight, leafPattern;
-    
-    // Add maple trees (10% chance)
-    if (treeTypeNoise < 0.1) {
-      logType = 'maple_log';
-      // Choose a random maple leaf color for the entire tree
-      const leafColorNoise = rand01From(x * 23.7, seed);
-      if (leafColorNoise < 0.33) {
-        leavesType = 'maple_green_leaves';
-      } else if (leafColorNoise < 0.66) {
-        leavesType = 'maple_orange_leaves';
-      } else {
-        leavesType = 'maple_red_leaves';
-      }
-      trunkHeight = 5 + Math.floor(rand01From(x * 13.7, seed) * 4);
-      leafPattern = 'maple';
-    } else if (treeTypeNoise < 0.4) {
-      logType = 'oak_log';
-      leavesType = 'oak_leaves';
-      trunkHeight = 4 + Math.floor(rand01From(x * 13.7, seed) * 3);
-      leafPattern = 'oak';
-    } else if (treeTypeNoise < 0.7) {
-      logType = 'birch_log';
-      leavesType = 'birch_leaves';
-      trunkHeight = 6 + Math.floor(rand01From(x * 13.7, seed) * 3);
-      leafPattern = 'birch';
+  function generateGravelLocal(xLocal, yLocal, h, HEIGHT, BASE) {
+    const gravelNoise = perlinNoise(xLocal * 0.8, yLocal * 0.8, seed + 800);
+    if (yLocal < h) {
+      return gravelNoise > 0.4 && yLocal > 5 && yLocal < HEIGHT - 5;
     } else {
-      logType = 'spruce_log';
-      leavesType = 'spruce_leaves';
-      trunkHeight = 3 + Math.floor(rand01From(x * 13.7, seed) * 3);
-      leafPattern = 'spruce';
+      return gravelNoise > 0.7 && yLocal > h + 3 && yLocal < HEIGHT - 5;
     }
-    
-    for (let i = 1; i <= trunkHeight + 1; i++) {
-      const ty = topY - i;
-      if (ty <= 0) return false;
-      const id = world.getBlockId(x, ty);
-      if (id !== 'air') return false;
-    }
-    for (let i = 1; i <= trunkHeight; i++) {
-      const ty = topY - i;
-      world.setBlock(x, ty, logType, { layer: 'bg' });
-    }
-    const cy = topY - trunkHeight;
-    
-    if (leafPattern === 'oak') {
-      const baseR = 3 + Math.floor(rand01From(x * 41.9, seed) * 2);
-      for (let dy = -baseR; dy <= baseR; dy++) {
-        for (let dx = -baseR; dx <= baseR; dx++) {
-          const tx = x + dx;
-          const ty = cy + dy;
-          if (!world.inBounds(tx, ty)) continue;
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d <= baseR) {
-            if (rand01From((tx + ty) * 13.7, seed) < 0.7) {
-              const id = world.getBlockId(tx, ty);
-              if (id === 'air') {
-                // Add rotation metadata to naturally generated leaves
-                const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
-                world.setBlock(tx, ty, leavesType, { layer: 'bg', rotation });
-              }
-            }
-          }
-        }
-      }
-      for (let i = 0; i < 5; i++) {
-        const dx = Math.floor(rand01From((x + i) * 17.3, seed) * 5) - 2;
-        const dy = Math.floor(rand01From((x + i) * 19.7, seed) * 3) - 3;
-        const tx = x + dx;
-        const ty = cy + dy;
-        if (world.inBounds(tx, ty) && world.getBlockId(tx, ty) === 'air') {
-          // Add rotation metadata to naturally generated leaves
-          const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
-          world.setBlock(tx, ty, leavesType, { rotation });
-        }
-      }
-    } else if (leafPattern === 'birch') {
-      const height = 6 + Math.floor(rand01From(x * 41.9, seed) * 3);
-      for (let dy = -height; dy <= 1; dy++) {
-        const ty = cy + dy;
-        const radius = Math.max(0, 2 - Math.floor(Math.abs(dy) / 3));
-        for (let dx = -radius; dx <= radius; dx++) {
-          const tx = x + dx;
-          if (!world.inBounds(tx, ty)) continue;
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d <= radius) {
-            const id = world.getBlockId(tx, ty);
-            if (id === 'air') {
-              // Add rotation metadata to naturally generated leaves
-              const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
-              world.setBlock(tx, ty, leavesType, { rotation });
-            }
-          }
-        }
-      }
-    } else if (leafPattern === 'spruce') {
-      const layers = 3 + Math.floor(rand01From(x * 41.9, seed) * 2);
-      for (let layer = 0; layer < layers; layer++) {
-        const dy = -layer - 1;
-        const ty = cy + dy;
-        const radius = Math.max(0, layers - layer - 1);
-        for (let dx = -radius; dx <= radius; dx++) {
-          const tx = x + dx;
-          if (!world.inBounds(tx, ty)) continue;
-          const d = Math.abs(dx);
-          if (d <= radius) {
-            const id = world.getBlockId(tx, ty);
-            if (id === 'air') {
-              // Add rotation metadata to naturally generated leaves
-              const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
-              world.setBlock(tx, ty, leavesType, { rotation });
-            }
-          }
-        }
-      }
-      // Add some random leaves around the tree for a fuller look
-      for (let i = 0; i < 5; i++) {
-        const dx = Math.floor(rand01From((x + i) * 17.3, seed) * 3) - 1;
-        const dy = Math.floor(rand01From((x + i) * 19.7, seed) * 3) - 2;
-        const tx = x + dx;
-        const ty = cy + dy;
-        if (world.inBounds(tx, ty) && world.getBlockId(tx, ty) === 'air') {
-          // Add rotation metadata to naturally generated leaves
-          const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
-          world.setBlock(tx, ty, leavesType, { rotation });
-        }
-      }
-    } else if (leafPattern === 'maple') {
-      // Improved maple tree with more natural shape
-      const baseR = 2 + Math.floor(rand01From(x * 41.9, seed) * 3);
-      for (let layer = 0; layer < 4; layer++) {
-        const dy = -layer - 1;
-        const ty = cy + dy;
-        // Vary the radius for each layer to create a more natural shape
-        const radius = Math.max(0, baseR - Math.floor(layer / 2));
-        for (let dx = -radius; dx <= radius; dx++) {
-          const tx = x + dx;
-          if (!world.inBounds(tx, ty)) continue;
-          const d = Math.abs(dx);
-          if (d <= radius) {
-            const id = world.getBlockId(tx, ty);
-            if (id === 'air') {
-              // Add rotation metadata to naturally generated leaves
-              const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
-              world.setBlock(tx, ty, leavesType, { rotation });
-            }
-          }
-        }
-      }
-      // Add some random leaves around the tree for a fuller look
-      for (let i = 0; i < 8; i++) {
-        const dx = Math.floor(rand01From((x + i) * 17.3, seed) * 5) - 2;
-        const dy = Math.floor(rand01From((x + i) * 19.7, seed) * 4) - 2;
-        const tx = x + dx;
-        const ty = cy + dy;
-        if (world.inBounds(tx, ty) && world.getBlockId(tx, ty) === 'air') {
-          // Add rotation metadata to naturally generated leaves
-          const rotation = Math.floor(rand01From((tx + ty) * 17.3, seed) * 4) * Math.PI / 2;
-          world.setBlock(tx, ty, leavesType, { rotation });
-        }
-      }
-    }
-    
-    
-    return true;
   }
 
-  let nextTreeAllowedX = -9999;
-  for (let x = 2; x < world.width - 2; x++) {
-    if (x < nextTreeAllowedX) continue;
-    const top = heightAt(x);
-    if (world.getBlockId(x, top) !== 'grass') continue;
-    const slope = Math.abs(heightAt(x - 1) - top) + Math.abs(heightAt(x + 1) - top);
-    if (slope > 2) continue;
-    
-    const grassRand = rand01From(x * 1009, seed);
-    if (grassRand < 0.5) {
-      if (world.inBounds(x, top - 1) && world.getBlockId(x, top - 1) === 'air') {
-        // Randomly choose between short grass and fern
-        if (rand01From(x * 1011, seed) < 0.3) {
-          world.setBlock(x, top - 1, 'fern');
-        } else {
-          world.setBlock(x, top - 1, 'short_grass');
-        }
-      }
-    }
-    
-    const flowerRand = rand01From(x * 1013, seed);
-    if (flowerRand < 0.05) {
-      if (world.inBounds(x, top - 1) && world.getBlockId(x, top - 1) === 'air') {
-        world.setBlock(x, top - 1, 'poppy');
-      }
-    }
-    
-    const r = rand01From(x * 997, seed);
-    if (r < 0.15) {
-      if (tryPlaceTree(x, top)) {
-        const spacing = 5 + Math.floor(rand01From(x * 131, seed) * 10);
-        nextTreeAllowedX = x + spacing;
-      }
+  const h = heightAtLocal(x);
+  
+  if (worldType === 'superflat') {
+    return sampleSuperflat(x, y, seed, HEIGHT, BASE, superflatLayers);
+  }
+
+  for (let cx = x - MAX_TREE_INFLUENCE; cx <= x + MAX_TREE_INFLUENCE; cx++) {
+    if (cx < 0 || cx >= worldWidth) continue;
+    if (!isTreeCenterAt(cx, seed, worldWidth, HEIGHT, worldType)) continue;
+    const tb = treeBlockFor(cx, x, y, seed, worldWidth, worldHeight, HEIGHT, worldType);
+    if (tb) {
+      return { id: tb.id, meta: tb.meta ?? null };
     }
   }
   
-  // Calculate lighting after terrain generation
-  world.calculateSkyLight();
-  world.propagateLight();
+  const vegetation = generateVegetationAt(x, y, h, seed);
+  if (vegetation) return vegetation;
+
+  if (y >= HEIGHT - 2) {
+    return { id: 'bedrock', meta: null };
+  } else if (y < h) {
+    return { id: 'air', meta: null };
+  } else if (y === h) {
+    return { id: 'grass', meta: null };
+  } else if (y <= h + (worldType === 'mountains' ? 8 + Math.floor(rand01From(x, seed) * 4) : 4 + Math.floor(rand01From(x, seed) * 2))) {
+    const dirtType = rand01From(x * y + seed, seed + y);
+    return { id: dirtType < 0.25 ? 'coarse_dirt' : 'dirt', meta: null };
+  } else {
+    if (generateCaves(x, y, h, seed)) {
+      return { id: 'air', meta: null };
+    } else if (generateGravelLocal(x, y, h, HEIGHT, BASE)) {
+      return { id: 'gravel', meta: null };
+    } else if (generateOre(x, y, h, 'gold', 3, 15, HEIGHT - 15, seed)) {
+      return { id: 'gold_ore', meta: null };
+    } else if (generateOre(x, y, h, 'steel', 5, 10, HEIGHT - 10, seed)) {
+      return { id: 'steel_ore', meta: null };
+    } else if (generateOre(x, y, h, 'copper', 6, 5, HEIGHT - 30, seed)) {
+      return { id: 'copper_ore', meta: null };
+    } else if (generateOre(x, y, h, 'coal', 8, 5, HEIGHT - 5, seed)) {
+      return { id: 'coal_ore', meta: null };
+    } else {
+      return { id: 'stone', meta: null };
+    }
+  }
+}
+
+function generateVegetationAt(x, y, h, seed) {
+  if (y !== h - 1) return null;
+  const id = biomePlantAt(x, seed, rand01From(x * 1007, seed), rand01From(x * 1011, seed));
+  if (id === 'rock' || id === 'pebble') return { id, meta: rockMeta(rand01From(x * 1021, seed), rand01From(x * 1031, seed), rand01From(x * 1033, seed)) };
+  if (id === 'bush') return { id, meta: { size: 1 + Math.floor(rand01From(x * 1019, seed) * BUSH_SIZES) } };
+  return id ? { id, meta: null } : null;
+}
+
+function generateOre(x, y, h, oreType, rarity, minHeight, maxHeight, seed) {
+  if (y < minHeight || y > maxHeight) return false;
+
+  const noiseScale = oreType === 'gold' ? 0.2 : 0.3;
+  const oreNoise = perlinNoise(x * noiseScale, y * noiseScale, seed + 1000 + rarity * 100);
+  
+  let adjustedRarity = rarity;
+  if (oreType === 'gold') {
+    const depthFactor = Math.min(1, (y - minHeight) / (maxHeight - minHeight));
+    adjustedRarity += depthFactor * 0.03;
+  }
+  
+  return oreNoise > (1 - adjustedRarity * 0.05);
 }

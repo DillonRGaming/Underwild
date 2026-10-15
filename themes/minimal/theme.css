@@ -1,0 +1,277 @@
+/* Minimal: thin white outlines over see-through dark fills. The default theme. */
+
+:root {
+  --line: #ffffff;
+  --line-soft: rgba(255, 255, 255, 0.35);
+  --fill: rgba(0, 0, 0, 0.35);
+  --fill-strong: rgba(0, 0, 0, 0.6);
+  --fill-hover: rgba(255, 255, 255, 0.12);
+  --drop: 2px 2px 0 rgba(0, 0, 0, 0.6);
+  --edge: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+  --double-line: inset 0 0 0 2px rgba(0, 0, 0, 0.6), inset 0 0 0 4px var(--line);
+  --corners:
+    linear-gradient(var(--line), var(--line)) top left / 10px 2px no-repeat,
+    linear-gradient(var(--line), var(--line)) top left / 2px 10px no-repeat,
+    linear-gradient(var(--line), var(--line)) top right / 10px 2px no-repeat,
+    linear-gradient(var(--line), var(--line)) top right / 2px 10px no-repeat,
+    linear-gradient(var(--line), var(--line)) bottom left / 10px 2px no-repeat,
+    linear-gradient(var(--line), var(--line)) bottom left / 2px 10px no-repeat,
+    linear-gradient(var(--line), var(--line)) bottom right / 10px 2px no-repeat,
+    linear-gradient(var(--line), var(--line)) bottom right / 2px 10px no-repeat;
+
+  --text: #ffffff;
+  --text-muted: rgba(255, 255, 255, 0.6);
+  --text-shadow: var(--drop);
+  --label-color: #ffffff;
+  --accent: #ffffff;
+  --danger-bg: rgba(200, 40, 40, 0.6);
+
+  --title-color: #ffffff;
+  --title-shadow: 0 0 12px rgba(255, 255, 255, 0.45), 0 0 2px rgba(255, 255, 255, 0.6), var(--drop);
+  --title-transform: none;
+  --title-spacing: 2px;
+  --game-title-size: 48px;
+  --menu-title-size: 26px;
+
+  --menu-overlay: rgba(0, 0, 0, 0.45);
+  --menu-overlay-paused: rgba(0, 0, 0, 0.8);
+  --menu-panel-bg: transparent;
+  --menu-panel-border: none;
+  --menu-panel-shadow: none;
+  --button-gap: 10px;
+
+  --btn-text: #ffffff;
+  --btn-text-hover: #ffffff;
+  --btn-text-shadow: var(--drop);
+  --btn-bg: var(--fill);
+  --btn-bg-hover: var(--fill-hover);
+  --btn-bg-active: rgba(255, 255, 255, 0.2);
+  --btn-bg-selected: var(--fill-hover);
+  --btn-border: 2px solid var(--line);
+  --btn-border-hover: 2px solid var(--line);
+  --btn-border-selected: 2px solid var(--line);
+  --btn-shadow: var(--edge);
+  --btn-shadow-hover: var(--edge);
+  --btn-shadow-selected: var(--edge), var(--double-line);
+
+  --input-text: #ffffff;
+  --input-bg: var(--fill);
+  --input-border: 2px solid var(--line-soft);
+  --input-border-focus: 2px solid var(--line);
+  --input-shadow: none;
+
+  --slider-height: 2px;
+  --slider-track: var(--line);
+  --slider-border: none;
+  --slider-thumb-width: 10px;
+  --slider-thumb-height: 20px;
+  --slider-thumb-bg: #ffffff;
+  --slider-thumb-border: 2px solid #000000;
+  --slider-thumb-shadow: none;
+
+  --card-bg: var(--fill);
+  --card-bg-hover: var(--fill-hover);
+  --card-bg-selected: var(--fill-hover);
+  --card-border: 2px solid var(--line-soft);
+  --card-border-hover: 2px solid var(--line);
+  --card-border-selected: 2px solid var(--line);
+  --card-shadow: none;
+  --card-shadow-selected: var(--double-line);
+  --thumb-border: 1px solid var(--line-soft);
+
+  --row-bg: var(--fill);
+  --row-border: 2px solid var(--line-soft);
+
+  --panel-bg: var(--fill-strong);
+  --panel-border: 2px solid var(--line);
+  --panel-shadow: var(--edge);
+  --panel-text: #ffffff;
+  --panel-text-muted: rgba(255, 255, 255, 0.65);
+  --panel-title: #ffffff;
+  --panel-title-shadow: 0 0 10px rgba(255, 255, 255, 0.4), var(--drop);
+  --inventory-overlay: rgba(0, 0, 0, 0.55);
+
+  --slot-bg: rgba(0, 0, 0, 0.25);
+  --slot-bg-hover: var(--fill-hover);
+  --slot-border: 2px solid var(--line-soft);
+  --slot-border-hover: 2px solid var(--line);
+  --slot-shadow: none;
+  --slot-selected-bg: var(--corners), rgba(0, 0, 0, 0.25);
+  --slot-selected-border: 2px solid transparent;
+  --slot-selected-shadow: none;
+  --output-slot-border: 2px solid var(--line);
+  --count-shadow: var(--drop);
+
+  --hotbar-bg: var(--fill);
+  --hotbar-border: 2px solid var(--line);
+  --hotbar-shadow: var(--edge);
+  --hotbar-padding: 2px;
+  --hotbar-gap: 0px;
+  --hotbar-slot-bg: transparent;
+  --hotbar-slot-border: 2px solid transparent;
+  --hotbar-slot-shadow: none;
+  --hotbar-selected-bg: var(--corners);
+  --hotbar-selected-border: 2px solid transparent;
+  --hotbar-selected-shadow: none;
+
+  --hud-text: #ffffff;
+  --hud-text-shadow: var(--drop);
+  --hud-box-bg: none;
+  --hud-box-border: none;
+  --hud-box-padding: 0;
+
+  --stat-gap: 0;
+  --stat-icon-width: 20px;
+  --stat-icon-height: 18px;
+  --icon-heart-full: url("themes/minimal/icons/heart_full.png");
+  --icon-heart-half: url("themes/minimal/icons/heart_half.png");
+  --icon-heart-empty: url("themes/minimal/icons/heart_empty.png");
+  --icon-hunger-full: url("themes/minimal/icons/hunger_full.png");
+  --icon-hunger-half: url("themes/minimal/icons/hunger_half.png");
+  --icon-hunger-empty: url("themes/minimal/icons/hunger_empty.png");
+
+  --scroll-width: 4px;
+  --scroll-track: transparent;
+  --scroll-thumb: var(--line);
+
+  /* Layout */
+  --menu-width: 600px;
+  --btn-width: 300px;
+  --btn-padding: 12px 10px 10px;
+  --game-title-margin: 40px;
+  --slot-size: 48px;
+  --slot-gap: 4px;
+  --hotbar-slot-size: 48px;
+  --inventory-padding: 18px;
+  --inventory-section-gap: 16px;
+  --stats-gap-above: 8px;
+
+  --creative-tab-width: 52px;
+  --creative-tab-height: 48px;
+  --creative-tab-overlap: -4px;
+  --creative-tab-gap: 4px;
+  --creative-tab-bg: var(--fill);
+  --creative-tab-bg-hover: var(--fill-hover);
+  --creative-tab-bg-selected: var(--fill-strong);
+  --creative-tab-border: 2px solid var(--line-soft);
+  --creative-tab-border-selected: 2px solid var(--line);
+  --creative-tab-shadow: var(--edge);
+  --creative-tab-shadow-selected: var(--edge), var(--double-line);
+  --creative-scroll-width: 6px;
+  --creative-scroll-gap: 8px;
+  --creative-scroll-track: rgba(255, 255, 255, 0.15);
+  --creative-scroll-thumb: var(--line);
+}
+
+#hotbar .hotbar-slot {
+  margin: 0;
+}
+
+.crafting-arrow {
+  width: 40px;
+  height: 26px;
+  font-size: 0;
+  background: #ffffff;
+  clip-path: polygon(0 42%, 56% 42%, 56% 12%, 100% 50%, 56% 88%, 56% 58%, 0 58%);
+  filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.6));
+}
+
+/* Forms: left-aligned labels, option buttons share one row */
+.form-section,
+.advanced-options-grid {
+  text-align: left;
+}
+
+.form-section > label,
+.option-group > label,
+.slider-group > label {
+  text-align: left;
+}
+
+.form-section .button-group,
+#advancedOptionsMenu .button-group {
+  flex-wrap: nowrap;
+  justify-content: stretch;
+}
+
+.form-section .button-group .minecraft-button.small,
+#advancedOptionsMenu .button-group .minecraft-button.small {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#createWorldMenu .form-section > .menu-buttons {
+  width: 100%;
+  margin: 8px 0 0;
+}
+
+#createWorldMenu > .menu-content > .menu-buttons,
+#controlsOptionsMenu .menu-buttons,
+#backgroundOptionsMenu .menu-buttons,
+#skinMenu .menu-buttons {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  grid-auto-flow: column;
+  width: 100%;
+}
+
+#advancedOptionsMenu .advanced-options-grid {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+#advancedOptionsMenu .grid-column {
+  align-items: stretch;
+}
+
+#advancedOptionsMenu .menu-content {
+  width: min(600px, 94vw);
+}
+
+#advancedOptionsMenu .button-grid {
+  display: grid;
+  grid-template-columns: repeat(15, 1fr);
+}
+
+#advancedOptionsMenu .button-grid .minecraft-button.small {
+  min-width: 0;
+  padding: 8px 0 6px;
+}
+
+/* Pause and title: the glow title sits over a narrow centered column */
+#mainMenu .menu-buttons,
+#pauseMenu .menu-buttons {
+  width: 300px;
+}
+
+/* Chat: just the input line, no second box around it */
+.chat-container {
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.chat-input {
+  border: 2px solid var(--line);
+  box-shadow: var(--edge);
+}
+
+/* Creative tabs stay outlined boxes; the open one gets the double line instead of merging into the panel */
+.creative-tab.selected,
+.creative-tabs-top .creative-tab.selected,
+.creative-tabs-bottom .creative-tab.selected {
+  height: var(--creative-tab-height);
+  border-color: var(--line);
+}
+
+.creative-header .inventory-title {
+  font-size: 18px;
+}
+
+.creative-search {
+  height: 32px;
+  font-size: 15px;
+}

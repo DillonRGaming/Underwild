@@ -4,5 +4,8 @@ export default {
   shape: 'stairs',
   solid: true,
   color: '#767676',
-  hardness: 1.8
+  hardness: 7,
+  isSolid(meta) {
+    return true;
+  }
 };

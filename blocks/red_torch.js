@@ -1,0 +1,13 @@
+export default {
+  id: 'red_torch',
+  displayName: 'Red Torch',
+  color: '#ff3c32',
+  shape: 'torch',
+  solid: false,
+  transparent: true,
+  lightLevel: 15,
+  lightColor: [1.00, 0.24, 0.20],
+  hardness: 0.1,
+  maxStack: 64,
+  needsSupport: true
+};

@@ -4,5 +4,8 @@ export default {
   shape: 'slab',
   solid: true,
   color: '#b07d4e',
-  hardness: 1
+  hardness: 1,
+  isSolid(meta) {
+    return true;
+  }
 };

@@ -1,4 +1,3 @@
-// File: src/core/input.js
 export class Input {
   constructor(canvas) {
     this.canvas = canvas;
@@ -7,9 +6,8 @@ export class Input {
     window.addEventListener('keydown', (e) => this.keys.add(e.code));
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     canvas.addEventListener('mousemove', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      this.mouse.x = (e.clientX - rect.left) * window.devicePixelRatio;
-      this.mouse.y = (e.clientY - rect.top) * window.devicePixelRatio;
+      this.mouse.x = e.offsetX * (canvas.width / canvas.clientWidth);
+      this.mouse.y = e.offsetY * (canvas.height / canvas.clientHeight);
     });
     canvas.addEventListener('mousedown', (e) => {
       if (e.button === 0) this.mouse.leftDown = true;
