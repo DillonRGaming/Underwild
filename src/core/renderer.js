@@ -1048,6 +1048,15 @@ drawStars() {
       this.drawRock(texture, sx, sy, size, meta, finalLightFactor);
       return;
     }
+    if (meta?.axis === 'x' && texture) {
+      // Fallen logs lie on their side: turn the bark texture a quarter turn.
+      ctx.save();
+      ctx.translate(sx + size / 2, sy + size / 2);
+      ctx.rotate(Math.PI / 2);
+      this.drawBlockTexture(texture, -size / 2, -size / 2, size, finalLightFactor);
+      ctx.restore();
+      return;
+    }
     if (type.shape === 'torch' && texture && (meta?.wall === 'left' || meta?.wall === 'right')) {
       const dir = meta.wall === 'left' ? 1 : -1;
       ctx.save();

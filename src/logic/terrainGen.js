@@ -253,26 +253,7 @@ function isTreeCenterAt(xCenter, seedLocal, worldWidth, HEIGHT, worldType = 'reg
   return true;
 }
 
-function treeBlockFor(centerX, x, y, seedLocal, worldWidth, worldHeight, HEIGHT, worldType = 'regular') {
-  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
-  let top;
-  
-  if (worldType === 'mountains') {
-    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
-    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 15;
-    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 8;
-    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 80;
-    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-    top = clamp(top, 6, HEIGHT - 4);
-  } else {
-    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
-    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 12;
-    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 6;
-    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 40;
-    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-    top = clamp(top, 6, HEIGHT - 4);
-  }
-  
+function pickTreeType(centerX, seedLocal) {
   let treeTypeNoise = rand01From(centerX * 17.3, seedLocal);
   const biomeKind = biomeTreeKind(centerX, seedLocal, treeTypeNoise);
   if (biomeKind) treeTypeNoise = TREE_KIND_ROLL[biomeKind];
@@ -310,6 +291,71 @@ function treeBlockFor(centerX, x, y, seedLocal, worldWidth, worldHeight, HEIGHT,
   }
 
   if (biomeKind === 'big_oak') leafPattern = 'big_oak';
+  return { logType, leavesType, leafPattern };
+}
+
+// Fallen trees: a rare swap for a standing tree. A stump stays at the tree's spot and
+// the trunk lies on its side a block away, on ground that varies by at most one
+// block, falling only toward a side with no other tree (trunk or canopy) in reach.
+const FALLEN_TREE_CHANCE = 0.07;
+const FALLEN_CANOPY_CLEARANCE = 7;
+
+function fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType) {
+  if (rand01From(cx * 577 + 3, seed) >= FALLEN_TREE_CHANCE) return null;
+  const len = 4 + Math.floor(rand01From(cx * 579 + 1, seed) * 4);
+  const first = rand01From(cx * 583 + 7, seed) < 0.5 ? -1 : 1;
+  for (const dir of [first, -first]) {
+    const far = cx + dir * (len + 1);
+    if (far < 2 || far > worldWidth - 3) continue;
+    let minH = Infinity, maxH = -Infinity;
+    for (let i = 0; i <= len + 1; i++) {
+      const h = naturalHeightAt(cx + dir * i, seed, worldHeight, worldType);
+      minH = Math.min(minH, h); maxH = Math.max(maxH, h);
+    }
+    if (maxH - minH > 1) continue;
+    let blocked = false;
+    for (let i = 1; i <= len + 1 + FALLEN_CANOPY_CLEARANCE && !blocked; i++) {
+      blocked = isTreeCenterAt(cx + dir * i, seed, worldWidth, worldHeight, worldType);
+    }
+    if (blocked) continue;
+    return { dir, len, logY: minH - 1, stumpY: naturalHeightAt(cx, seed, worldHeight, worldType) - 1 };
+  }
+  return null;
+}
+
+function fallenTreeBlockFor(fallen, cx, x, y, seed) {
+  const { logType } = pickTreeType(cx, seed);
+  if (x === cx && y === fallen.stumpY) {
+    return { id: logType === 'birch_log' ? 'birch_log_base' : logType, meta: null };
+  }
+  const i = (x - cx) * fallen.dir;
+  if (i >= 2 && i <= fallen.len + 1 && y === fallen.logY) {
+    return { id: logType, meta: { axis: 'x' } };
+  }
+  return null;
+}
+
+function treeBlockFor(centerX, x, y, seedLocal, worldWidth, worldHeight, HEIGHT, worldType = 'regular') {
+  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
+  let top;
+  
+  if (worldType === 'mountains') {
+    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
+    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 15;
+    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 8;
+    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 80;
+    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+    top = clamp(top, 6, HEIGHT - 4);
+  } else {
+    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
+    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 12;
+    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 6;
+    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 40;
+    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
+    top = clamp(top, 6, HEIGHT - 4);
+  }
+  
+  const { logType, leavesType, leafPattern } = pickTreeType(centerX, seedLocal);
   const shapes = TREE_SHAPES[leafPattern];
   const shape = shapes[Math.floor(rand01From(centerX * 41.7, seedLocal + 13) * shapes.length) % shapes.length];
   if (shape.art) return artTreeBlock(shape, centerX, x, y, top, logType, leavesType);
@@ -435,7 +481,10 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   for (let cx = x - MAX_TREE_INFLUENCE; cx <= x + MAX_TREE_INFLUENCE; cx++) {
     if (cx < 0 || cx >= worldWidth) continue;
     if (!isTreeCenterAt(cx, seed, worldWidth, HEIGHT, worldType)) continue;
-    const tb = treeBlockFor(cx, x, y, seed, worldWidth, worldHeight, HEIGHT, worldType);
+    const fallen = fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType);
+    const tb = fallen
+      ? fallenTreeBlockFor(fallen, cx, x, y, seed)
+      : treeBlockFor(cx, x, y, seed, worldWidth, worldHeight, HEIGHT, worldType);
     if (tb) {
       return { id: tb.id, meta: tb.meta ?? null };
     }
