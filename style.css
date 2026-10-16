@@ -2234,14 +2234,13 @@ body.hide-window-controls #drag-zone {
   pointer-events: none;
 }
 
-/* Right side, laid out like Minecraft's: jump, down and use in a column on the edge,
-   sprint and break half a step down in the column to their left. */
+/* Right side: sprint, jump and down in a column on the screen edge, the aim stick just
+   to their left. */
 .touch-buttons .touch-btn { position: absolute; }
-.touch-use    { right: var(--te); bottom: var(--te); }
-.touch-down   { right: var(--te); bottom: calc(var(--te) + (var(--tb) + var(--tg))); }
-.touch-jump   { right: var(--te); bottom: calc(var(--te) + 2 * (var(--tb) + var(--tg))); }
-.touch-break  { right: calc(var(--te) + var(--tb) + var(--tg)); bottom: calc(var(--te) + 0.5 * (var(--tb) + var(--tg))); }
-.touch-sprint { right: calc(var(--te) + var(--tb) + var(--tg)); bottom: calc(var(--te) + 1.5 * (var(--tb) + var(--tg))); opacity: 0.55; }
+.touch-aim { left: auto; right: calc(var(--te) + var(--tb) + var(--tg)); }
+.touch-down   { right: var(--te); bottom: var(--te); }
+.touch-jump   { right: var(--te); bottom: calc(var(--te) + var(--tb) + var(--tg)); }
+.touch-sprint { right: var(--te); bottom: calc(var(--te) + 2 * (var(--tb) + var(--tg))); opacity: 0.55; }
 .touch-sprint.on { opacity: 1; background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
 
 .touch-more {
@@ -2329,3 +2328,11 @@ body.touch-mode .menu-content {
   white-space: nowrap;
 }
 .app-update-bar .minecraft-button { width: auto; min-width: 0; padding: 4px 12px; }
+
+/* Phones: the hotbar (with its stats and "..." button) sits a little left of centre, out of
+   the way of the buttons beside the aim stick. */
+body.touch-mode { --hotbar-shift: -36px; }
+body.touch-mode #hotbar { transform: translateX(calc(-50% + var(--hotbar-shift))); }
+body.touch-mode .ui-health { left: calc(50% - var(--stats-half-width) + var(--hotbar-shift)); }
+body.touch-mode .ui-hunger { right: calc(50% - var(--stats-half-width) - var(--hotbar-shift)); }
+body.touch-mode .touch-more { margin-left: var(--hotbar-shift); }

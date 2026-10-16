@@ -2265,7 +2265,21 @@ setupTouchControls({
   input,
   keybinds,
   inGame: () => !!(world && player && !isLoading && !gamePaused && !inventoryOpen && !openContainer && !textInputMode),
-  onInventory: () => window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.inventory, key: 'e', bubbles: true }))
+  onInventory: () => window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.inventory, key: 'e', bubbles: true })),
+  aimTarget: (sx, sy) => {
+    if (!world) return { block: false, placeable: false };
+    const tileX = Math.floor(camera.screenToWorldX(sx) / TILE_SIZE);
+    const tileY = Math.floor(camera.screenToWorldY(sy) / TILE_SIZE);
+    const id = world.inBounds(tileX, tileY) ? world.getBlockId(tileX, tileY) : 'air';
+    const block = id !== 'air' && id !== 'water';
+    const held = inventory.getSlot(selectedIndex);
+    return { block, placeable: !block && held?.type === 'block' };
+  },
+  playerScreen: () => player ? {
+    x: camera.worldToScreenX(player.x + player.width / 2),
+    y: camera.worldToScreenY(player.y + player.height * 0.4)
+  } : null,
+  reach: () => (creativeMode ? 8 : 5) * TILE_SIZE * camera.zoom
 });
 
 camera = new Camera();

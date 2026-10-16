@@ -1,18 +1,24 @@
-// On-screen controls for phones and tablets: a movement pad on the left, action buttons on
-// the right (jump, down, sprint, break, use) and a "..." button by the hotbar for the
-// inventory. Touching the world moves the aim (the crosshair), which is what break and use
-// act on. They drive the same keys and mouse state the keyboard and mouse do.
+// On-screen controls for phones and tablets, driving the same keys and mouse state the
+// keyboard and mouse do:
+//   - left pad: walk (up/down climb and fly)
+//   - right stick: aim around the player, and act while it's held: aiming at a block
+//     breaks it, aiming at an empty spot places the held block (decided when you start
+//     pushing, so breaking a block doesn't then place one back). Let go and the aim stays.
+//   - tap the world: use what's there (open a chest, light an explosive, place a block)
+//   - drag on the world: move the aim without doing anything
+//   - jump, down and sprint buttons; "..." for the inventory; chat and pause at the top.
 
 const PAD_DEAD_ZONE = 0.3; // share of the pad's radius before the stick counts as pushed
+const AIM_DEAD_ZONE = 0.2; // the aim stick acts once pushed further than this
+const TAP_MS = 250;        // a touch on the world shorter than this (and barely moved) is a tap
+const TAP_MOVE_PX = 12;
 
 const ICONS = {
   up: '<path d="M8 3 L13 9 H10 V13 H6 V9 H3 Z"/>',
   down: '<path d="M8 13 L13 7 H10 V3 H6 V7 H3 Z"/>',
   sprint: '<path d="M2 3 L7 8 L2 13 Z M8 3 L13 8 L8 13 Z"/>',
-  sword: '<path d="M13 2 H15 V4 L7 12 L5 10 Z M4 9 L7 12 L6 13 L5 12 L3 14 L2 13 L4 11 L3 10 Z"/>',
   chat: '<path d="M2 3 H14 V11 H7 L4 14 V11 H2 Z"/>',
-  pause: '<path d="M4 3 H7 V13 H4 Z M9 3 H12 V13 H9 Z"/>',
-  hand: '<path d="M6 2 H8 V7 H9 V5 H11 V7 H12 V6 H14 V11 L12 14 H6 L3 10 L4 9 L6 10 Z"/>'
+  pause: '<path d="M4 3 H7 V13 H4 Z M9 3 H12 V13 H9 Z"/>'
 };
 
 export function isTouchDevice() {
@@ -22,7 +28,9 @@ export function isTouchDevice() {
     && window.matchMedia?.('(pointer: coarse)').matches;
 }
 
-export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory }) {
+// aimTarget(canvasX, canvasY) -> { block, placeable }: what's at that spot on screen.
+// playerScreen() -> { x, y }: the player's middle in canvas pixels. reach() -> canvas pixels.
+export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, aimTarget, playerScreen, reach }) {
   if (!isTouchDevice() || document.getElementById('touchControls')) return null;
   document.body.classList.add('touch-mode');
 
@@ -35,9 +43,8 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       <button class="touch-btn touch-sprint" data-act="sprint">${svg('sprint')}</button>
       <button class="touch-btn touch-jump" data-act="jump">${svg('up')}</button>
       <button class="touch-btn touch-down" data-act="down">${svg('down')}</button>
-      <button class="touch-btn touch-break" data-act="break">${svg('sword')}</button>
-      <button class="touch-btn touch-use" data-act="use">${svg('hand')}</button>
     </div>
+    <div class="touch-pad touch-aim"><div class="touch-pad-stick"></div></div>
     <button class="touch-btn touch-more" data-act="inventory">&middot;&middot;&middot;</button>
     <button class="touch-btn touch-chat" data-act="chat">${svg('chat')}</button>
     <button class="touch-btn touch-pause" data-act="pause">${svg('pause')}</button>`;
@@ -75,8 +82,8 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   };
 
   // --- Movement pad ---
-  const pad = root.querySelector('.touch-pad');
-  const stick = root.querySelector('.touch-pad-stick');
+  const pad = root.querySelector('.touch-pad:not(.touch-aim)');
+  const stick = pad.querySelector('.touch-pad-stick');
   let padTouch = null;
   const movePad = (t) => {
     const rect = pad.getBoundingClientRect();
@@ -110,6 +117,64 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   pad.addEventListener('touchend', (e) => { for (const t of e.changedTouches) if (t.identifier === padTouch) releasePad(); });
   pad.addEventListener('touchcancel', releasePad);
 
+  // --- Aim stick (right) ---
+  const aimPad = root.querySelector('.touch-aim');
+  const aimStick = aimPad.querySelector('.touch-pad-stick');
+  let aimTouch = null;
+  const aimVec = { x: 0, y: 0, len: 0 };
+  let acting = null; // null | 'break' | 'place'
+  const stopActing = () => {
+    if (acting === 'break') mouse('mouseup', 0);
+    if (acting === 'place') mouse('mouseup', 2);
+    acting = null;
+  };
+  // Point the aim from the player along the stick, further the further it's pushed.
+  const applyAim = () => {
+    const p = playerScreen();
+    if (!p) return;
+    aim.x = p.x + aimVec.x * reach();
+    aim.y = p.y + aimVec.y * reach();
+    input.mouse.x = aim.x;
+    input.mouse.y = aim.y;
+  };
+  const moveAim = (t) => {
+    const rect = aimPad.getBoundingClientRect();
+    const r = rect.width / 2;
+    let dx = (t.clientX - rect.left - r) / r;
+    let dy = (t.clientY - rect.top - r) / r;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }
+    aimStick.style.transform = `translate(${dx * r * 0.45}px, ${dy * r * 0.45}px)`;
+    aimVec.len = Math.min(1, len);
+    if (aimVec.len < AIM_DEAD_ZONE) return;
+    aimVec.x = dx;
+    aimVec.y = dy;
+    applyAim();
+    if (!acting) {
+      const target = aimTarget(aim.x, aim.y);
+      acting = target.block ? 'break' : target.placeable ? 'place' : 'break';
+      mouse('mousedown', acting === 'break' ? 0 : 2);
+    }
+  };
+  const releaseAim = () => {
+    aimTouch = null;
+    aimStick.style.transform = '';
+    aimVec.len = 0;
+    stopActing();
+  };
+  aimPad.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    aimTouch = t.identifier;
+    moveAim(t);
+  }, { passive: false });
+  aimPad.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) if (t.identifier === aimTouch) moveAim(t);
+  }, { passive: false });
+  aimPad.addEventListener('touchend', (e) => { for (const t of e.changedTouches) if (t.identifier === aimTouch) releaseAim(); });
+  aimPad.addEventListener('touchcancel', releaseAim);
+
   // --- Buttons ---
   let sprinting = false;
   const sprintBtn = root.querySelector('.touch-sprint');
@@ -120,8 +185,6 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       btn.classList.add('pressed');
       if (act === 'jump') keyDown(keybinds.jump);
       else if (act === 'down') keyDown(keybinds.crouch);
-      else if (act === 'break') mouse('mousedown', 0);
-      else if (act === 'use') mouse('mousedown', 2);
       else if (act === 'inventory') onInventory();
       else if (act === 'chat') window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.chat, key: 't', bubbles: true }));
       else if (act === 'pause') window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.pause, key: 'Escape', bubbles: true }));
@@ -136,14 +199,13 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       btn.classList.remove('pressed');
       if (act === 'jump') keyUp(keybinds.jump);
       else if (act === 'down') keyUp(keybinds.crouch);
-      else if (act === 'break') mouse('mouseup', 0);
-      else if (act === 'use') mouse('mouseup', 2);
     };
     btn.addEventListener('touchend', up, { passive: false });
     btn.addEventListener('touchcancel', up, { passive: false });
   }
 
   // --- Aiming: touch (and drag on) the world ---
+  let worldTouch = null;
   canvas.addEventListener('touchstart', (e) => {
     // Tapping the world while the chat is open closes it.
     if (!document.getElementById('chat')?.classList.contains('hidden')) {
@@ -154,14 +216,30 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     if (!inGame()) return;
     e.preventDefault();
     const t = e.changedTouches[0];
+    worldTouch = { id: t.identifier, x: t.clientX, y: t.clientY, start: performance.now() };
     setAim(t.clientX, t.clientY);
   }, { passive: false });
   canvas.addEventListener('touchmove', (e) => {
     if (!inGame()) return;
     e.preventDefault();
-    const t = e.changedTouches[0];
-    setAim(t.clientX, t.clientY);
+    for (const t of e.changedTouches) {
+      if (worldTouch?.id !== t.identifier) continue;
+      if (Math.hypot(t.clientX - worldTouch.x, t.clientY - worldTouch.y) > TAP_MOVE_PX) worldTouch.moved = true;
+      setAim(t.clientX, t.clientY);
+    }
   }, { passive: false });
+  // A quick tap uses what's there, like a right click.
+  canvas.addEventListener('touchend', (e) => {
+    for (const t of e.changedTouches) {
+      if (worldTouch?.id !== t.identifier) continue;
+      const tap = !worldTouch.moved && performance.now() - worldTouch.start < TAP_MS;
+      worldTouch = null;
+      if (tap && inGame()) {
+        mouse('mousedown', 2);
+        mouse('mouseup', 2);
+      }
+    }
+  });
 
   // Tap a hotbar slot to select it.
   document.getElementById('hotbar')?.addEventListener('touchstart', (e) => {
@@ -184,6 +262,9 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   const tick = () => {
     const playing = inGame();
     root.classList.toggle('hidden', !playing);
+    if (!playing && acting) releaseAim();
+    // While the aim stick is held the aim follows the player as they move.
+    if (playing && aimTouch !== null && aimVec.len >= AIM_DEAD_ZONE) applyAim();
     if (playing) {
       const { clientX, clientY } = aimClient();
       crosshair.style.transform = `translate(${clientX}px, ${clientY}px)`;
