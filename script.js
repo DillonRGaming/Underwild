@@ -8,10 +8,12 @@ import { Player } from './src/entities/player.js';
 import { TILE_SIZE, rectsOverlap } from './src/core/utils.js';
 import { registerAllBlocks } from './blocks/index.js';
 import { isChest } from './blocks/chest.js';
+import { ensureFurnaceMeta, SMELTING, fuelTime } from './blocks/furnace.js';
+import { HEAD_TYPES, heatedIngotMaterial } from './blocks/forging_table.js';
 import { migrateLegacyId } from './src/core/legacyIds.js';
 import { registerAllItems } from './items/index.js';
-import { sampleBlockAt } from './src/logic/terrainGen.js';
-import { findBiomeId, nearestBiomeEdge } from './src/logic/biomes.js';
+import { sampleBlockAt, nearestFallenTreeX, nearestLakeX } from './src/logic/terrainGen.js';
+import { findBiomeId, nearestBiomeEdge, leafFallAt, BIOME_ZONE } from './src/logic/biomes.js';
 import { Placer } from './src/logic/placing.js';
 import { Breaker } from './src/logic/breaking.js';
 import { findMatchingRecipe, consumeRecipeIngredients, createRecipeOutput } from './src/logic/crafting.js';
@@ -83,6 +85,8 @@ const primedExplosives = [];
 const PLACE_REPEAT_MS = 200;
 let lastPlaceTime = 0;
 let placeHeld = false;
+// /tp fallen and /tp <biome> targets already visited this session, so repeats go somewhere new.
+const tpVisited = new Map();
 let gameSpeed = 1;
 let setPosition1 = null;
 let setPosition2 = null;
@@ -1001,6 +1005,7 @@ class MenuManager {
     fillPos2 = null;
     selectedIndex = 0;
     lastPreloadChunk = null;
+    tpVisited.clear();
     creativeCategoriesCache = null;
     renderedCreativeTab = null;
     breaker.cancel();
@@ -1012,6 +1017,11 @@ class MenuManager {
     world.items = items;
     world.maxLoadedChunks = Math.max(30, (CHUNK_RENDER_DISTANCE + 2) * 2 + 1);
     world.onBlockChanged = () => saveManager.markDirty();
+    // Decaying leaves drift down as a falling leaf.
+    world.onLeafDecayed = (leafId, x, y) => {
+      if (!renderFallingLeaves || leafParticles.length > 90) return;
+      leafParticles.push(new LeafParticle(leafId, (x + 0.5) * TILE_SIZE, (y + 0.5) * TILE_SIZE, world.time, 0.7 + Math.random() * 0.4));
+    };
     return world;
   }
 
@@ -1718,7 +1728,7 @@ const availableCommands = [
   { cmd: 'setposclear', usage: 'setposclear' },
   { cmd: 'fill', usage: 'fill <block> [type] [replaceBlock]', needsBlock: true },
   { cmd: 'tick', usage: 'tick <speed>' },
-  { cmd: 'tp', usage: 'tp <x> <y> | tp <biome>' },
+  { cmd: 'tp', usage: 'tp <x> <y> | tp <biome> | tp fallen | tp water' },
   { cmd: 'seed', usage: 'seed [newSeed]' },
   { cmd: 'itemconfig', usage: 'itemconfig [setting] [value]' },
   { cmd: 'fly', usage: 'fly <true|false>' },
@@ -1728,10 +1738,11 @@ const availableCommands = [
 
 const itemCategories = {
   tools: ['wooden_sword', 'wooden_pickaxe', 'wooden_shovel', 'wooden_axe', 'trowel', 'copper_sword', 'copper_pickaxe', 'copper_shovel', 'copper_axe', 'steel_sword', 'steel_pickaxe', 'steel_shovel', 'steel_axe', 'gold_sword', 'gold_pickaxe', 'gold_shovel', 'gold_axe'],
+  forging: ['copper_ingot_heated', 'copper_pickaxe_head', 'copper_pickaxe_head_heated', 'copper_axe_head', 'copper_axe_head_heated', 'copper_shovel_head', 'copper_shovel_head_heated', 'copper_sword_head', 'copper_sword_head_heated', 'steel_ingot_heated', 'steel_pickaxe_head', 'steel_pickaxe_head_heated', 'steel_axe_head', 'steel_axe_head_heated', 'steel_shovel_head', 'steel_shovel_head_heated', 'steel_sword_head', 'steel_sword_head_heated', 'gold_ingot_heated', 'gold_pickaxe_head', 'gold_pickaxe_head_heated', 'gold_axe_head', 'gold_axe_head_heated', 'gold_shovel_head', 'gold_shovel_head_heated', 'gold_sword_head', 'gold_sword_head_heated', 'forging_table', 'blacksmith_hammer', 'bucket', 'water_bucket'],
   woods: ['oak_log', 'birch_log', 'spruce_log', 'maple_log', 'pine_log'],
   planks: ['oak_planks', 'birch_planks', 'spruce_planks', 'maple_planks', 'pine_planks'],
   leaves: ['oak_leaves', 'birch_leaves', 'spruce_leaves', 'pine_leaves', 'maple_green_leaves', 'maple_orange_leaves', 'maple_red_leaves'],
-  dirt: ['dirt', 'grass', 'sand', 'rippled_sand', 'cracked_sand', 'red_sand', 'red_rippled_sand', 'mud', 'coarse_dirt', 'gravel'],
+  dirt: ['dirt', 'dirt_path', 'grass', 'sand', 'wet_sand', 'rippled_sand', 'cracked_sand', 'red_sand', 'red_rippled_sand', 'mud', 'coarse_dirt', 'gravel'],
   sandstone: ['sandstone', 'smooth_sandstone', 'cut_sandstone', 'chiseled_sandstone', 'red_sandstone', 'red_smooth_sandstone', 'red_cut_sandstone', 'red_chiseled_sandstone']
 };
 
@@ -2371,10 +2382,32 @@ function processTextInputCommand(command) {
 
     case 'tp':
       if (parts[1] && Number.isNaN(Number(parts[1])) && !parts[1].startsWith('~')) {
+        // /tp fallen: jump next to the nearest fallen tree.
         // /tp <biome>: jump to the nearest edge of the closest zone of that biome.
-        const biomeId = findBiomeId(parts.slice(1).join(' '));
-        if (!biomeId) return;
-        const edgeX = nearestBiomeEdge(playerTileX, world.seed ?? 0, biomeId);
+        const query = parts.slice(1).join(' ').toLowerCase();
+        const wantsFallen = ['fallen', 'fallen_tree', 'fallen tree', 'fallen_log', 'fallen log', 'log'].includes(query);
+        const wantsWater = ['water', 'lake', 'beach'].includes(query);
+        const biomeId = wantsFallen || wantsWater ? null : findBiomeId(query);
+        if (!wantsFallen && !wantsWater && !biomeId) return;
+        // Each repeat goes somewhere new: skip spots already teleported to (and the one you're in).
+        const visitKey = wantsFallen ? 'fallen' : wantsWater ? 'water' : biomeId;
+        const visited = tpVisited.get(visitKey) || new Set();
+        tpVisited.set(visitKey, visited);
+        let edgeX = null;
+        if (wantsWater) {
+          const found = nearestLakeX(playerTileX, world.seed ?? 0, world.width, world.height, world.worldType || 'regular',
+            center => visited.has(center) || Math.abs(center - playerTileX) < 80);
+          if (found) { visited.add(found.center); edgeX = found.standX; }
+        } else if (wantsFallen) {
+          const found = nearestFallenTreeX(playerTileX, world.seed ?? 0, world.width, world.height, world.worldType || 'regular', 30000,
+            stumpX => visited.has(stumpX) || Math.abs(stumpX - playerTileX) <= 3);
+          if (found) { visited.add(found.stumpX); edgeX = found.standX; }
+        } else {
+          const here = Math.floor(playerTileX / BIOME_ZONE);
+          const outsideWorld = zone => zone * BIOME_ZONE < 2 || (zone + 1) * BIOME_ZONE > world.width - 2;
+          edgeX = nearestBiomeEdge(playerTileX, world.seed ?? 0, biomeId, 400, zone => visited.has(zone) || zone === here || outsideWorld(zone));
+          if (edgeX !== null) visited.add(Math.floor(edgeX / BIOME_ZONE));
+        }
         if (edgeX === null) return;
         player.vx = 0;
         player.vy = 0;
@@ -2415,6 +2448,7 @@ function processTextInputCommand(command) {
       if (Number.isNaN(newSeed)) return;
       currentSeed = newSeed;
       world.seed = newSeed;
+      tpVisited.clear();
       world.resetChunks();
       items.length = 0;
       lastPreloadChunk = null;
@@ -2668,6 +2702,59 @@ function openChest(tileX, tileY) {
   recomputeCraft();
 }
 
+function openFurnace(tileX, tileY) {
+  const cell = world.getCell(tileX, tileY);
+  if (!cell.meta) cell.meta = {};
+  ensureFurnaceMeta(cell.meta);
+  openContainer = { title: 'Furnace', kind: 'furnace', slots: cell.meta.inv, meta: cell.meta, capacity: 3, tileX, tileY };
+  inventoryOpen = true;
+  recomputeCraft();
+}
+
+function openForge(tileX, tileY) {
+  const cell = world.getCell(tileX, tileY);
+  if (!cell.meta) cell.meta = {};
+  if (!Array.isArray(cell.meta.inv) || cell.meta.inv.length < 2) cell.meta.inv = [cell.meta.inv?.[0] ?? null, cell.meta.inv?.[1] ?? null];
+  openContainer = { title: 'Forging Table', kind: 'forge', slots: cell.meta.inv, meta: cell.meta, capacity: 3, choice: null, tileX, tileY };
+  inventoryOpen = true;
+  recomputeCraft();
+}
+
+// The heated head the forging table would make right now, or null.
+function forgeOutput() {
+  if (openContainer?.kind !== 'forge') return null;
+  const [hammer, ingot] = openContainer.slots;
+  const material = heatedIngotMaterial(stackId(ingot));
+  if (stackId(hammer) !== 'blacksmith_hammer' || !material || !openContainer.choice) return null;
+  const id = `${material}_${openContainer.choice}_head_heated`;
+  if (!registry.get(id)) return null;
+  // The head keeps the ingot's heat: it cools on the same clock.
+  return { ...inventory.createStack('item', id, 1), heatedAt: ingot.heatedAt ?? Date.now() };
+}
+
+// Heated metal cools back down over HEAT_COOL_MS: a heated ingot turns back into an
+// ingot, a heated head into a finished head. Cooling runs on real time, so stacks left in
+// chests or furnaces have cooled by the time you look at them.
+const HEAT_COOL_MS = 30000;
+function coolStack(stack) {
+  const id = stackId(stack);
+  if (!id || !id.endsWith('_heated')) return stack;
+  if (!stack.heatedAt) stack.heatedAt = Date.now();
+  if (Date.now() - stack.heatedAt < HEAT_COOL_MS) return stack;
+  const coolId = id.slice(0, -'_heated'.length);
+  if (!registry.get(coolId)) return stack;
+  return inventory.createStack(registry.isItem(coolId) ? 'item' : 'block', coolId, stack.count);
+}
+function coolHeatedStacks() {
+  for (let i = 0; i < inventory.TOTAL_SLOTS; i++) {
+    const s = inventory.getSlot(i);
+    if (s) { const c = coolStack(s); if (c !== s) inventory.setSlot(i, c); }
+  }
+  if (draggingStack) draggingStack = coolStack(draggingStack);
+  const slots = openContainer?.slots;
+  if (Array.isArray(slots)) for (let i = 0; i < slots.length; i++) if (slots[i]) slots[i] = coolStack(slots[i]);
+}
+
 function getUIHitFromElement(element) {
   const el = element?.closest?.('.creative-tab, .creative-slot, .container-slot, .crafting-output-slot, .crafting-slot, .inventory-slot, .hotbar-slot');
   if (!el) return null;
@@ -2691,7 +2778,34 @@ function getSlotRef(area, index) {
   }
   if (area === 'container' && openContainer?.slots && openContainer.title !== 'Crafting Table') {
     const slots = openContainer.slots;
-    if (index < 0 || index >= slots.length) return null;
+    if (index < 0 || index >= (openContainer.kind === 'forge' ? 3 : slots.length)) return null;
+    if (openContainer.kind === 'forge') {
+      if (index === 2) {
+        // The output is worked out from the inputs; taking it uses up the ingot.
+        return {
+          get: forgeOutput,
+          accepts: () => false,
+          set: (v) => {
+            if (v) return;
+            const ingot = slots[1];
+            if (ingot && --ingot.count <= 0) slots[1] = null;
+          }
+        };
+      }
+      const ok = index === 0 ? (st) => stackId(st) === 'blacksmith_hammer' : (st) => !!heatedIngotMaterial(stackId(st));
+      return { get: () => slots[index] ?? null, accepts: ok, set: (v) => { slots[index] = v; } };
+    }
+    if (openContainer.kind === 'furnace' && index === 2) {
+      // The furnace output can only be taken from, never placed into.
+      return {
+        get: () => slots[2] ?? null,
+        accepts: () => false,
+        set: (v) => {
+          const cur = slots[2];
+          if (!v || (cur && stackId(v) === stackId(cur) && v.count < cur.count)) slots[2] = v;
+        }
+      };
+    }
     return { get: () => slots[index] ?? null, set: (v) => { slots[index] = v; } };
   }
   if (area === 'craft') {
@@ -2728,7 +2842,16 @@ function shiftClickTransfer(hit) {
 
   if (hit.area === 'inventory') {
     const chestSlots = openContainer && openContainer.title !== 'Crafting Table' ? openContainer.slots : null;
-    if (chestSlots) moveStackInto(stack, chestSlots, 0, chestSlots.length);
+    if (openContainer?.kind === 'forge') {
+      const id = stackId(stack);
+      if (id === 'blacksmith_hammer') moveStackInto(stack, chestSlots, 0, 1);
+      else if (heatedIngotMaterial(id)) moveStackInto(stack, chestSlots, 1, 2);
+    } else if (openContainer?.kind === 'furnace') {
+      // Smeltables go in the top slot, fuel in the bottom one.
+      const id = stackId(stack);
+      if (SMELTING[id]) moveStackInto(stack, chestSlots, 0, 1);
+      else if (fuelTime(id) > 0) moveStackInto(stack, chestSlots, 1, 2);
+    } else if (chestSlots) moveStackInto(stack, chestSlots, 0, chestSlots.length);
     else if (hit.index < 9) moveStackInto(stack, inventory.slots, 9, 36);
     else moveStackInto(stack, inventory.slots, 0, 9);
   } else {
@@ -2782,6 +2905,16 @@ function handleInventoryClick(hit, isRightClick = false) {
   const slotRef = getSlotRef(hit.area, hit.index);
   if (!slotRef) return false;
   const slot = slotRef.get();
+
+  // A slot that won't take what you're holding (a furnace or forge output, a forge input
+  // for something else): click it to scoop up its contents onto your stack if they match.
+  if (draggingStack && slotRef.accepts && !slotRef.accepts(draggingStack)) {
+    if (slot && inventory.canMerge(slot, draggingStack) && draggingStack.count + slot.count <= (draggingStack.maxStack ?? 64)) {
+      draggingStack.count += slot.count;
+      slotRef.set(null);
+    }
+    return true;
+  }
 
   if (!draggingStack) {
     if (!slot) return false;
@@ -2879,7 +3012,7 @@ window.addEventListener('mousemove', (e) => {
   lastPaintSlot = slotKey;
   const ref = getSlotRef(hit.area, hit.index);
   const slot = ref?.get();
-  if (!ref) return;
+  if (!ref || (ref.accepts && !ref.accepts(draggingStack))) return;
   if (!slot) {
     ref.set({ ...draggingStack, count: 1 });
     draggingStack.count -= 1;
@@ -2928,15 +3061,79 @@ canvas.addEventListener('mousedown', (e) => {
     openChest(tileX, tileY);
     return;
   }
+  if (clickedId === 'furnace') {
+    openFurnace(tileX, tileY);
+    return;
+  }
+  if (clickedId === 'forging_table') {
+    openForge(tileX, tileY);
+    return;
+  }
   if (clickedId === 'explosive') {
     registry.get('explosive').prime(world, tileX, tileY, explosionContext());
     return;
   }
+  if (useBucket(tileX, tileY)) return;
 
   lastPlaceTime = performance.now();
   placeHeld = true;
   tryPlaceBlockAt(screenX, screenY);
 });
+
+// Buckets: an empty bucket scoops a full block of water; a water bucket pours it back out.
+function useBucket(tileX, tileY) {
+  const hotSlot = inventory.getSlot(selectedIndex);
+  const held = hotSlot?.type === 'item' ? hotSlot.itemId : null;
+  if ((held !== 'bucket' && held !== 'water_bucket') || !world.inBounds(tileX, tileY)) return false;
+  const sim = world.water;
+  if (held === 'bucket') {
+    if (world.getBlockId(tileX, tileY) !== 'water') return false;
+    // A bucket holds a full block (16 layers). Take it from the clicked cell if that's
+    // full; otherwise from it and up to 2 cells either side on the same row, nearest first,
+    // but only if together they make a full block.
+    const full = 15 / 16;
+    const cells = [[tileX, tileY]];
+    // Each side stops at the first cell without water, so it only draws on connected water.
+    for (const dir of [-1, 1]) {
+      for (let d = 1; d <= 2 && world.getBlockId(tileX + dir * d, tileY) === 'water'; d++) cells.push([tileX + dir * d, tileY]);
+    }
+    cells.sort((p, q) => Math.abs(p[0] - tileX) - Math.abs(q[0] - tileX));
+    let total = 0;
+    for (const [x, y] of cells) total += Math.min(1, sim.mass(x, y));
+    if (Math.min(1, sim.mass(tileX, tileY)) < full && total < full) return true;
+    let need = 1;
+    for (const [x, y] of cells) {
+      if (need <= 0) break;
+      const m = sim.mass(x, y);
+      const take = Math.min(m, need);
+      if (take > 0) sim.setMass(x, y, m - take, true);
+      need -= take;
+    }
+    // In creative the empty bucket stays and a new water bucket is added each time.
+    if (!creativeMode) hotSlot.count -= 1;
+    if (hotSlot.count <= 0) inventory.setSlot(selectedIndex, { type: 'item', itemId: 'water_bucket', count: 1 });
+    else {
+      const leftover = inventory.addItem('water_bucket', 1);
+      if (leftover > 0) dropStackAtPlayer({ type: 'item', itemId: 'water_bucket' }, leftover);
+    }
+    player.playArmAction('place');
+    return true;
+  }
+  // Pour: fill the clicked cell, spilling anything that doesn't fit into the cell above.
+  const id = world.getBlockId(tileX, tileY);
+  if (id !== 'air' && id !== 'water' && !NATURE_BLOCKS.has(id)) return true;
+  if (NATURE_BLOCKS.has(id)) world.setBlock(tileX, tileY, 'air', null);
+  const here = sim.mass(tileX, tileY);
+  const fit = Math.min(1, 1 - here);
+  const aboveId = world.getBlockId(tileX, tileY - 1);
+  const spill = 1 - fit;
+  if (spill > 0.001 && aboveId !== 'air' && aboveId !== 'water') return true; // nowhere to pour
+  sim.setMass(tileX, tileY, here + fit, true);
+  if (spill > 0.001) sim.setMass(tileX, tileY - 1, sim.mass(tileX, tileY - 1) + spill, true);
+  if (!creativeMode) inventory.setSlot(selectedIndex, { type: 'item', itemId: 'bucket', count: 1 });
+  player.playArmAction('place');
+  return true;
+}
 
 function tryPlaceBlockAt(screenX, screenY, isRepeat = false) {
   const { worldX, worldY } = getMouseTileFromRaw(screenX, screenY);
@@ -3186,6 +3383,17 @@ function updateSlot(slot, stack, isSelected) {
     }
     slot.classList.add('has-item');
     slot.title = stack.displayName || id;
+    // Heated metal shows how much heat it has left.
+    let heat = slot.querySelector('.heat-bar');
+    if (stack.heatedAt && id.endsWith('_heated')) {
+      if (!heat) {
+        heat = document.createElement('div');
+        heat.className = 'heat-bar';
+        heat.appendChild(document.createElement('div'));
+        slot.appendChild(heat);
+      }
+      heat.firstChild.style.width = `${Math.max(0, 100 - (Date.now() - stack.heatedAt) / HEAT_COOL_MS * 100)}%`;
+    } else if (heat) heat.remove();
   } else if (slot.firstChild) {
     slot.innerHTML = '';
     slot.classList.remove('has-item');
@@ -3318,6 +3526,95 @@ function bindCreativeSearch() {
 }
 bindCreativeSearch();
 
+// The furnace window: a copy of the chest window with the chest grid swapped for an
+// input slot over a flame (fuel burning) and a fuel slot, an arrow (cooking progress) and
+// the output slot.
+function ensureFurnaceUI() {
+  if (document.getElementById('furnaceUI')) return;
+  const chest = document.getElementById('chestUI');
+  if (!chest) return;
+  const ui = chest.cloneNode(true);
+  ui.id = 'furnaceUI';
+  ui.classList.add('hidden');
+  ui.querySelector('#chestTitle').id = 'furnaceTitle';
+  ui.querySelector('#furnaceTitle').textContent = 'Furnace';
+  const grid = ui.querySelector('#chestGrid');
+  const area = document.createElement('div');
+  area.className = 'furnace-area';
+  area.innerHTML = `
+    <div class="furnace-left">
+      <div class="inventory-slot container-slot" data-index="0" title="Smelt"></div>
+      <div class="furnace-flame"><div class="furnace-flame-fill"></div></div>
+      <div class="inventory-slot container-slot" data-index="1" title="Fuel"></div>
+    </div>
+    <div class="furnace-arrow"><div class="furnace-arrow-fill"></div></div>
+    <div class="inventory-slot container-slot furnace-output" data-index="2" title="Output"></div>`;
+  grid.replaceWith(area);
+  chest.after(ui);
+}
+
+// The forging table window, laid out like a cartography table: hammer over ingot on the
+// left, an arrow, a big panel listing the heads that ingot can become, and the output.
+function ensureForgeUI() {
+  if (document.getElementById('forgeUI')) return;
+  const chest = document.getElementById('chestUI');
+  if (!chest) return;
+  const ui = chest.cloneNode(true);
+  ui.id = 'forgeUI';
+  ui.classList.add('hidden');
+  ui.querySelector('#chestTitle').id = 'forgeTitle';
+  ui.querySelector('#forgeTitle').textContent = 'Forging Table';
+  const area = document.createElement('div');
+  area.className = 'forge-area';
+  area.innerHTML = `
+    <div class="forge-inputs">
+      <div class="inventory-slot container-slot" data-index="0" title="Blacksmith Hammer"></div>
+      <div class="forge-plus">+</div>
+      <div class="inventory-slot container-slot" data-index="1" title="Heated Ingot"></div>
+    </div>
+    <div class="forge-arrow"></div>
+    <div class="forge-panel"><div class="forge-hint"></div><div class="forge-choices"></div></div>
+    <div class="inventory-slot container-slot forge-output" data-index="2" title="Output"></div>`;
+  ui.querySelector('#chestGrid').replaceWith(area);
+  const choices = area.querySelector('.forge-choices');
+  for (const type of HEAD_TYPES) {
+    const el = document.createElement('div');
+    el.className = 'forge-choice';
+    el.dataset.type = type;
+    choices.appendChild(el);
+  }
+  choices.addEventListener('mousedown', (e) => {
+    const el = e.target.closest('.forge-choice');
+    if (!el || el.classList.contains('disabled') || openContainer?.kind !== 'forge') return;
+    e.stopPropagation();
+    openContainer.choice = openContainer.choice === el.dataset.type ? null : el.dataset.type;
+  });
+  chest.after(ui);
+}
+
+function updateForgeUI(overlay) {
+  const [hammer, ingot] = openContainer.slots;
+  for (const slotEl of overlay.querySelectorAll('.container-slot')) {
+    const i = Number(slotEl.dataset.index);
+    updateSlot(slotEl, i === 2 ? forgeOutput() : openContainer.slots[i], false);
+  }
+  const material = heatedIngotMaterial(stackId(ingot));
+  const hasHammer = stackId(hammer) === 'blacksmith_hammer';
+  const hint = overlay.querySelector('.forge-hint');
+  hint.textContent = !hasHammer && !material ? 'Add a blacksmith hammer and a heated ingot'
+    : !hasHammer ? 'Add a blacksmith hammer'
+    : !material ? 'Add a heated ingot'
+    : openContainer.choice ? '' : 'Pick a head to forge';
+  for (const el of overlay.querySelectorAll('.forge-choice')) {
+    const id = `${material || 'copper'}_${el.dataset.type}_head`;
+    const ok = !!material && hasHammer && !!registry.get(`${id}_heated`);
+    el.classList.toggle('disabled', !ok);
+    el.classList.toggle('selected', ok && openContainer.choice === el.dataset.type);
+    updateSlot(el, registry.get(id) ? inventory.createStack('item', id, 1) : null, false);
+    el.title = registry.get(id)?.displayName || el.dataset.type;
+  }
+}
+
 function buildContainerSlots(capacity) {
   const grid = document.getElementById('chestGrid');
   if (!grid || grid.childElementCount === capacity) return;
@@ -3337,7 +3634,12 @@ function updateHTMLUI() {
 
   const inGame = !!(world && player && inventory) && !isAnyMenuVisible();
   const isCraftingTable = openContainer?.title === 'Crafting Table';
-  const isChest = !!openContainer && !isCraftingTable;
+  const isFurnace = openContainer?.kind === 'furnace';
+  const isForge = openContainer?.kind === 'forge';
+  const isChest = !!openContainer && !isCraftingTable && !isFurnace && !isForge;
+  ensureFurnaceUI();
+  ensureForgeUI();
+  if (htmlUIFrameCounter % 15 === 0 && inGame) coolHeatedStacks();
 
   const hotbar = document.getElementById('hotbar');
   if (hotbar) {
@@ -3353,7 +3655,9 @@ function updateHTMLUI() {
   const overlays = {
     inventory: inGame && inventoryOpen && !openContainer,
     craftingTable: inGame && isCraftingTable,
-    chestUI: inGame && isChest
+    chestUI: inGame && isChest,
+    furnaceUI: inGame && isFurnace,
+    forgeUI: inGame && isForge
   };
   for (const [id, visible] of Object.entries(overlays)) {
     const overlay = document.getElementById(id);
@@ -3361,6 +3665,18 @@ function updateHTMLUI() {
     overlay.classList.toggle('hidden', !visible);
     if (!visible) continue;
     if (id === 'inventory') updateCreativePanel();
+    if (id === 'furnaceUI') {
+      for (const slotEl of overlay.querySelectorAll('.container-slot')) {
+        updateSlot(slotEl, openContainer.slots[Number(slotEl.dataset.index)], false);
+      }
+      const m = openContainer.meta;
+      const recipe = SMELTING[stackId(openContainer.slots[0])];
+      const flame = m.burnMax > 0 ? m.burn / m.burnMax : 0;
+      const cook = recipe ? Math.min(1, m.cook / recipe[1]) : 0;
+      overlay.querySelector('.furnace-flame-fill').style.height = `${Math.round(flame * 100)}%`;
+      overlay.querySelector('.furnace-arrow-fill').style.width = `${Math.round(cook * 100)}%`;
+    }
+    if (id === 'forgeUI') updateForgeUI(overlay);
     if (id === 'chestUI') {
       const title = document.getElementById('chestTitle');
       if (title) title.textContent = openContainer.title;
@@ -3484,7 +3800,7 @@ function spawnExplosionDrop(dropId, meta, id, x, y, dx, dy) {
   const len = Math.hypot(dx, dy) || 1;
   const push = () => (Math.random() * 1.5 + 1);
   spawnItemEntity(dropId, centerX, centerY, 1, (dx / len) * push(), (dy / len) * push() - 1.5);
-  if (isChest(id) && Array.isArray(meta?.inv)) {
+  if ((isChest(id) || id === 'furnace' || id === 'forging_table') && Array.isArray(meta?.inv)) {
     for (const stack of meta.inv) {
       if (!stack || stack.count <= 0) continue;
       spawnItemEntity(stackId(stack), centerX, centerY, stack.count, (Math.random() - 0.5) * 3, -1.5);
@@ -3498,7 +3814,7 @@ function handleBrokenBlock(broke) {
   const centerY = (broke.y + 0.5) * TILE_SIZE;
   spawnItemEntity(broke.drop, centerX, centerY);
 
-  if (isChest(broke.id) && Array.isArray(broke.meta?.inv)) {
+  if ((isChest(broke.id) || broke.id === 'furnace' || broke.id === 'forging_table') && Array.isArray(broke.meta?.inv)) {
     for (const stack of broke.meta.inv) {
       if (!stack || stack.count <= 0) continue;
       spawnItemEntity(stackId(stack), centerX + (Math.random() - 0.5) * TILE_SIZE * 0.6, centerY, stack.count, (Math.random() - 0.5) * 2, -1);
@@ -3557,7 +3873,10 @@ function updateEntities() {
 
   const playerCenterX = player.x + player.width / 2;
   leafScanCounter++;
-  if (renderFallingLeaves && leafScanCounter % 10 === 0 && leafParticles.length < 24) {
+  // Leafy biomes (e.g. the autumn Birch Grove) drop more leaves and allow more on screen.
+  const leafFall = leafFallAt(Math.floor(playerCenterX / TILE_SIZE), world.seed ?? 0);
+  const maxLeaves = Math.round(24 * Math.min(3, leafFall));
+  if (renderFallingLeaves && leafScanCounter % 10 === 0 && leafParticles.length < maxLeaves) {
     const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
     const playerTileY = Math.floor((player.y + player.height / 2) / TILE_SIZE);
     const radius = 6;
@@ -3569,7 +3888,7 @@ function updateEntities() {
         const blockId = world.getBlockId(tileX, tileY);
         if (!blockId.endsWith('_leaves')) continue;
         const distanceFactor = Math.max(0, 1 - Math.hypot(dx, dy) / radius);
-        if (Math.random() < 0.002 * (1 + distanceFactor) && leafParticles.length < 24) {
+        if (Math.random() < 0.002 * leafFall * (1 + distanceFactor) && leafParticles.length < maxLeaves) {
           const particleX = (tileX + 0.5) * TILE_SIZE + (Math.random() - 0.5) * TILE_SIZE * 0.4;
           const particleY = (tileY + 0.1) * TILE_SIZE;
           leafParticles.push(new LeafParticle(blockId, particleX, particleY, world.time, 0.6 + Math.random() * 0.5));
@@ -3631,7 +3950,9 @@ function initializeGameEngine() {
 
     if (openContainer) {
       const blockId = world.getBlockId(openContainer.tileX, openContainer.tileY);
-      if (!isChest(blockId) && blockId !== 'crafting_table') closeInventory();
+      if (!isChest(blockId) && blockId !== 'crafting_table' && blockId !== 'furnace' && blockId !== 'forging_table') closeInventory();
+      // Keep an open furnace's progress bars moving smoothly.
+      else if (openContainer.kind === 'furnace') registry.get('furnace').tick(world, openContainer.tileX, openContainer.tileY, openContainer.meta);
     }
 
     world.tick(dt * gameSpeed);

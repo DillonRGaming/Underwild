@@ -1,3 +1,5 @@
+import { fallTick } from './sand.js';
+
 export default {
   id: 'gravel',
   displayName: 'Gravel',
@@ -9,14 +11,7 @@ export default {
     return true;
   },
   falls: true,
-  tick(world, x, y) {
-    if (y < world.height - 1) {
-      const below = world.getBlockId(x, y + 1);
-      if (below === 'air' || below === 'water') {
-        world.setBlock(x, y, 'air');
-        world.setBlock(x, y + 1, 'gravel');
-        return;
-      }
-    }
+  tick(world, x, y, meta) {
+    fallTick(world, x, y, 'gravel', meta);
   }
 };

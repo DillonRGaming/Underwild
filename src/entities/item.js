@@ -1,3 +1,4 @@
+import { waterMass } from '../logic/water.js';
 const ITEM_CONFIG = {
   pickupRange: 12,
   attractionRange: 16,
@@ -48,6 +49,26 @@ export class ItemEntity {
 
     if (!this.onGround) {
       this.vy += this.gravity;
+    }
+
+    // Float in water, half submerged.
+    const cx = Math.floor((this.x + this.width / 2) / 16);
+    const cy = Math.floor((this.y + 2) / 16);
+    const water = world.inBounds(cx, cy) ? waterMass(world.getCell(cx, cy)) : 0;
+    if (water > 0) {
+      const above = world.inBounds(cx, cy - 1) && waterMass(world.getCell(cx, cy - 1)) > 0;
+      const surfaceY = above ? -Infinity : (cy + 1) * 16 - Math.min(1, water) * 16;
+      // Buoyancy matches gravity when the item's middle is at the water line, so it sits
+      // half in, half out; deeper it's pushed up, higher it settles back down.
+      // The sprite is drawn centred on (x, y), so y is the item's visual middle.
+      const bob = Math.sin(this.age * 0.06) * 1;
+      const depth = this.y - surfaceY - bob;
+      if (depth > -5) {
+        const lift = Math.max(0, Math.min(2, 1 + depth / 5));
+        this.vy -= this.gravity * lift;
+        this.vy *= 0.85;
+        this.vx *= 0.97;
+      }
     }
 
     if (this.readyForPickup && player) {

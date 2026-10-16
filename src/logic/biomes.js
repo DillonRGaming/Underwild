@@ -21,7 +21,7 @@ const PLAIN_CHANCE = 0.4;
 // Normal grass colour (average of the green in grass.png); plain zones use this.
 export const BASE_GRASS = [71, 128, 52];
 
-// grass: target average colour for grass greens. leaves: optional per-leaf-block
+// fog: mist density (0..1). leafFall: falling-leaf multiplier. grass: target average colour for grass greens. leaves: optional per-leaf-block
 // target colours. trees: [kind, weight] pairs. treeChance: odds a column is a tree
 // spot (plain = 0.45). plants: [blockId, weight] pairs; plantChance: odds a grass
 // block gets a plant.
@@ -31,7 +31,7 @@ export const BIOMES = {
     name: 'Forest',
     grass: [104, 168, 46],
     leaves: { oak_leaves: [74, 112, 46] },
-    treeLayout: { cell: 18, spacing: 16 },
+    treeLayout: { cell: 14, spacing: 12 },
     treeChance: 0.9,
     plantChance: 0.92,
     plants: [['short_grass', 5], ['bush', 4], ['fern', 3], ['grass_tuft', 3], ['flower_short_grass', 1], ['poppy', 0.5], ['rock', 1], ['pebble', 1]],
@@ -42,6 +42,7 @@ export const BIOMES = {
     name: 'Birch Grove',
     grass: [186, 146, 52],
     leaves: { birch_leaves: [222, 176, 40] },
+    leafFall: 5,
     treeChance: 0.85,
     plantChance: 0.85,
     plants: [['grass_tuft', 5], ['bush', 5], ['short_grass', 3], ['flower_short_grass', 2], ['rock', 1], ['pebble', 1.2]],
@@ -49,6 +50,7 @@ export const BIOMES = {
   },
   taiga: {
     name: 'Taiga',
+    fog: 1,
     grass: [62, 118, 82],
     treeChance: 0.9,
     plantChance: 0.88,
@@ -70,7 +72,7 @@ export const BIOMES = {
     treeChance: 0.12,
     plantChance: 0.95,
     plants: [['short_grass', 6], ['flower_short_grass', 4], ['grass_tuft', 3], ['bush', 1]],
-    treeLayout: { cell: 18, spacing: 16 },
+    treeLayout: { cell: 14, spacing: 12 },
     trees: [['big_oak', 1]]
   }
 };
@@ -141,14 +143,15 @@ export function findBiomeId(query) {
 }
 
 // Tile x of the nearest edge of the closest zone with this biome, a few blocks
-// inside so you land on its grass. Returns null if none is found nearby.
-export function nearestBiomeEdge(x, seed, biomeId, maxZones = 400) {
+// inside so you land on its grass. skip(zone) excludes zones (e.g. ones already
+// visited). Returns null if none is found nearby.
+export function nearestBiomeEdge(x, seed, biomeId, maxZones = 400, skip = () => false) {
   const startZone = Math.floor(x / BIOME_ZONE);
   const inset = BIOME_BLEND / 2;
   let best = null;
   for (let d = 0; d <= maxZones; d++) {
     for (const zone of d === 0 ? [startZone] : [startZone - d, startZone + d]) {
-      if (zoneBiome(zone, seed) !== biomeId) continue;
+      if (zoneBiome(zone, seed) !== biomeId || skip(zone)) continue;
       for (const edge of [zone * BIOME_ZONE + inset, (zone + 1) * BIOME_ZONE - 1 - inset]) {
         if (best === null || Math.abs(edge - x) < Math.abs(best - x)) best = edge;
       }
@@ -193,6 +196,38 @@ export function isTreeSlot(x, seed, roll) {
   const c = Math.floor(local / cell);
   const offset = Math.floor(roll(zone * 4099 + c) * (cell - spacing + 1));
   return local === c * cell + offset;
+}
+
+// Fog density at x (0..1), fading in across biome edges like the grass colour.
+export function fogAt(x, seed) {
+  const { own, other, t } = biomeBlendAt(x, seed);
+  const a = (own && BIOMES[own].fog) || 0;
+  if (own === other) return a;
+  const b = (other && BIOMES[other].fog) || 0;
+  const s = t * t * (3 - 2 * t);
+  return b + (a - b) * s;
+}
+
+// How many times more often leaves drop from trees here (1 = normal).
+export function leafFallAt(x, seed) {
+  const id = biomeAt(x, seed);
+  return (id && BIOMES[id].leafFall) || 1;
+}
+
+// Short dirt trails: one possible trail per TRAIL_CELL blocks, only in these biomes.
+const TRAIL_BIOMES = new Set(['forest', 'birch_grove', 'taiga', 'autumn_woods']);
+const TRAIL_CELL = 45;
+const TRAIL_CHANCE = 0.45;
+
+// { start, len } of the trail candidate covering x (before terrain checks), or null.
+export function trailCandidateAt(x, seed) {
+  const cell = Math.floor(x / TRAIL_CELL);
+  if (hash01(cell * 3 + 1, seed + 7001) >= TRAIL_CHANCE) return null;
+  const len = 4 + Math.floor(hash01(cell * 3 + 2, seed + 7001) * 7);
+  const start = cell * TRAIL_CELL + Math.floor(hash01(cell * 3, seed + 7001) * (TRAIL_CELL - len));
+  if (x < start || x >= start + len) return null;
+  if (!TRAIL_BIOMES.has(biomeAt(start, seed)) || !TRAIL_BIOMES.has(biomeAt(start + len - 1, seed))) return null;
+  return { start, len };
 }
 
 export function treeChanceAt(x, seed) {

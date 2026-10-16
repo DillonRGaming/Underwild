@@ -1420,3 +1420,178 @@ body.game-paused .menu-background,
     width: 100%;
   }
 }
+
+/* Furnace window: input over a flame over fuel, an arrow showing cooking progress, output. */
+#furnaceUI {
+  --slot-size: var(--chest-slot-size);
+  --item-size: var(--chest-item-size);
+}
+
+.furnace-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--slot-size) * 0.6);
+  margin-bottom: var(--inventory-section-gap);
+}
+
+.furnace-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.furnace-flame {
+  position: relative;
+  width: calc(var(--slot-size) * 0.45);
+  height: calc(var(--slot-size) * 0.5);
+  background: rgba(0, 0, 0, 0.35);
+  clip-path: polygon(50% 0, 85% 45%, 100% 100%, 0 100%, 15% 45%);
+}
+
+.furnace-flame-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  background: linear-gradient(to top, #ff6a00, #ffd23f);
+}
+
+.furnace-arrow {
+  position: relative;
+  width: calc(var(--slot-size) * 1.1);
+  height: calc(var(--slot-size) * 0.4);
+  background: rgba(0, 0, 0, 0.35);
+  clip-path: polygon(0 30%, 65% 30%, 65% 0, 100% 50%, 65% 100%, 65% 70%, 0 70%);
+}
+
+.furnace-arrow-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  background: #f0f0f0;
+}
+
+.furnace-output {
+  width: calc(var(--slot-size) * 1.3);
+  height: calc(var(--slot-size) * 1.3);
+}
+
+/* Forging table: hammer + ingot on the left, an arrow, a panel of tool heads, the output. */
+#forgeUI {
+  --slot-size: var(--chest-slot-size);
+  --item-size: var(--chest-item-size);
+}
+
+.forge-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--slot-size) * 0.35);
+  margin-bottom: var(--inventory-section-gap);
+}
+
+.forge-inputs {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.forge-plus {
+  font-size: calc(var(--slot-size) * 0.5);
+  line-height: 1;
+  color: var(--panel-title);
+}
+
+.forge-arrow {
+  width: calc(var(--slot-size) * 0.8);
+  height: calc(var(--slot-size) * 0.4);
+  background: var(--panel-title);
+  opacity: 0.6;
+  clip-path: polygon(0 30%, 60% 30%, 60% 0, 100% 50%, 60% 100%, 60% 70%, 0 70%);
+}
+
+.forge-panel {
+  width: calc(var(--slot-size) * 4.2);
+  height: calc(var(--slot-size) * 3);
+  padding: calc(var(--slot-size) * 0.2);
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.forge-hint {
+  font-size: 11px;
+  color: var(--panel-title);
+  opacity: 0.8;
+  text-align: center;
+  min-height: 1em;
+}
+
+.forge-choices {
+  display: grid;
+  grid-template-columns: repeat(2, var(--slot-size));
+  gap: calc(var(--slot-size) * 0.25);
+}
+
+.forge-choice {
+  width: var(--slot-size);
+  height: var(--slot-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.forge-choice img {
+  width: var(--item-size);
+  height: var(--item-size);
+  image-rendering: pixelated;
+}
+
+.forge-choice:hover:not(.disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.forge-choice.selected {
+  border-color: #ffb347;
+  background: rgba(255, 150, 50, 0.25);
+}
+
+.forge-choice.disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.forge-output {
+  width: calc(var(--slot-size) * 1.3);
+  height: calc(var(--slot-size) * 1.3);
+}
+
+/* Heat left in heated metal. */
+.heat-bar {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: 8%;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.heat-bar > div {
+  height: 100%;
+  background: linear-gradient(to right, #ff4a1c, #ffc23f);
+}

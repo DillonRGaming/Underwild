@@ -99,6 +99,34 @@ const recipes = [
   { type: 'shapeless', in: { rippled_sand: 1 }, out: { blockId: 'sand', count: 1 } },
   { type: 'shapeless', in: { cracked_sand: 1 }, out: { blockId: 'sand', count: 1 } },
   { type: 'shapeless', in: { red_rippled_sand: 1 }, out: { blockId: 'red_sand', count: 1 } },
+  // Metal tools are forged: heat an ingot, hammer it into a head at the crafting table,
+  // quench it, then fit it to a stick here.
+  { type: 'shapeless', in: { copper_pickaxe_head: 1, stick: 1 }, out: { itemId: 'copper_pickaxe', count: 1 } },
+  { type: 'shapeless', in: { copper_axe_head: 1, stick: 1 }, out: { itemId: 'copper_axe', count: 1 } },
+  { type: 'shapeless', in: { copper_shovel_head: 1, stick: 1 }, out: { itemId: 'copper_shovel', count: 1 } },
+  { type: 'shapeless', in: { copper_sword_head: 1, stick: 1 }, out: { itemId: 'copper_sword', count: 1 } },
+  { type: 'shapeless', in: { steel_pickaxe_head: 1, stick: 1 }, out: { itemId: 'steel_pickaxe', count: 1 } },
+  { type: 'shapeless', in: { steel_axe_head: 1, stick: 1 }, out: { itemId: 'steel_axe', count: 1 } },
+  { type: 'shapeless', in: { steel_shovel_head: 1, stick: 1 }, out: { itemId: 'steel_shovel', count: 1 } },
+  { type: 'shapeless', in: { steel_sword_head: 1, stick: 1 }, out: { itemId: 'steel_sword', count: 1 } },
+  { type: 'shapeless', in: { gold_pickaxe_head: 1, stick: 1 }, out: { itemId: 'gold_pickaxe', count: 1 } },
+  { type: 'shapeless', in: { gold_axe_head: 1, stick: 1 }, out: { itemId: 'gold_axe', count: 1 } },
+  { type: 'shapeless', in: { gold_shovel_head: 1, stick: 1 }, out: { itemId: 'gold_shovel', count: 1 } },
+  { type: 'shapeless', in: { gold_sword_head: 1, stick: 1 }, out: { itemId: 'gold_sword', count: 1 } },
+  { type: 'shaped', shape: ['c', 's'], ingredients: { c: 'coal', s: 'stick' }, out: { blockId: 'torch', count: 4 } },
+  { type: 'shapeless', in: { torch: 1, raw_copper: 1 }, out: { blockId: 'green_torch', count: 1 } },
+  { type: 'shapeless', in: { torch: 1, raw_gold: 1 }, out: { blockId: 'red_torch', count: 1 } },
+  { type: 'shapeless', in: { torch: 1, raw_steel: 1 }, out: { blockId: 'blue_torch', count: 1 } },
+  { type: 'shapeless', in: { torch: 1, copper_ingot: 1 }, out: { blockId: 'cyan_torch', count: 1 } },
+  { type: 'shapeless', in: { torch: 1, gold_ingot: 1 }, out: { blockId: 'purple_torch', count: 1 } },
+  { type: 'shaped', shape: ['sss', 's s', 'sss'], ingredients: { s: 'stone' }, out: { blockId: 'furnace', count: 1 } },
+  { type: 'shapeless', in: { sand: 1, coal: 1 }, out: { blockId: 'glass', count: 1 } },
+  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'planks' }, out: { blockId: 'trapdoor', count: 2 } },
+  { type: 'shaped', shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'gravel' }, out: { blockId: 'explosive', count: 1 } },
+  { type: 'shapeless', in: { dirt: 1, gravel: 1 }, out: { blockId: 'coarse_dirt', count: 2 } },
+  { type: 'shaped', shape: ['iii', 'iii', ' s '], ingredients: { i: 'steel_ingot', s: 'stick' }, out: { itemId: 'blacksmith_hammer', count: 1 } },
+  { type: 'shaped', shape: ['iii', ' s ', 'sss'], ingredients: { i: 'copper_ingot', s: 'stone' }, out: { blockId: 'forging_table', count: 1 } },
+  { type: 'shaped', shape: ['i i', ' i '], ingredients: { i: 'steel_ingot' }, out: { itemId: 'bucket', count: 1 } },
   { type: 'shapeless', in: { oak_log: 1 }, out: { blockId: 'oak_planks', count: 4 } },
   { type: 'shapeless', in: { birch_log: 1 }, out: { blockId: 'birch_planks', count: 4 } },
   { type: 'shapeless', in: { spruce_log: 1 }, out: { blockId: 'spruce_planks', count: 4 } },
@@ -157,12 +185,11 @@ const recipes = [
     out: { blockId: 'pine_chest', count: 1 }
   },
   
-  { 
-    type: 'shaped', 
-    shape: ['p  ', 'pp ', 'ppp'], 
-    ingredients: { p: 'planks' }, 
-    out: { blockId: 'oak_stairs', count: 4 } 
-  },
+  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'oak_planks' }, out: { blockId: 'oak_stairs', count: 4 } },
+  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'birch_planks' }, out: { blockId: 'birch_stairs', count: 4 } },
+  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'spruce_planks' }, out: { blockId: 'spruce_stairs', count: 4 } },
+  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'maple_planks' }, out: { blockId: 'maple_stairs', count: 4 } },
+  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'pine_planks' }, out: { blockId: 'pine_stairs', count: 4 } },
   
   { 
     type: 'shaped', 
@@ -215,83 +242,11 @@ const recipes = [
   
   { 
     type: 'shaped', 
-    shape: [' p ', ' s ', ' s '], 
+    shape: ['p ', ' s'], 
     ingredients: { p: 'planks', s: 'stick' }, 
     out: { itemId: 'trowel', count: 1 } 
   },
   
-  {
-    type: 'shaped',
-    shape: ['iii', ' s ', ' s '],
-    ingredients: { i: 'copper_ingot', s: 'stick' },
-    out: { itemId: 'copper_pickaxe', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['ii ', 'is ', ' s '],
-    ingredients: { i: 'copper_ingot', s: 'stick' },
-    out: { itemId: 'copper_axe', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: [' i ', ' s ', ' s '],
-    ingredients: { i: 'copper_ingot', s: 'stick' },
-    out: { itemId: 'copper_shovel', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: [' i ', ' i ', ' s '],
-    ingredients: { i: 'copper_ingot', s: 'stick' },
-    out: { itemId: 'copper_sword', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['iii', ' s ', ' s '],
-    ingredients: { i: 'steel_ingot', s: 'stick' },
-    out: { itemId: 'steel_pickaxe', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['ii ', 'is ', ' s '],
-    ingredients: { i: 'steel_ingot', s: 'stick' },
-    out: { itemId: 'steel_axe', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: [' i ', ' s ', ' s '],
-    ingredients: { i: 'steel_ingot', s: 'stick' },
-    out: { itemId: 'steel_shovel', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: [' i ', ' i ', ' s '],
-    ingredients: { i: 'steel_ingot', s: 'stick' },
-    out: { itemId: 'steel_sword', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['iii', ' s ', ' s '],
-    ingredients: { i: 'gold_ingot', s: 'stick' },
-    out: { itemId: 'gold_pickaxe', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['ii ', 'is ', ' s '],
-    ingredients: { i: 'gold_ingot', s: 'stick' },
-    out: { itemId: 'gold_axe', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: [' i ', ' s ', ' s '],
-    ingredients: { i: 'gold_ingot', s: 'stick' },
-    out: { itemId: 'gold_shovel', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: [' i ', ' i ', ' s '],
-    ingredients: { i: 'gold_ingot', s: 'stick' },
-    out: { itemId: 'gold_sword', count: 1 }
-  },
 
   { type: 'shapeless', in: { raw_copper: 1 }, out: { itemId: 'copper_ingot', count: 1 } },
   { type: 'shapeless', in: { raw_gold: 1 }, out: { itemId: 'gold_ingot', count: 1 } },

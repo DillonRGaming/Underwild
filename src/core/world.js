@@ -1,5 +1,6 @@
 import { sampleBlockAt } from '../logic/terrainGen.js';
 import { TILE_SIZE } from './utils.js';
+import { WaterSim } from '../logic/water.js';
 
 const LIGHT_SCALE = 2;
 const MAX_LIGHT = 15 * LIGHT_SCALE;
@@ -14,8 +15,10 @@ const LIGHT_FADE_SPEED = 50 * LIGHT_SCALE;
 const LIGHT_SOURCE_RISE = 8 * LIGHT_SCALE;
 const AIR_CELL = Object.freeze({ id: 'air', meta: null });
 
-// Seconds between falling-block ticks; sand and gravel drop one block per tick.
+// Seconds between falling-block ticks; sand and gravel count these to time their drops.
 const FALL_TICK_INTERVAL = 0.06;
+// Seconds between water simulation steps.
+const WATER_STEP_INTERVAL = 0.02;
 
 export class World {
   constructor(width, height, registry, seed = 0) {
@@ -40,6 +43,7 @@ export class World {
     this.initializeStars();
 
     this.seed = seed;
+    this.water = new WaterSim(this);
 
     this._savedEntities = new Map();
     this._crossChunkPending = new Map();
@@ -319,6 +323,13 @@ export class World {
     return result;
   }
 
+  // Mark a cell as changed after editing its meta in place (no lighting update).
+  touchCell(x, y) {
+    const chunk = this.chunks.get(this.chunkKey(this.chunkXFor(x)));
+    if (chunk) chunk.dirty = true;
+    if (this.onBlockChanged) this.onBlockChanged(x, y);
+  }
+
   getCell(x, y) {
     if (!this.inBounds(x, y)) return AIR_CELL;
     const chunk = this.chunks.get(this.chunkKey(Math.floor(x / this.chunkSize)));
@@ -342,10 +353,17 @@ export class World {
 
     if (chunk && chunk.cells) {
       const rx = x - cx * this.chunkSize;
+      // Clearing a plant that water was flowing through leaves the water behind.
+      const old = chunk.cells[y * this.chunkSize + rx];
+      if (id === 'air' && old?.meta?.water > 0) {
+        id = 'water';
+        meta = { mass: old.meta.water };
+      }
       chunk.cells[y * this.chunkSize + rx] = { id, meta };
       chunk.dirty = true;
       this.blockVersion = (this.blockVersion || 0) + 1;
       this.updateLighting(x, y);
+      this.water?.wakeAround(x, y);
       if (this.onBlockChanged) this.onBlockChanged(x, y);
     } else {
       if (!this._crossChunkPending.has(cx)) {
@@ -644,6 +662,13 @@ export class World {
   tick(dt) {
     // Falling blocks tick on a fixed clock so they drop at a steady pace;
     // everything else keeps the old random ~10%-of-frames cadence.
+    this._waterAccum = (this._waterAccum || 0) + dt;
+    // Catch up a few steps on slow frames so water keeps its real-time speed.
+    for (let n = 0; n < 3 && this._waterAccum >= WATER_STEP_INTERVAL; n++) {
+      this._waterAccum -= WATER_STEP_INTERVAL;
+      this.water.step();
+    }
+    this._waterAccum = Math.min(this._waterAccum, WATER_STEP_INTERVAL);
     this._fallAccum = (this._fallAccum || 0) + dt;
     const fallDue = this._fallAccum >= FALL_TICK_INTERVAL;
     if (fallDue) this._fallAccum = Math.min(this._fallAccum - FALL_TICK_INTERVAL, FALL_TICK_INTERVAL);

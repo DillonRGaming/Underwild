@@ -21,7 +21,8 @@ export class Breaker {
   }
   begin(world, x, y, creativeMode = false, heldItem = null) {
     const id = world.getBlockId(x, y);
-    if (id === 'air') {
+    // Water can't be mined or picked up as a block (collect it with a bucket instead).
+    if (id === 'air' || id === 'water') {
       this.cancel();
       return;
     }

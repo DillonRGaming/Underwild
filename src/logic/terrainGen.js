@@ -1,4 +1,4 @@
-import { treeChanceAt, biomeTreeKind, biomePlantAt, isTreeSlot, BUSH_SIZES, rockMeta } from './biomes.js';
+import { treeChanceAt, biomeTreeKind, biomePlantAt, isTreeSlot, trailCandidateAt, BUSH_SIZES, rockMeta } from './biomes.js';
 
 function fade(t) {
   return t * t * t * (t * (t * 6 - 15) + 10);
@@ -86,17 +86,11 @@ function rand01From(x, seed) {
   return hash32(Math.floor(x) + seed * 733);
 }
 
-const MAX_TREE_INFLUENCE = 10;
+const MAX_TREE_INFLUENCE = 12;
+// Ground lower than BASE + WATER_DEPTH (y grows downward) is flooded up to that level.
+const WATER_DEPTH = 10;
+const SAND_LAYERS = 4; // sand blocks under lakebeds and beaches
 
-function heightAtGen(xLocal, seedLocal, HEIGHT) {
-  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
-  const noise1 = perlinNoise(xLocal * 0.01, 0, seedLocal) * 25;
-  const noise2 = perlinNoise(xLocal * 0.03, 0, seedLocal * 2) * 12;
-  const noise3 = perlinNoise(xLocal * 0.08, 0, seedLocal * 3) * 6;
-  const mountain = perlinNoise(xLocal * 0.005, 0, seedLocal * 4) * 40;
-  const h = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-  return clamp(h, 6, HEIGHT - 4);
-}
 
 const TREE_CHANCE = 0.45;
 // A roll inside each tree type's range in treeBlockFor's plain mix.
@@ -108,12 +102,13 @@ function treeChance(x, seed) {
 
 // Big trees drawn as ASCII art ('#' = leaves), centred on the trunk. `visible` is how
 // many trunk blocks show below the crown; the trunk runs up into the crown's lower part.
-function artTreeBlock(shape, centerX, x, y, top, logType, leavesType) {
+function artTreeBlock(shape, centerX, x, y, top, logType, leavesType, lift = 0) {
   const art = shape.art;
-  const crownBottom = top - shape.visible - 1;
+  const crownBottom = top - shape.visible - 1 - lift;
   const crownTop = crownBottom - art.length + 1;
   if (crownTop < 2) return null;
-  const trunkTop = crownTop + Math.floor(art.length * 0.45);
+  // The trunk only reaches a couple of rows into the crown, so leaves hide its top.
+  const trunkTop = crownBottom - 1;
   if (x === centerX && y < top && y >= trunkTop) return { id: logType, meta: { noCollision: true } };
   const row = y - crownTop;
   if (row < 0 || row >= art.length) return null;
@@ -127,57 +122,48 @@ function artTreeBlock(shape, centerX, x, y, top, logType, leavesType) {
 // where leafStart = ground - trunk. Keep left/right <= 3 so trees never touch
 // (big_oak uses wider slots; see treeLayout in biomes.js).
 const TREE_SHAPES = {
-  // Broad, lumpy-edged oaks (up to 7 out from the trunk) for the Forest and Meadow.
+  // Broad, rounded oaks (up to 5 out from the trunk) for the Forest and Meadow.
   big_oak: [
     { visible: 3, art: [
-      '.....##.###....',
-      '...#########...',
-      '.############..',
-      '##############.',
-      '###############',
-      '###############',
-      '.##############',
-      '..############.',
-      '....###..###...'] },
-    { visible: 4, art: [
-      '....###..##....',
-      '..##########...',
-      '.#############.',
-      '###############',
-      '###############',
-      '###############',
-      '.#############.',
-      '...##.....##...'] },
+      '...###.....',
+      '.#######...',
+      '#########..',
+      '##########.',
+      '###########',
+      '.#########.',
+      '..###.###..'] },
     { visible: 3, art: [
-      '......###......',
-      '....#######....',
-      '..##########...',
-      '.############..',
-      '##############.',
-      '###############',
-      '###############',
-      '.#############.',
-      '..###########..',
-      '....##...##....'] },
-    { visible: 3, art: [
-      '......####.....',
-      '...##########..',
-      '..############.',
-      '.##############',
-      '###############',
-      '###############',
-      '..#############',
-      '....#########..',
-      '......##..##...'] },
+      '....####...',
+      '..#######..',
+      '.#########.',
+      '###########',
+      '###########',
+      '.##########',
+      '...##..##..'] },
     { visible: 4, art: [
-      '..###....###...',
-      '.#####..#####..',
-      '##############.',
-      '###############',
-      '###############',
-      '.##############',
-      '..############.',
-      '...####..####..'] }
+      '..##..###..',
+      '.#########.',
+      '###########',
+      '###########',
+      '.#########.',
+      '..#######..'] },
+    { visible: 3, art: [
+      '....###....',
+      '..#######..',
+      '.#########.',
+      '###########',
+      '###########',
+      '##########.',
+      '.########..',
+      '...##.##...'] },
+    { visible: 4, art: [
+      '..####.....',
+      '.#######...',
+      '#########..',
+      '##########.',
+      '##########.',
+      '.########..',
+      '..##..##...'] }
   ],
   oak: [
     { trunk: 5, rows: [[-3, 1, 1], [-2, 2, 2], [-1, 3, 2], [0, 3, 3], [1, 2, 3], [2, 2, 2], [3, 1, 1]] },
@@ -222,28 +208,14 @@ function isTreeCenterAt(xCenter, seedLocal, worldWidth, HEIGHT, worldType = 'reg
   if (xCenter < 2 || xCenter > worldWidth - 3) return false;
   
   const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
-  let top;
+  const top = naturalHeightAt(xCenter, seedLocal, HEIGHT, worldType);
   
-  if (worldType === 'mountains') {
-    const noise1 = perlinNoise(xCenter * 0.01, 0, seedLocal) * 25;
-    const noise2 = perlinNoise(xCenter * 0.03, 0, seedLocal * 2) * 15;
-    const noise3 = perlinNoise(xCenter * 0.08, 0, seedLocal * 3) * 8;
-    const mountain = perlinNoise(xCenter * 0.005, 0, seedLocal * 4) * 80;
-    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-    top = clamp(top, 6, HEIGHT - 4);
-  } else {
-    const noise1 = perlinNoise(xCenter * 0.01, 0, seedLocal) * 25;
-    const noise2 = perlinNoise(xCenter * 0.03, 0, seedLocal * 2) * 12;
-    const noise3 = perlinNoise(xCenter * 0.08, 0, seedLocal * 3) * 6;
-    const mountain = perlinNoise(xCenter * 0.005, 0, seedLocal * 4) * 40;
-    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-    top = clamp(top, 6, HEIGHT - 4);
-  }
-  
+  if (worldType !== 'superflat' && onLakeShore(xCenter, seedLocal)) return false;
+
   const slopeTolerance = worldType === 'mountains' ? 8 : 3;
   
-  const leftTop = heightAtGen(xCenter - 1, seedLocal, HEIGHT);
-  const rightTop = heightAtGen(xCenter + 1, seedLocal, HEIGHT);
+  const leftTop = naturalHeightAt(xCenter - 1, seedLocal, HEIGHT, worldType);
+  const rightTop = naturalHeightAt(xCenter + 1, seedLocal, HEIGHT, worldType);
   const slope = Math.abs(leftTop - top) + Math.abs(rightTop - top);
   if (slope > slopeTolerance) return false;
 
@@ -256,7 +228,8 @@ function isTreeCenterAt(xCenter, seedLocal, worldWidth, HEIGHT, worldType = 'reg
 function pickTreeType(centerX, seedLocal) {
   let treeTypeNoise = rand01From(centerX * 17.3, seedLocal);
   const biomeKind = biomeTreeKind(centerX, seedLocal, treeTypeNoise);
-  if (biomeKind) treeTypeNoise = TREE_KIND_ROLL[biomeKind];
+  // Plain (biome-less) zones only grow small oaks, so every other tree type means a biome.
+  treeTypeNoise = TREE_KIND_ROLL[biomeKind || 'oak'];
   let logType = 'oak_log';
   let leavesType = 'oak_leaves';
   let leafPattern = 'oak';
@@ -295,10 +268,10 @@ function pickTreeType(centerX, seedLocal) {
 }
 
 // Fallen trees: a rare swap for a standing tree. A stump stays at the tree's spot and
-// the trunk lies on its side a block away, on ground that varies by at most one
-// block, falling only toward a side with no other tree (trunk or canopy) in reach.
-const FALLEN_TREE_CHANCE = 0.07;
-const FALLEN_CANOPY_CLEARANCE = 7;
+// the trunk lies on its side a block away, resting on the terrain blocks (it steps
+// down with the ground, which may vary by at most one block), falling only toward a side with no other tree (trunk or canopy) in reach.
+const FALLEN_TREE_CHANCE = 0.12;
+const FALLEN_CANOPY_CLEARANCE = 10;
 
 function fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType) {
   if (rand01From(cx * 577 + 3, seed) >= FALLEN_TREE_CHANCE) return null;
@@ -312,54 +285,102 @@ function fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType) {
       const h = naturalHeightAt(cx + dir * i, seed, worldHeight, worldType);
       minH = Math.min(minH, h); maxH = Math.max(maxH, h);
     }
-    if (maxH - minH > 1) continue;
+    if (maxH - minH > 1 || onLakeShore(cx, seed) || onLakeShore(far, seed)) continue;
     let blocked = false;
     for (let i = 1; i <= len + 1 + FALLEN_CANOPY_CLEARANCE && !blocked; i++) {
       blocked = isTreeCenterAt(cx + dir * i, seed, worldWidth, worldHeight, worldType);
     }
     if (blocked) continue;
-    return { dir, len, logY: minH - 1, stumpY: naturalHeightAt(cx, seed, worldHeight, worldType) - 1 };
+    // logY is the trunk's far end, where the crown sits; each log block rests on the terrain below it.
+    return { dir, len, logY: naturalHeightAt(cx + dir * (len + 1), seed, worldHeight, worldType) - 1, stumpY: naturalHeightAt(cx, seed, worldHeight, worldType) - 1 };
   }
   return null;
 }
 
-function fallenTreeBlockFor(fallen, cx, x, y, seed) {
-  const { logType } = pickTreeType(cx, seed);
+// { standX, stumpX } for the nearest fallen tree (standX is just behind its stump), or null.
+// skip(stumpX) lets callers pass over trees they've already visited.
+export function nearestFallenTreeX(x, seed, worldWidth, worldHeight, worldType = 'regular', maxDistance = 30000, skip = () => false) {
+  if (worldType === 'superflat') return null;
+  for (let d = 0; d <= maxDistance; d++) {
+    for (const cx of d === 0 ? [x] : [x - d, x + d]) {
+      if (cx < 2 || cx > worldWidth - 3) continue;
+      if (rand01From(cx * 577 + 3, seed) >= FALLEN_TREE_CHANCE) continue;
+      if (skip(cx)) continue;
+      if (!isTreeCenterAt(cx, seed, worldWidth, worldHeight, worldType)) continue;
+      const fallen = fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType);
+      if (fallen) return { standX: cx - fallen.dir * 2, stumpX: cx };
+    }
+  }
+  return null;
+}
+
+// Crown of a fallen tree, by row from two above the trunk down to one below it:
+// [from, to] in blocks along the fall direction, where 0 is the trunk's last block.
+const FALLEN_CROWN = [[-1, 1], [-2, 2], [1, 3], [1, 2]];
+
+function fallenTreeBlockFor(fallen, cx, x, y, seed, worldHeight, worldType) {
+  const { logType, leavesType } = pickTreeType(cx, seed);
   if (x === cx && y === fallen.stumpY) {
     return { id: logType === 'birch_log' ? 'birch_log_base' : logType, meta: null };
   }
   const i = (x - cx) * fallen.dir;
-  if (i >= 2 && i <= fallen.len + 1 && y === fallen.logY) {
+  if (i >= 2 && i <= fallen.len + 1 && y === naturalHeightAt(x, seed, worldHeight, worldType) - 1) {
     return { id: logType, meta: { axis: 'x' } };
+  }
+  // The crown lies around the far end of the trunk; never inside the ground.
+  const k = i - (fallen.len + 1);
+  const row = FALLEN_CROWN[y - fallen.logY + 2];
+  if (row && k >= row[0] && k <= row[1] && y < naturalHeightAt(x, seed, worldHeight, worldType)) {
+    return { id: leavesType, meta: { noCollision: true } };
   }
   return null;
 }
 
+// Trees need clear space under their crown: if the ground anywhere beneath the crown
+// (e.g. a slope rising beside the trunk) comes within MIN_CROWN_CLEARANCE blocks of the
+// lowest leaves, the trunk is lengthened by the returned amount (-1 = too steep, no tree).
+// Cached per tree.
+const MIN_CROWN_CLEARANCE = 3;
+const MAX_TREE_LIFT = 2;
+const treeLiftCache = new Map();
+
+function treeLift(shape, centerX, top, seed, worldHeight, worldType) {
+  const key = `${seed}|${worldType}|${centerX}`;
+  const cached = treeLiftCache.get(key);
+  if (cached !== undefined) return cached;
+  let crownBottom, left, right;
+  if (shape.art) {
+    crownBottom = top - shape.visible - 1;
+    left = right = shape.art[0].length >> 1;
+  } else {
+    crownBottom = top - shape.trunk + shape.rows[shape.rows.length - 1][0];
+    left = Math.max(...shape.rows.map(row => row[1]));
+    right = Math.max(...shape.rows.map(row => row[2]));
+  }
+  let highestGround = top;
+  for (let dx = -left; dx <= right; dx++) {
+    highestGround = Math.min(highestGround, naturalHeightAt(centerX + dx, seed, worldHeight, worldType));
+  }
+  const clearance = highestGround - crownBottom - 1;
+  let lift = Math.max(0, MIN_CROWN_CLEARANCE - clearance);
+  // Needing a much longer trunk means a steep slope: skip the tree rather than grow a beanpole.
+  if (lift > MAX_TREE_LIFT) lift = -1;
+  if (treeLiftCache.size > 20000) treeLiftCache.clear();
+  treeLiftCache.set(key, lift);
+  return lift;
+}
+
 function treeBlockFor(centerX, x, y, seedLocal, worldWidth, worldHeight, HEIGHT, worldType = 'regular') {
   const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
-  let top;
-  
-  if (worldType === 'mountains') {
-    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
-    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 15;
-    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 8;
-    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 80;
-    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-    top = clamp(top, 6, HEIGHT - 4);
-  } else {
-    const noise1 = perlinNoise(centerX * 0.01, 0, seedLocal) * 25;
-    const noise2 = perlinNoise(centerX * 0.03, 0, seedLocal * 2) * 12;
-    const noise3 = perlinNoise(centerX * 0.08, 0, seedLocal * 3) * 6;
-    const mountain = perlinNoise(centerX * 0.005, 0, seedLocal * 4) * 40;
-    top = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-    top = clamp(top, 6, HEIGHT - 4);
-  }
+  const top = naturalHeightAt(centerX, seedLocal, HEIGHT, worldType);
   
   const { logType, leavesType, leafPattern } = pickTreeType(centerX, seedLocal);
   const shapes = TREE_SHAPES[leafPattern];
   const shape = shapes[Math.floor(rand01From(centerX * 41.7, seedLocal + 13) * shapes.length) % shapes.length];
-  if (shape.art) return artTreeBlock(shape, centerX, x, y, top, logType, leavesType);
-  const trunk = shape.trunk;
+  const lift = treeLift(shape, centerX, top, seedLocal, worldHeight, worldType);
+  if (lift < 0) return null;
+  if (shape.art) return artTreeBlock(shape, centerX, x, y, top, logType, leavesType, lift);
+  const trunk = shape.trunk + lift;
   const leafStartY = top - trunk;
   const rows = shape.rows;
   if (leafStartY + rows[0][0] < 2 || leafStartY + rows[rows.length - 1][0] >= top) return null;
@@ -439,6 +460,16 @@ function sampleSuperflat(x, y, seed, HEIGHT, surfaceY, superflatLayers) {
   return { id: 'air', meta: null };
 }
 
+function rawHeightAt(x, seed, worldHeight, worldType) {
+  const BASE = 50 + Math.floor(rand01From(seed, seed) * 10);
+  const mountains = worldType === 'mountains';
+  const noise1 = perlinNoise(x * 0.01, 0, seed) * 25;
+  const noise2 = perlinNoise(x * 0.03, 0, seed * 2) * (mountains ? 15 : 12);
+  const noise3 = perlinNoise(x * 0.08, 0, seed * 3) * (mountains ? 8 : 6);
+  const mountain = perlinNoise(x * 0.005, 0, seed * 4) * (mountains ? 80 : 40);
+  return clamp(BASE + Math.round(noise1 + noise2 + noise3 + mountain), 6, worldHeight - 4);
+}
+
 export function naturalHeightAt(x, seed, worldHeight, worldType = 'regular') {
   const BASE = 50 + Math.floor(rand01From(seed, seed) * 10);
   if (worldType === 'superflat') return BASE;
@@ -447,12 +478,125 @@ export function naturalHeightAt(x, seed, worldHeight, worldType = 'regular') {
   const noise2 = perlinNoise(x * 0.03, 0, seed * 2) * (mountains ? 15 : 12);
   const noise3 = perlinNoise(x * 0.08, 0, seed * 3) * (mountains ? 8 : 6);
   const mountain = perlinNoise(x * 0.005, 0, seed * 4) * (mountains ? 80 : 40);
-  const h = BASE + Math.round(noise1 + noise2 + noise3 + mountain);
-  return clamp(h, 6, worldHeight - 4);
+  const natural = clamp(BASE + Math.round(noise1 + noise2 + noise3 + mountain), 6, worldHeight - 4);
+  const lake = lakeAt(x, seed, worldHeight, worldType);
+  if (!lake) return natural;
+  // A bowl of water with a flat beach either side, easing back into the land around it.
+  const waterLevel = BASE + WATER_DEPTH;
+  const d = Math.abs(x - lake.center);
+  if (d <= lake.half) {
+    const t = d / lake.half;
+    return waterLevel + 1 + Math.round(lake.depth * (1 - t * t));
+  }
+  if (d <= lake.half + LAKE_BEACH) return waterLevel;
+  const k = (d - lake.half - LAKE_BEACH) / LAKE_BLEND;
+  const s = k * k * (3 - 2 * k);
+  return clamp(Math.round(waterLevel + (natural - waterLevel) * s), 6, worldHeight - 4);
+}
+
+// Top row of a lake's generated water at x, or null when x isn't under a lake.
+export function lakeWaterTopAt(x, seed, worldHeight, worldType = 'regular') {
+  if (worldType === 'superflat' || !lakeAt(x, seed, worldHeight, worldType)) return null;
+  const BASE = 50 + Math.floor(rand01From(seed, seed) * 10);
+  return BASE + WATER_DEPTH;
+}
+
+// Big lakes: at most one per LAKE_CELL blocks. half = half-width of the water.
+const LAKE_CELL = 420;
+const LAKE_CHANCE = 0.85;
+const LAKE_BEACH = 18;
+const LAKE_BLEND = 36;
+
+const LAKE_MAX_RELIEF = 26;  // lakes only form where the natural land varies this little
+const lakeCache = new Map();
+
+function lakeAt(x, seed, worldHeight = 256, worldType = 'regular') {
+  const lake = lakeForCell(Math.floor(x / LAKE_CELL), seed, worldHeight, worldType);
+  if (!lake || Math.abs(x - lake.center) > lake.reach) return null;
+  return lake;
+}
+
+// The lake planned for a LAKE_CELL-wide cell (or null), cached.
+function lakeForCell(cell, seed, worldHeight = 256, worldType = 'regular') {
+  const key = `${seed}|${worldType}|${cell}`;
+  let lake = lakeCache.get(key);
+  if (lake === undefined) {
+    lake = null;
+    if (rand01From(cell * 811 + 1, seed + 3030) < LAKE_CHANCE) {
+      const half = 25 + Math.floor(rand01From(cell * 811 + 2, seed + 3030) * 35);
+      const reach = half + LAKE_BEACH + LAKE_BLEND;
+      const center = cell * LAKE_CELL + reach + Math.floor(rand01From(cell * 811 + 3, seed + 3030) * (LAKE_CELL - 2 * reach));
+      // Only on land that's already fairly flat, so lakes don't wedge between hills.
+      let lo = Infinity, hi = -Infinity;
+      for (let dx = -reach; dx <= reach; dx += 4) {
+        const h = rawHeightAt(center + dx, seed, worldHeight, worldType);
+        lo = Math.min(lo, h); hi = Math.max(hi, h);
+      }
+      if (hi - lo <= LAKE_MAX_RELIEF) lake = { center, half, reach, depth: 4 + Math.floor(rand01From(cell * 811 + 4, seed + 3030) * 6) };
+    }
+    if (lakeCache.size > 5000) lakeCache.clear();
+    lakeCache.set(key, lake);
+  }
+  return lake;
+}
+
+// { standX, center } for the nearest lake (standX is on its near beach), or null.
+// skip(center) lets callers pass over lakes they've already visited.
+export function nearestLakeX(x, seed, worldWidth, worldHeight, worldType = 'regular', skip = () => false) {
+  if (worldType === 'superflat') return null;
+  const start = Math.floor(x / LAKE_CELL);
+  let best = null;
+  for (let d = 0; d <= 60; d++) {
+    for (const cell of d === 0 ? [start] : [start - d, start + d]) {
+      const lake = lakeForCell(cell, seed, worldHeight, worldType);
+      if (!lake || skip(lake.center)) continue;
+      const side = x <= lake.center ? -1 : 1;
+      const standX = lake.center + side * (lake.half + Math.floor(LAKE_BEACH / 2));
+      if (standX < 2 || standX > worldWidth - 3) continue;
+      if (!best || Math.abs(standX - x) < Math.abs(best.standX - x)) best = { standX, center: lake.center };
+    }
+    if (best && Math.abs(best.standX - x) < (d - 1) * LAKE_CELL) break;
+  }
+  return best;
+}
+
+// Sand depth under a sandy column: deep at the water, thinning across the beach to one layer.
+function sandLayersAt(x, seed) {
+  const lake = lakeAt(x, seed);
+  if (!lake) return SAND_LAYERS;
+  const d = Math.abs(x - lake.center) - lake.half;
+  if (d <= 0) return SAND_LAYERS;
+  return Math.max(1, Math.round(SAND_LAYERS - (SAND_LAYERS - 1) * d / LAKE_BEACH));
+}
+
+// Wet sand: the lakebed and the first few blocks of shore.
+function isWetSand(x, seed, underwater) {
+  if (underwater) return true;
+  const lake = lakeAt(x, seed);
+  return !!lake && Math.abs(x - lake.center) - lake.half <= 3;
+}
+
+// Water plus its beaches: sandy, with no trees, plants or trails.
+function onLakeShore(x, seed) {
+  const lake = lakeAt(x, seed);
+  return !!lake && Math.abs(x - lake.center) <= lake.half + LAKE_BEACH;
 }
 
 export function naturalDirtDepthAt(x, seed, worldType = 'regular') {
   return worldType === 'mountains' ? 8 + Math.floor(rand01From(x, seed) * 4) : 4 + Math.floor(rand01From(x, seed) * 2);
+}
+
+// Dirt trails only form where every step along them is at most one block.
+function isTrailAt(x, seed, worldHeight, worldType) {
+  const trail = trailCandidateAt(x, seed);
+  if (!trail) return false;
+  let prev = naturalHeightAt(trail.start, seed, worldHeight, worldType);
+  for (let i = 1; i < trail.len; i++) {
+    const h = naturalHeightAt(trail.start + i, seed, worldHeight, worldType);
+    if (Math.abs(h - prev) > 1) return false;
+    prev = h;
+  }
+  return true;
 }
 
 export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = 'regular', superflatLayers = null) {
@@ -483,22 +627,29 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
     if (!isTreeCenterAt(cx, seed, worldWidth, HEIGHT, worldType)) continue;
     const fallen = fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType);
     const tb = fallen
-      ? fallenTreeBlockFor(fallen, cx, x, y, seed)
+      ? fallenTreeBlockFor(fallen, cx, x, y, seed, worldHeight, worldType)
       : treeBlockFor(cx, x, y, seed, worldWidth, worldHeight, HEIGHT, worldType);
     if (tb) {
       return { id: tb.id, meta: tb.meta ?? null };
     }
   }
   
-  const vegetation = generateVegetationAt(x, y, h, seed);
+  const waterLevel = BASE + WATER_DEPTH;
+  // Only proper lakes hold water; ordinary valleys stay dry.
+  const underwater = h > waterLevel && !!lakeAt(x, seed, worldHeight, worldType);
+  const sandy = underwater || onLakeShore(x, seed);
+  const onTrail = !sandy && (y === h || y === h - 1) && isTrailAt(x, seed, worldHeight, worldType);
+  const vegetation = onTrail || sandy ? null : generateVegetationAt(x, y, h, seed);
   if (vegetation) return vegetation;
 
   if (y >= HEIGHT - 2) {
     return { id: 'bedrock', meta: null };
   } else if (y < h) {
-    return { id: 'air', meta: null };
+    return underwater && y >= waterLevel ? { id: 'water', meta: { still: true } } : { id: 'air', meta: null };
   } else if (y === h) {
-    return { id: 'grass', meta: null };
+    return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : 'grass', meta: null };
+  } else if (sandy && y <= h + sandLayersAt(x, seed)) {
+    return { id: 'sand', meta: null };
   } else if (y <= h + (worldType === 'mountains' ? 8 + Math.floor(rand01From(x, seed) * 4) : 4 + Math.floor(rand01From(x, seed) * 2))) {
     const dirtType = rand01From(x * y + seed, seed + y);
     return { id: dirtType < 0.25 ? 'coarse_dirt' : 'dirt', meta: null };

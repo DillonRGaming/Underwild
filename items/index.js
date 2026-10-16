@@ -28,6 +28,36 @@ import gold_ingot from './gold_ingot.js';
 import gold_rod from './gold_rod.js';
 import stick from './stick.js';
 
+import copper_ingot_heated from './copper_ingot_heated.js';
+import copper_pickaxe_head from './copper_pickaxe_head.js';
+import copper_pickaxe_head_heated from './copper_pickaxe_head_heated.js';
+import copper_axe_head from './copper_axe_head.js';
+import copper_axe_head_heated from './copper_axe_head_heated.js';
+import copper_shovel_head from './copper_shovel_head.js';
+import copper_shovel_head_heated from './copper_shovel_head_heated.js';
+import copper_sword_head from './copper_sword_head.js';
+import copper_sword_head_heated from './copper_sword_head_heated.js';
+import steel_ingot_heated from './steel_ingot_heated.js';
+import steel_pickaxe_head from './steel_pickaxe_head.js';
+import steel_pickaxe_head_heated from './steel_pickaxe_head_heated.js';
+import steel_axe_head from './steel_axe_head.js';
+import steel_axe_head_heated from './steel_axe_head_heated.js';
+import steel_shovel_head from './steel_shovel_head.js';
+import steel_shovel_head_heated from './steel_shovel_head_heated.js';
+import steel_sword_head from './steel_sword_head.js';
+import steel_sword_head_heated from './steel_sword_head_heated.js';
+import gold_ingot_heated from './gold_ingot_heated.js';
+import gold_pickaxe_head from './gold_pickaxe_head.js';
+import gold_pickaxe_head_heated from './gold_pickaxe_head_heated.js';
+import gold_axe_head from './gold_axe_head.js';
+import gold_axe_head_heated from './gold_axe_head_heated.js';
+import gold_shovel_head from './gold_shovel_head.js';
+import gold_shovel_head_heated from './gold_shovel_head_heated.js';
+import gold_sword_head from './gold_sword_head.js';
+import gold_sword_head_heated from './gold_sword_head_heated.js';
+import blacksmith_hammer from './blacksmith_hammer.js';
+import bucket from './bucket.js';
+import water_bucket from './water_bucket.js';
 export function registerAllItems(registry) {
   [
     apple,
@@ -58,6 +88,36 @@ export function registerAllItems(registry) {
     raw_gold,
     gold_ingot,
     gold_rod,
-    stick
+    stick,
+    copper_ingot_heated,
+    copper_pickaxe_head,
+    copper_pickaxe_head_heated,
+    copper_axe_head,
+    copper_axe_head_heated,
+    copper_shovel_head,
+    copper_shovel_head_heated,
+    copper_sword_head,
+    copper_sword_head_heated,
+    steel_ingot_heated,
+    steel_pickaxe_head,
+    steel_pickaxe_head_heated,
+    steel_axe_head,
+    steel_axe_head_heated,
+    steel_shovel_head,
+    steel_shovel_head_heated,
+    steel_sword_head,
+    steel_sword_head_heated,
+    gold_ingot_heated,
+    gold_pickaxe_head,
+    gold_pickaxe_head_heated,
+    gold_axe_head,
+    gold_axe_head_heated,
+    gold_shovel_head,
+    gold_shovel_head_heated,
+    gold_sword_head,
+    gold_sword_head_heated,
+    blacksmith_hammer,
+    bucket,
+    water_bucket
   ].forEach(item => registry.register({ ...item, isItem: true }));
 }

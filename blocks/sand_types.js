@@ -4,13 +4,14 @@ function sandstone(id, displayName, color) {
   return { id, displayName, shape: 'full', solid: true, color, hardness: 2.5, isSolid() { return true; } };
 }
 
-export const LOOSE_SAND_IDS = ['sand', 'rippled_sand', 'cracked_sand', 'red_sand', 'red_rippled_sand'];
+export const LOOSE_SAND_IDS = ['sand', 'wet_sand', 'rippled_sand', 'cracked_sand', 'red_sand', 'red_rippled_sand'];
 export const SANDSTONE_IDS = [
   'sandstone', 'smooth_sandstone', 'cut_sandstone', 'chiseled_sandstone',
   'red_sandstone', 'red_smooth_sandstone', 'red_cut_sandstone', 'red_chiseled_sandstone'
 ];
 
 export default [
+  createFallingSand('wet_sand', 'Wet Sand', '#b8955c'),
   createFallingSand('rippled_sand', 'Rippled Sand', '#e8b46a'),
   createFallingSand('cracked_sand', 'Cracked Sand', '#e2b06a'),
   createFallingSand('red_sand', 'Red Sand', '#d27a32'),

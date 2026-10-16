@@ -1,6 +1,7 @@
 import { TILE_SIZE, darkenHex } from './utils.js';
-import { naturalHeightAt, naturalDirtDepthAt } from '../logic/terrainGen.js';
-import { grassColorAt, leafColorAt, biomeHasLeafTint, ROCK_SCALES } from '../logic/biomes.js';
+import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
+import { waterLevel, waterMass, WATER_LEVELS } from '../logic/water.js';
+import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
 
 const MIN_BRIGHTNESS = 0.04;
 const NIGHT_SKY = [3, 4, 9];
@@ -27,7 +28,27 @@ const HELD_ARM_LOOK = 0.2;
 const HELD_ARM_WALK = 0.25;
 // Blocks whose green pixels take on the local biome's grass colour.
 const BIOME_TINTED = new Set(['grass', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'bush_1', 'bush_2', 'bush_3', 'bush_4']);
+// Plants that bend in the wind: the tip leans furthest, the base stays put.
+const WIND_SWAY = new Set(['short_grass', 'grass_tuft', 'fern', 'flower_short_grass', 'poppy', 'bush']);
+const WIND_MAX_BEND = 2.5;   // texels the tip of a plant bends in the strongest gust
+const WIND_SPEED = 14;       // tiles per second a gust travels across the land
+const WIND_STIFFNESS = { bush: 0.45 };
+const TRUNK_MAX_BEND = 2.2;  // texels the top of a TRUNK_REF_HEIGHT-tall trunk bends in a gust
+const TRUNK_REF_HEIGHT = 9;   // trunk height (blocks) that reaches the full bend
+const LEAF_MAX_SWAY = 1.6;   // texels a leaf block shifts in the strongest gust
+const FOG_SMOOTH = 5;          // columns either side averaged for the fog's ground line
+const FOG_TEXELS_PER_TILE = 8; // mist texture texels per block column (texture is 256 wide)
+const FALL_SLIDE_MS = 120;   // matches world.js FALL_TICK_INTERVAL
 const LEAF_FRINGE_DEPTH = 2;
+
+function isTrunk(id) {
+  return id.endsWith('_log') || id === 'birch_log_base';
+}
+
+// Images report `complete` once loaded; canvases (tinted textures) have no such flag.
+function isTextureReady(texture) {
+  return !!texture && texture.width > 0 && texture.complete !== false;
+}
 
 function isGreenPixel(d, i) {
   return d[i + 3] !== 0 && d[i + 1] > d[i] && d[i + 1] > d[i + 2];
@@ -150,6 +171,11 @@ export class Renderer {
     world.updateDisplayLight(lightDt, startX - 1, endX + 1, startY - 1, endY + 1);
     this.updatePlacedLight(startX, endX, startY, endY);
 
+    // Mist sits behind the land and trees, filling the open air between them.
+    this.drawFog(startX, endX);
+
+    this._splashes = [];
+    this._waterFrame = (this._waterFrame || 0) + 1;
     for (let x = startX; x <= endX; x++) {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
       for (let y = startY; y <= endY; y++) {
@@ -157,21 +183,58 @@ export class Renderer {
         const t = this.registry.get(cell.id);
         if (!t) continue;
         if (!t.solid || cell.id === 'air') {
-          if (!this.isOpenSky(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
+          // Lakes have a fixed sand backdrop where their water was generated; it stays put
+          // whatever the water in front of it does.
+          if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
+          else if (!this.isOpenSky(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
           if (cell.id === 'air') continue;
         }
+        // A block still sliding into its cell leaves the cell's bottom uncovered: fill it.
+        if (cell.meta?.fellAt && performance.now() - cell.meta.fellAt < (cell.meta.slideMs || FALL_SLIDE_MS)) {
+          if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
+          else if (y >= this.naturalSurfaceAt(x)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
+        }
+        // Water flowing through a plant: solid water behind it (so the colour matches the
+        // water around it), then a see-through layer in front so the plant sits in the water.
+        const plantWater = cell.meta?.water > 0 && cell.id !== 'water';
+        if (plantWater) this.drawBlock(x, y, this.registry.get('water'), { mass: cell.meta.water });
         this.drawBlock(x, y, t, cell.meta || {});
+        if (plantWater) {
+          ctx.save();
+          ctx.globalAlpha = 0.55;
+          this.drawBlock(x, y, this.registry.get('water'), { mass: cell.meta.water });
+          ctx.restore();
+        }
       }
     }
 
+    // Foam and bubbles go on top of the water cells around them.
+    this.drawSplashes();
     this.drawLeafFringes(startX, endX, startY, endY);
 
     this.drawLightOverlay(startX, endX, startY, endY);
     if (ui?.textureQuality !== 'fast') this.drawLightTint(startX, endX, startY, endY);
     this.drawBreakingProgress();
+    // The player and dropped items are drawn on their own layer, so the water in front of
+    // them can tint just their pixels (they look submerged) before it goes on screen.
+    const layer = this.entityLayer();
+    const mainCtx = this.ctx;
+    this.ctx = layer.getContext('2d');
+    this.ctx.setTransform(mainCtx.getTransform());
     this.drawPlayer();
-    this.drawLeafParticles();
     this.drawItems();
+    const p = this.player;
+    const rects = [[p.x - 8, p.y - 8, p.width + 16, p.height + 8]];
+    for (const item of world.items || []) rects.push([item.x - 8, item.y - 8, 16, 16]);
+    this.ctx.globalCompositeOperation = 'source-atop';
+    this.drawWaterOver(rects);
+    this.ctx.globalCompositeOperation = 'source-over';
+    this.ctx = mainCtx;
+    mainCtx.save();
+    mainCtx.setTransform(1, 0, 0, 1, 0, 0);
+    mainCtx.drawImage(layer, 0, 0);
+    mainCtx.restore();
+    this.drawLeafParticles();
     this.drawPrimedExplosives(ui?.primedExplosives);
     if (ui?.explosionFX) ui.explosionFX.draw(ctx, camera);
     this.drawHoveredBlockOutline();
@@ -417,26 +480,57 @@ export class Renderer {
     return surface;
   }
 
+  isLakeBackdrop(tileX, tileY) {
+    const world = this.world;
+    if (this._lakeWorld !== world) {
+      this._lakeWorld = world;
+      this._lakeCache = new Map();
+    }
+    let top = this._lakeCache.get(tileX);
+    if (top === undefined) {
+      top = lakeWaterTopAt(tileX, world.seed ?? 0, world.height, world.worldType);
+      this._lakeCache.set(tileX, top);
+    }
+    return top !== null && tileY >= top && tileY < this.naturalSurfaceAt(tileX);
+  }
+
   backgroundWallTexture(tileX, tileY) {
     const world = this.world;
+    // Dug-out beaches keep a sand wall behind them rather than dirt.
+    if (this._wallWorld !== world) {
+      this._wallWorld = world;
+      this._wallCache = new Map();
+    }
+    const key = tileX * 4096 + tileY;
+    let generated = this._wallCache.get(key);
+    if (generated === undefined) {
+      generated = sampleBlockAt(tileX, tileY, world.seed ?? 0, world.height, world.width, world.worldType)?.id || '';
+      if (this._wallCache.size > 50000) this._wallCache.clear();
+      this._wallCache.set(key, generated);
+    }
+    if (generated === 'sand' || generated === 'wet_sand') return this.textures[generated] || this.textures.sand || null;
     const depth = tileY - this.naturalSurfaceAt(tileX);
     const dirtDepth = naturalDirtDepthAt(tileX, world.seed ?? 0, world.worldType);
     return this.textures[depth <= dirtDepth ? 'dirt' : 'stone'] || null;
   }
 
-  drawBackgroundWall(tileX, tileY, flat = false) {
+  // fill (0..1) draws only the bottom part of the wall, e.g. behind a partly filled water cell.
+  drawBackgroundWall(tileX, tileY, flat = false, wallId = null, fill = 1) {
     const { ctx, camera } = this;
     const left = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
     const top = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
     const width = Math.round(camera.worldToScreenX((tileX + 1) * TILE_SIZE)) - left;
     const height = Math.round(camera.worldToScreenY((tileY + 1) * TILE_SIZE)) - top;
-    const texture = flat ? null : this.backgroundWallTexture(tileX, tileY);
+    const texture = flat ? null : (wallId && this.textures[wallId]) || this.backgroundWallTexture(tileX, tileY);
     if (texture) {
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(this.getTintedTexture(texture, BACKGROUND_WALL_SHADE), left, top, width, height);
+      const rows = Math.max(1, Math.round(16 * fill));
+      const y0 = top + height - Math.round(height * rows / 16);
+      ctx.drawImage(this.getTintedTexture(texture, BACKGROUND_WALL_SHADE), 0, 16 - rows, 16, rows, left, y0, width, top + height - y0);
     } else {
       ctx.fillStyle = BACKGROUND_WALL;
-      ctx.fillRect(left, top, width, height);
+      const y0 = top + height - Math.round(height * fill);
+      ctx.fillRect(left, y0, width, top + height - y0);
     }
   }
 
@@ -790,13 +884,547 @@ drawStars() {
           if (!world.inBounds(nx, ny) || world.getCell(nx, ny).id !== 'air') continue;
           const fringe = this.getLeafFringe(id, texture, side, (x * 7 + y * 13) & 3);
           if (!fringe) continue;
-          const sx = Math.round(camera.worldToScreenX(nx * TILE_SIZE));
+          const sx = Math.round(camera.worldToScreenX(nx * TILE_SIZE)) + this.leafSwayOffset(x, y, size);
           const sy = Math.round(camera.worldToScreenY(ny * TILE_SIZE));
           const light = this.isOpenSky(nx, ny) ? this.lightFactorAt(nx, ny, true) : 1.0;
           this.drawBlockTexture(fringe, sx, sy, size, light);
         }
       }
     }
+  }
+
+  // A tileable strip of soft, chunky-pixel mist: dense at the bottom, wispy on top.
+  getFogTexture(layer) {
+    const key = `fog|${layer}`;
+    let tex = this._imageCache.get(key);
+    if (tex) return tex;
+    const W = 256, H = 64, CELL = 4;
+    tex = document.createElement('canvas');
+    tex.width = W; tex.height = H;
+    const tctx = tex.getContext('2d');
+    let seed = 1234 + layer * 977;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) >>> 8) / 16777216;
+    const cols = W / CELL, rows = H / CELL;
+    // Wrapping 2D value noise stretched sideways, so the mist forms long horizontal wisps.
+    const GX = 12, GY = 5;
+    const lattice = Array.from({ length: GX * GY }, rand);
+    const smooth = k => k * k * (3 - 2 * k);
+    const noise = (u, v) => {
+      const fx = u * GX, fy = v * (GY - 1);
+      const ix = Math.floor(fx), iy = Math.min(GY - 2, Math.floor(fy));
+      const kx = smooth(fx - ix), ky = smooth(fy - iy);
+      const at = (i, j) => lattice[j * GX + (i % GX)];
+      const top = at(ix, iy) * (1 - kx) + at(ix + 1, iy) * kx;
+      const bot = at(ix, iy + 1) * (1 - kx) + at(ix + 1, iy + 1) * kx;
+      return top * (1 - ky) + bot * ky;
+    };
+    for (let cx = 0; cx < cols; cx++) {
+      for (let cy = 0; cy < rows; cy++) {
+        const u = cx / cols, v = cy / rows;
+        // Denser towards the ground (bottom), breaking into wisps higher up.
+        const a = Math.max(0, Math.min(1, (noise(u, v) * 0.9 + v * 0.9 - 0.6) * 2.2));
+        if (a <= 0.02) continue;
+        tctx.fillStyle = `rgba(255,255,255,${(a * 0.75).toFixed(3)})`;
+        tctx.fillRect(cx * CELL, cy * CELL, CELL, CELL);
+      }
+    }
+    this._imageCache.set(key, tex);
+    return tex;
+  }
+
+  // Low mist that settles over the terrain in foggy biomes (Taiga), drawn behind the blocks. Drawn in vertical
+  // slices so it follows the ground and fades in across biome edges.
+  drawFog(startX, endX) {
+    const { ctx, camera, world } = this;
+    const seed = world.seed ?? 0;
+    const t = performance.now() / 1000;
+    const size = TILE_SIZE * camera.zoom;
+    const dl = this.daylight || { base: 1, sunVisible: true, travelT: 0.5 };
+    // Thickest around dawn and through the night, thinnest at midday.
+    const timeFactor = dl.sunVisible ? 0.7 + 0.3 * Math.max(0, 1 - dl.travelT * 3) : 0.9;
+    const shade = Math.round(150 + 90 * dl.base);
+    let any = false;
+    for (let x = startX; x <= endX && !any; x++) any = fogAt(x, seed) > 0.01;
+    if (!any) return;
+
+    // Fog follows a smoothed ground line so it flows over hills as one sheet instead of
+    // stepping at every column.
+    const heights = [];
+    for (let x = startX - FOG_SMOOTH; x <= endX + FOG_SMOOTH; x++) heights.push(naturalHeightAt(x, seed, world.height, world.worldType));
+    const smoothGround = [];
+    for (let i = 0; i <= endX - startX; i++) {
+      let sum = 0;
+      for (let k = 0; k <= FOG_SMOOTH * 2; k++) sum += heights[i + k];
+      smoothGround.push(sum / (FOG_SMOOTH * 2 + 1));
+    }
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    const layers = [
+      { speed: 2.0, parallax: 0.6, height: 3.5, alpha: 0.85 },
+      { speed: 3.5, parallax: 0.8, height: 2.6, alpha: 0.9 },
+      { speed: 6.0, parallax: 1.0, height: 1.8, alpha: 1.0 }
+    ];
+    for (let li = 0; li < layers.length; li++) {
+      const L = layers[li];
+      const tex = this.getFogTexture(li);
+      // Colour the white mist to suit the light (bright by day, dim blue-grey at night).
+      const tinted = this.getTintedFog(tex, li, shade);
+      for (let x = startX; x <= endX; x++) {
+        const density = fogAt(x, seed) * timeFactor * L.alpha;
+        if (density < 0.02) continue;
+        // Sit on this column's real ground (the bottom hides behind the block), never above it.
+        const ground = Math.max(smoothGround[x - startX], naturalHeightAt(x, seed, world.height, world.worldType));
+        const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
+        const bandH = Math.round(L.height * size);
+        const bandBottom = Math.round(camera.worldToScreenY((ground + 1) * TILE_SIZE));
+        // Each column takes the next FOG_TEXELS_PER_TILE texels of the strip, so the mist is
+        // continuous; layers drift at their own speed and slide slightly against the camera.
+        const drift = t * L.speed + camera.x / TILE_SIZE * (1 - L.parallax) * FOG_TEXELS_PER_TILE;
+        const srcX = (((x * FOG_TEXELS_PER_TILE + Math.floor(drift)) % tex.width) + tex.width) % tex.width;
+        const nextSx = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE));
+        ctx.globalAlpha = Math.min(1, density);
+        ctx.drawImage(tinted, srcX, 0, FOG_TEXELS_PER_TILE, tex.height, sx, bandBottom - bandH, nextSx - sx, bandH);
+      }
+    }
+    ctx.restore();
+  }
+
+  getTintedFog(tex, layer, shade) {
+    const level = Math.round(shade / 10) * 10;
+    const key = `fogtint|${layer}|${level}`;
+    let c = this._imageCache.get(key);
+    if (c) return c;
+    c = document.createElement('canvas');
+    c.width = tex.width; c.height = tex.height;
+    const cctx = c.getContext('2d');
+    cctx.drawImage(tex, 0, 0);
+    cctx.globalCompositeOperation = 'source-in';
+    cctx.fillStyle = `rgb(${level - 10}, ${level}, ${Math.min(255, level + 12)})`;
+    cctx.fillRect(0, 0, c.width, c.height);
+    // Fade the mist out towards the top so it thins away instead of ending in a line.
+    const fade = cctx.createLinearGradient(0, 0, 0, c.height);
+    fade.addColorStop(0, 'rgba(0,0,0,0)');
+    fade.addColorStop(0.45, 'rgba(0,0,0,0.6)');
+    fade.addColorStop(1, 'rgba(0,0,0,1)');
+    cctx.globalCompositeOperation = 'destination-in';
+    cctx.fillStyle = fade;
+    cctx.fillRect(0, 0, c.width, c.height);
+    this._imageCache.set(key, c);
+    return c;
+  }
+
+  // Water: the ripple texture drifts slowly sideways, and the top block of a body of
+  // water gets a bright, gently waving surface line.
+  drawWater(texture, tileX, tileY, sx, sy, size, lightFactor, level = WATER_LEVELS) {
+    const quant = Math.max(MIN_BRIGHTNESS, Math.min(1, Math.round(lightFactor * 50) / 50));
+    const image = quant >= 1 ? texture : this.getTintedTexture(texture, quant);
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+    const px = size / 16;
+    const shift = Math.floor(((t * 1.5 + tileY * 3) % 16 + 16) % 16);
+    ctx.imageSmoothingEnabled = false;
+    // Water in mid-air (nothing but air or a thin trickle under it) is drawn as a stream
+    // scrolling downward; where a stream lands it keeps its shape down to the water line.
+    const world = this.world;
+    const massAt = (x, y) => (world.inBounds(x, y) ? waterMass(world.getCell(x, y)) : 0);
+    const solidAt = (x, y) => {
+      if (!world.inBounds(x, y)) return true;
+      const id = world.getBlockId(x, y);
+      return id !== 'air' && id !== 'water';
+    };
+    // Mid-air: nothing but air or a trickle below, and fed from above or off a ledge beside
+    // it. A loose scrap with nothing feeding it is just drawn as a thin layer.
+    const inAir = (x, y) => {
+      const m = massAt(x, y);
+      if (m <= 0 || m >= 0.9 || solidAt(x, y + 1) || massAt(x, y + 1) >= 0.5) return false;
+      return massAt(x, y - 1) > 0 || massAt(x - 1, y) > 0 || massAt(x + 1, y) > 0;
+    };
+    // A loose scrap of water dropping through the air: draw it as a drop, not a floating layer.
+    if (level < WATER_LEVELS && !solidAt(tileX, tileY + 1) && massAt(tileX, tileY + 1) < 0.5 && !inAir(tileX, tileY)) {
+      const m = massAt(tileX, tileY);
+      const dw = Math.max(2, Math.round(2 + m * 6)), dh = Math.max(3, Math.round(4 + m * 10));
+      const phase = (t * 3 + tileX * 0.37) % 1;
+      const dy = Math.round(phase * (16 - dh));
+      ctx.drawImage(image, 8 - (dw >> 1), 0, dw, dh, sx + Math.round((8 - dw / 2) * px), sy + Math.round(dy * px), Math.round(dw * px), Math.round(dh * px));
+      return;
+    }
+    // A thin film left resting on full water (a scrap of the slight squeeze deep water is
+    // under) is hidden, and the water under it is drawn as the surface.
+    const film = (x, y) => {
+      const mm = massAt(x, y);
+      return mm > 0 && mm < 0.25 && massAt(x, y + 1) >= 0.9 && massAt(x, y - 1) <= 0;
+    };
+    if (film(tileX, tileY)) return;
+    const falling = inAir(tileX, tileY);
+    const landing = !falling && inAir(tileX, tileY - 1);
+    if (!falling && !landing && massAt(tileX, tileY - 1) > 0 && !film(tileX, tileY - 1)) level = WATER_LEVELS; // under water: full
+    if (falling || landing) {
+      const isWater = (x, y) => massAt(x, y) > 0;
+      // Pool water beside it: the stream is landing in a pool rather than on bare ground.
+      const inPool = landing && [-1, 1].some(dx => isWater(tileX + dx, tileY) && !inAir(tileX + dx, tileY));
+      // Width follows the flow feeding the stream, so it doesn't bulge where it lands.
+      const flow = Math.round(Math.min(1, massAt(tileX, tileY - 1) || massAt(tileX, tileY)) * 16);
+      const inset = Math.max(0, (16 - Math.min(16, 8 + Math.round(flow / 2))) >> 1);
+      // Side-by-side streams merge into one sheet; water spilling off a ledge reaches back
+      // to the ledge it pours from.
+      const fedAbove = isWater(tileX, tileY - 1);
+      const joins = dx => inAir(tileX + dx, tileY) || (!fedAbove && falling && isWater(tileX + dx, tileY));
+      const wetL = joins(-1), wetR = joins(1);
+      const srcX = wetL ? 0 : inset;
+      const widthTx = (wetR ? 16 : 16 - inset) - srcX;
+      const x0 = sx + Math.round(srcX * px);
+      const wPx = Math.round((srcX + widthTx) * px) - Math.round(srcX * px);
+      const surfaceY = inPool ? sy + Math.round((16 - Math.max(1, level)) * px) : sy + size;
+      const scroll = (t * 24) % 16;
+      ctx.save();
+      ctx.beginPath();
+      // Water pouring off a ledge (nothing above it) starts at the height of the water it
+      // spills from, not at the top of the block.
+      let topT = 0;
+      if (!fedAbove) {
+        topT = 16 - Math.max(1, level);
+        for (const dx of [-1, 1]) {
+          const nm = massAt(tileX + dx, tileY);
+          if (nm > 0 && !inAir(tileX + dx, tileY)) topT = Math.min(topT, 16 - Math.max(1, Math.min(16, Math.round(nm * 16))));
+        }
+      }
+      const streamTop = sy + Math.round(topT * px);
+      ctx.rect(x0, streamTop, wPx, surfaceY - streamTop);
+      ctx.clip();
+      const off = Math.round(scroll * px);
+      ctx.drawImage(image, srcX, 0, widthTx, 16, x0, sy + off - size, wPx, size);
+      ctx.drawImage(image, srcX, 0, widthTx, 16, x0, sy + off, wPx, size);
+      ctx.restore();
+      // Foam where a stream that has fallen at least two blocks hits water.
+      const hitsWater = inPool || massAt(tileX, tileY + 1) >= 0.5;
+      if (landing && hitsWater && inAir(tileX, tileY - 2)) {
+        const row = inPool ? tileY : tileY + 1;
+        let l = 0, r = 0;
+        while (l < 2 && isWater(tileX - l - 1, row) && !inAir(tileX - l - 1, row)) l++;
+        while (r < 2 && isWater(tileX + r + 1, row) && !inAir(tileX + r + 1, row)) r++;
+        this._splashes?.push({ tileX, cx: x0 + wPx / 2, surfaceY, half: wPx / 2, px, size, quant,
+          minX: sx - l * size, maxX: sx + (r + 1) * size });
+      }
+      if (!inPool) return;
+    }
+    // The surface is smoothed between columns: each edge of a surface cell sits halfway
+    // between this column's water height and its neighbour's, so a draining dip reads as
+    // a smooth slope rather than block steps. Heights are in world texels (down = larger).
+    // Heights ease toward the simulated amount over a few frames, so tiny back-and-forth
+    // wobbles in the simulation never show as jitter.
+    const shownAt = (x, y) => this.shownWaterMass(x, y, massAt(x, y));
+    const underWater = massAt(tileX, tileY - 1) > 0 && !film(tileX, tileY - 1);
+    const fill = underWater ? WATER_LEVELS : Math.max(1, Math.min(16, Math.round(Math.min(1, shownAt(tileX, tileY)) * 16)));
+    const own = (tileY + 1) * 16 - fill;
+    const isSurface = massAt(tileX, tileY - 1) <= 0 || film(tileX, tileY - 1);
+    const surfaceAt = x => {
+      if (solidAt(x, tileY)) return null; // a wall: keep the edge flat against it
+      for (let r = tileY - 2; r <= tileY + 4; r++) {
+        const mm = massAt(x, r);
+        if (mm <= 0 || film(x, r)) continue;
+        if (r === tileY - 2 && massAt(x, r - 1) > 0) return r * 16;
+        return (r + 1) * 16 - Math.max(1, Math.min(16, Math.round(shownAt(x, r) * 16)));
+      }
+      return solidAt(x, tileY + 1) ? own : (tileY + 5) * 16;
+    };
+    const tops = new Array(16);
+    let smooth = false;
+    if (isSurface) {
+      // Each column's height is blended with two columns either side (stopping at walls),
+      // and the edges sit between neighbouring blended heights: a soft curve, not steps.
+      const raw = new Map();
+      const rawAt = x => {
+        if (!raw.has(x)) raw.set(x, x === tileX ? own : surfaceAt(x));
+        return raw.get(x);
+      };
+      const blended = x => {
+        const c = rawAt(x);
+        if (c === null) return null;
+        let sum = c * 3, w = 3;
+        for (const dir of [-1, 1]) {
+          for (let d = 1; d <= 2; d++) {
+            const v = rawAt(x + dir * d);
+            if (v === null) break;
+            sum += v * (3 - d);
+            w += 3 - d;
+          }
+        }
+        return sum / w;
+      };
+      const mid = blended(tileX);
+      const bl = blended(tileX - 1), br = blended(tileX + 1);
+      const edgeL = bl === null ? mid : (mid + bl) / 2;
+      const edgeR = br === null ? mid : (mid + br) / 2;
+      const ownSmooth = mid;
+      for (let i = 0; i < 16; i++) {
+        const u = (i + 0.5) / 16;
+        const abs = u < 0.5 ? edgeL + (ownSmooth - edgeL) * (u / 0.5) : ownSmooth + (edgeR - ownSmooth) * ((u - 0.5) / 0.5);
+        tops[i] = Math.max(0, Math.min(15, Math.round(abs - tileY * 16)));
+        if (tops[i] !== 16 - fill) smooth = true;
+      }
+    }
+    // Deeper water is darker: blocks of water above this cell set how dark its top is, and
+    // it darkens smoothly toward its bottom.
+    let depth = 0;
+    while (depth < 10 && massAt(tileX, tileY - depth - 1) > 0) depth++;
+    const depthAlpha = d => Math.min(0.6, d * 0.07);
+    const grad = ctx.createLinearGradient(0, sy, 0, sy + size);
+    grad.addColorStop(0, `rgba(4, 14, 40, ${depthAlpha(depth)})`);
+    grad.addColorStop(1, `rgba(4, 14, 40, ${depthAlpha(depth + 1)})`);
+    const shadeDepth = (x, y, w, hh) => {
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, y, w, hh);
+    };
+    const shade = Math.round(255 * quant);
+    const surfaceLine = (i, topT) => {
+      const wave = Math.sin(t * 2 + (tileX * 16 + i) * 0.45) > 0.55 ? 1 : 0;
+      const y0 = sy + topT * px;
+      ctx.fillStyle = `rgba(${Math.round(shade * 0.7)}, ${Math.round(shade * 0.88)}, ${shade}, 0.85)`;
+      ctx.fillRect(Math.round(sx + i * px), Math.round(y0 + wave * px), Math.ceil(px), Math.ceil(px));
+      ctx.fillStyle = `rgba(${Math.round(shade * 0.45)}, ${Math.round(shade * 0.7)}, ${shade}, 0.55)`;
+      ctx.fillRect(Math.round(sx + i * px), Math.round(y0 + (wave + 1) * px), Math.ceil(px), Math.ceil(px));
+    };
+    if (smooth) {
+      for (let i = 0; i < 16; i++) {
+        const topT = tops[i];
+        const x0 = Math.round(sx + i * px), x1 = Math.round(sx + (i + 1) * px);
+        const y0 = sy + Math.round(topT * px);
+        ctx.drawImage(image, (i + shift) % 16, topT, 1, 16 - topT, x0, y0, x1 - x0, sy + size - y0);
+        shadeDepth(x0, y0, x1 - x0, sy + size - y0);
+        surfaceLine(i, topT);
+      }
+      return;
+    }
+    // Drift: draw the texture split at `shift` texels so it wraps seamlessly.
+    // A partly filled cell only shows its bottom `level` layers.
+    const top = 16 - fill;
+    const syTop = sy + Math.round(top * px);
+    const h = sy + size - syTop;
+    const w1 = 16 - shift;
+    ctx.drawImage(image, shift, top, w1, fill, sx, syTop, Math.round(w1 * px), h);
+    if (shift > 0) ctx.drawImage(image, 0, top, shift, fill, sx + Math.round(w1 * px), syTop, size - Math.round(w1 * px), h);
+    shadeDepth(sx, syTop, size, h);
+    if (isSurface) for (let i = 0; i < 16; i++) surfaceLine(i, top);
+  }
+
+  // A cleared offscreen canvas the size of the screen.
+  entityLayer() {
+    const { canvas } = this;
+    let layer = this._entityLayer;
+    if (!layer || layer.width !== canvas.width || layer.height !== canvas.height) {
+      layer = this._entityLayer = document.createElement('canvas');
+      layer.width = canvas.width;
+      layer.height = canvas.height;
+    }
+    const lctx = layer.getContext('2d');
+    lctx.setTransform(1, 0, 0, 1, 0, 0);
+    lctx.clearRect(0, 0, layer.width, layer.height);
+    lctx.imageSmoothingEnabled = false;
+    return layer;
+  }
+
+  // Tints the parts of the given world rects [x, y, w, h] that are below the water line.
+  drawWaterOver(rects) {
+    const { ctx, camera, world } = this;
+    for (const [rx, ry, rw, rh] of rects) {
+      for (let ty = Math.floor(ry / TILE_SIZE); ty <= Math.floor((ry + rh) / TILE_SIZE); ty++) {
+        for (let tx = Math.floor(rx / TILE_SIZE); tx <= Math.floor((rx + rw) / TILE_SIZE); tx++) {
+          if (!world.inBounds(tx, ty)) continue;
+          const m = waterMass(world.getCell(tx, ty));
+          if (m <= 0) continue;
+          const wetAbove = world.inBounds(tx, ty - 1) && waterMass(world.getCell(tx, ty - 1)) > 0;
+          const top = wetAbove ? ty * TILE_SIZE : (ty + 1) * TILE_SIZE - Math.min(1, this.shownWaterMass(tx, ty, m)) * TILE_SIZE;
+          const x0 = Math.max(rx, tx * TILE_SIZE), x1 = Math.min(rx + rw, (tx + 1) * TILE_SIZE);
+          const y0 = Math.max(ry, top), y1 = Math.min(ry + rh, (ty + 1) * TILE_SIZE);
+          if (x1 <= x0 || y1 <= y0) continue;
+          const l = Math.max(MIN_BRIGHTNESS, this.lightFactorAt(tx, ty, false));
+          ctx.fillStyle = `rgba(${Math.round(40 * l)}, ${Math.round(90 * l)}, ${Math.round(190 * l)}, 0.55)`;
+          const sx0 = Math.round(camera.worldToScreenX(x0)), sx1 = Math.round(camera.worldToScreenX(x1));
+          const sy0 = Math.round(camera.worldToScreenY(y0)), sy1 = Math.round(camera.worldToScreenY(y1));
+          ctx.fillRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+        }
+      }
+    }
+  }
+
+  // The water amount shown at (x, y): eases toward the simulated mass once per frame.
+  shownWaterMass(x, y, actual) {
+    if (!this._shownWater) this._shownWater = new Map();
+    const key = x * 4096 + y;
+    if (actual <= 0) { this._shownWater.delete(key); return 0; }
+    let e = this._shownWater.get(key);
+    if (!e) {
+      // Water that has only just appeared (poured or flowed in) grows in from nothing
+      // instead of popping in as a full block.
+      const cell = this.world.getCell(x, y);
+      const fresh = cell.meta?.newAt && Date.now() - cell.meta.newAt < 500;
+      e = { v: fresh ? 0 : actual, f: this._waterFrame };
+      this._shownWater.set(key, e);
+      if (!fresh) return actual;
+    }
+    if (e.f !== this._waterFrame) {
+      e.f = this._waterFrame;
+      e.v += (actual - e.v) * 0.2;
+      if (this._shownWater.size > 40000) this._shownWater.clear();
+    }
+    return e.v;
+  }
+
+  // Where a stream lands in water: churning foam on the surface, droplets thrown up and
+  // bubbles rising back up through the pool beneath.
+  drawSplashes() {
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+    const hash = n => (((n * 2654435761) >>> 0) % 1000) / 1000;
+    for (const sp of this._splashes || []) {
+      const { cx, surfaceY, half, px, size, quant, tileX, minX, maxX } = sp;
+      const p = Math.max(1, Math.round(px));
+      const light = Math.max(0.75, quant);
+      const foamC = a => `rgba(${Math.round(235 * light)}, ${Math.round(245 * light)}, ${Math.round(255 * light)}, ${a.toFixed(2)})`;
+      const dot = (x, y, a) => {
+        if (x < minX || x + p > maxX || a <= 0.04) return;
+        ctx.fillStyle = foamC(a);
+        ctx.fillRect(Math.round(x), Math.round(y), p, p);
+      };
+      // Foam churning on the surface right around the stream, thinning out sideways.
+      const spread = half + size * 0.6;
+      const n = Math.ceil(spread / px);
+      for (let i = -n; i <= n; i++) {
+        const x = cx + i * px - p / 2;
+        const d = Math.abs(i * px) / spread;
+        const flick = Math.sin(t * 7 + i * 2.1 + tileX) * 0.5 + 0.5;
+        dot(x, surfaceY - p, (1 - d * d) * (0.3 + 0.5 * flick));
+        if (d < 0.5 && flick > 0.55) dot(x, surfaceY - 2 * p, 0.5 * (1 - d));
+        if (d < 0.8) dot(x, surfaceY + (flick > 0.5 ? 0 : p), 0.35 * (1 - d));
+      }
+      // A few droplets kicked up next to the stream.
+      for (let i = 0; i < 4; i++) {
+        const ph = (t * 1.8 + hash(i + tileX * 13)) % 1;
+        const side = i % 2 ? 1 : -1;
+        const x = cx + side * (half + ph * size * (0.3 + 0.4 * hash(i * 7 + 3)));
+        const y = surfaceY - p - Math.sin(ph * Math.PI) * size * (0.2 + 0.2 * hash(i + 11));
+        dot(x, y, 0.75 * (1 - ph));
+      }
+      // Bubbles carried down by the stream, then rising back to the surface.
+      for (let i = 0; i < 6; i++) {
+        const ph = (t * 0.6 + hash(i * 5 + tileX)) % 1;
+        const x = cx + (hash(i * 3 + 1) - 0.5) * (half * 2 + size * 0.5) + Math.sin(t * 4 + i * 2.3) * px;
+        const y = surfaceY + p + (1 - ph) * size * 0.9;
+        dot(x, y, 0.5 * Math.min(1, ph * 3) * (1 - ph * 0.4));
+      }
+    }
+  }
+
+  // Global wind strength (0..1) as felt at `t`: slow swells with occasional gusts on top.
+  windStrength(t) {
+    const swell = 0.5 + 0.5 * Math.sin(t * 0.23) * Math.sin(t * 0.071 + 1.3);
+    const gust = Math.max(0, Math.sin(t * 0.9 + Math.sin(t * 0.31) * 2)) ** 3;
+    return Math.min(1, 0.2 + swell * 0.45 + gust * 0.6);
+  }
+
+  // How far (in texels, at the plant's tip) the plant in column tileX is bent right now.
+  // Gusts roll across the land at WIND_SPEED, plants lean with the wind and flutter
+  // around that lean, each with its own speed and phase so nothing moves in lockstep.
+  windSwayAt(tileX) {
+    const t = performance.now() / 1000;
+    const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
+    const strength = this.windStrength(t - tileX / WIND_SPEED);
+    const h = ((tileX * 2654435761) >>> 0) / 4294967296;
+    const flutter = Math.sin(t * (2.6 + h * 1.8) + h * 40) + 0.45 * Math.sin(t * (6.3 + h * 2.5) + h * 17);
+    // A slight lean with the wind plus a back-and-forth flutter around it.
+    return dir * strength * (0.15 + 0.75 * flutter) * WIND_MAX_BEND;
+  }
+
+  // Screen-pixel shift for the leaf block at (tileX, tileY). It follows the same gusts as
+  // the plants but varies smoothly across the canopy, so neighbouring leaves move almost
+  // together (no gaps) and a whole crown ripples as a gust passes.
+  leafSwayOffset(tileX, tileY, size) {
+    const t = performance.now() / 1000;
+    const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
+    const strength = this.windStrength(t - tileX / WIND_SPEED);
+    const ripple = 0.65 + 0.35 * Math.sin(t * 1.9 - tileX * 0.35 + tileY * 0.45);
+    return Math.round(dir * strength * ripple * LEAF_MAX_SWAY * size / 16);
+  }
+
+  // How far (texels) a trunk in column tileX leans at TRUNK_REF_HEIGHT: slow and stiff,
+  // following the same travelling gusts as the leaves above it.
+  trunkSwayAt(tileX) {
+    const t = performance.now() / 1000;
+    const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
+    const strength = this.windStrength(t - tileX / WIND_SPEED);
+    const sway = 0.55 + 0.45 * Math.sin(t * 1.3 + tileX * 0.9);
+    return dir * strength * sway * TRUNK_MAX_BEND;
+  }
+
+  // Draws a standing log bent by the wind. Its height up the trunk (logs below it) sets
+  // how far it moves, so the base stays rooted and the bend grows towards the top.
+  drawTrunk(texture, tileX, tileY, sx, sy, size, lightFactor) {
+    const { world } = this;
+    let below = 0;
+    while (below < 16 && world.inBounds(tileX, tileY + below + 1)) {
+      const cell = world.getCell(tileX, tileY + below + 1);
+      if (!isTrunk(cell.id) || cell.meta?.axis === 'x') break;
+      below++;
+    }
+    const px = size / 16;
+    const sway = this.trunkSwayAt(tileX) * px;
+    const offsetAt = row => {
+      const height = below + (16 - row) / 16;
+      const k = Math.min(1.4, height / TRUNK_REF_HEIGHT);
+      return Math.round(sway * k * k);
+    };
+    if (offsetAt(0) === 0) {
+      this.drawBlockTexture(texture, sx, sy, size, lightFactor);
+      return;
+    }
+    const quant = Math.max(MIN_BRIGHTNESS, Math.min(1, Math.round(lightFactor * 50) / 50));
+    const image = quant >= 1 ? texture : this.getTintedTexture(texture, quant);
+    const scale = size / (image.height || 16);
+    const ctx = this.ctx;
+    ctx.imageSmoothingEnabled = false;
+    for (let row = 0; row < 16;) {
+      const offset = offsetAt(row);
+      let end = row + 1;
+      while (end < 16 && offsetAt(end) === offset) end++;
+      const y0 = Math.round(sy + row * scale);
+      const y1 = Math.round(sy + end * scale);
+      ctx.drawImage(image, 0, row, image.width, end - row, sx + offset, y0, size, y1 - y0);
+      row = end;
+    }
+  }
+
+  // Draws a plant bent by `sway` texels at its tip, curving smoothly down to a still base.
+  drawSwaying(texture, sx, sy, size, lightFactor, sway, stiffness = 1) {
+    const box = this.getOpaqueBounds(texture);
+    const px = size / 16;
+    if (!box || Math.abs(sway * stiffness * px) < 0.5) {
+      this.drawBlockTexture(texture, sx, sy, size, lightFactor);
+      return;
+    }
+    const quant = Math.max(MIN_BRIGHTNESS, Math.min(1, Math.round(lightFactor * 50) / 50));
+    const image = quant >= 1 ? texture : this.getTintedTexture(texture, quant);
+    const scale = size / (image.height || 16);
+    const ctx = this.ctx;
+    ctx.imageSmoothingEnabled = false;
+    if (box.y > 0) ctx.drawImage(image, 0, 0, image.width, box.y, sx, sy, size, Math.round(box.y * scale));
+    const bottom = box.y + box.h;
+    const offsetAt = row => {
+      // 0 at the base, 1 at the tip; curved so the bend grows towards the top like a stem.
+      const height = (bottom - row) / box.h;
+      return Math.round(sway * stiffness * px * Math.pow(height, 1.3));
+    };
+    // Draw runs of rows that share an offset in one call, so a plant costs a few draws.
+    for (let row = box.y; row < bottom;) {
+      const offset = offsetAt(row);
+      let end = row + 1;
+      while (end < bottom && offsetAt(end) === offset) end++;
+      const y0 = Math.round(sy + row * scale);
+      const y1 = Math.round(sy + end * scale);
+      ctx.drawImage(image, 0, row, image.width, end - row, sx + offset, y0, size, y1 - y0);
+      row = end;
+    }
+    if (bottom < image.height) ctx.drawImage(image, 0, bottom, image.width, image.height - bottom, sx, Math.round(sy + bottom * scale), size, size - Math.round(bottom * scale));
   }
 
   // Draws a rock/pebble scaled by meta.size, slid sideways by meta.offset, mirrored by meta.flip, resting on the block's floor.
@@ -828,7 +1456,7 @@ drawStars() {
   getOpaqueBounds(texture) {
     const key = `bounds|${texture.src}`;
     if (this._imageCache.has(key)) return this._imageCache.get(key);
-    if (!texture.complete || !texture.width) return null;
+    if (!isTextureReady(texture)) return null;
     const c = document.createElement('canvas');
     c.width = texture.width; c.height = texture.height;
     const cctx = c.getContext('2d');
@@ -885,7 +1513,7 @@ drawStars() {
 
   // colorId picks whose biome colour to use (e.g. a falling-leaf texture follows its leaf block).
   getBiomeTinted(id, texture, tileX, colorId = id) {
-    if (!texture.complete || !texture.width) return texture;
+    if (!isTextureReady(texture)) return texture;
     const seed = this.world.seed ?? 0;
     const base = this.getGreenAverage(id, texture);
     const [r, g, b] = colorId.endsWith('_leaves') ? leafColorAt(tileX, seed, colorId, base) : grassColorAt(tileX, seed);
@@ -917,7 +1545,7 @@ drawStars() {
     const key = `fringe|${texture.src}|${side}|${variant}`;
     let fringe = this._imageCache.get(key);
     if (fringe) return fringe;
-    if (!texture.complete || !texture.width) return null;
+    if (!isTextureReady(texture)) return null;
 
     const src = document.createElement('canvas');
     src.width = 16; src.height = 16;
@@ -1032,8 +1660,13 @@ drawStars() {
     const { ctx, camera, world } = this;
     ctx.imageSmoothingEnabled = false;
     const sx = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
-    const sy = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
+    let sy = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
     const size = Math.round(TILE_SIZE * camera.zoom);
+    // Falling blocks slide down from the cell above rather than jumping a whole block.
+    if (meta?.fellAt) {
+      const t = (performance.now() - meta.fellAt) / (meta.slideMs || FALL_SLIDE_MS);
+      if (t < 1) sy -= Math.round((1 - t) * size);
+    }
     
     const isLightSource = type.lightLevel > 0;
     const finalLightFactor = !isLightSource && this.isOpenSky(tileX, tileY)
@@ -1044,8 +1677,24 @@ drawStars() {
     const textureId = type.id === 'bush' ? `bush_${meta?.size ?? 4}` : type.id;
     let texture = this.textures[textureId] || this.textures[type.id] || this.missingTextureFor(type);
     texture = this.biomeTexture(textureId, texture, tileX);
+    if (type.id === 'water' && texture) {
+      this.drawWater(texture, tileX, tileY, sx, sy, size, finalLightFactor, waterLevel({ id: 'water', meta }));
+      return;
+    }
     if ((type.id === 'rock' || type.id === 'pebble') && texture) {
       this.drawRock(texture, sx, sy, size, meta, finalLightFactor);
+      return;
+    }
+    if (type.id.endsWith('_leaves') && texture && meta?.layer !== 'bg') {
+      this.drawBlockTexture(texture, sx + this.leafSwayOffset(tileX, tileY, size), sy, size, finalLightFactor);
+      return;
+    }
+    if (WIND_SWAY.has(type.id) && texture && meta?.layer !== 'bg') {
+      this.drawSwaying(texture, sx, sy, size, finalLightFactor, this.windSwayAt(tileX), WIND_STIFFNESS[type.id] ?? 1);
+      return;
+    }
+    if (texture && meta?.axis !== 'x' && meta?.layer !== 'bg' && isTrunk(type.id)) {
+      this.drawTrunk(texture, tileX, tileY, sx, sy, size, finalLightFactor);
       return;
     }
     if (meta?.axis === 'x' && texture) {

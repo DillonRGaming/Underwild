@@ -1,5 +1,10 @@
+import { waterMass } from '../logic/water.js';
 import { TILE_SIZE } from './utils.js';
 const EDGE_EPS = 0.01;
+// Swimming speeds (px/s).
+const SWIM_SINK_SPEED = 25;
+const SWIM_DIVE_SPEED = 70;
+const SWIM_UP_SPEED = 75;
 
 const LADDER_CLIMB_SPEED = 70;
 const LADDER_SLIDE_SPEED = 40;
@@ -54,7 +59,7 @@ function topSurfaceY(world, tileX, tileY, localX) {
   const tileTop = tileY * TILE_SIZE;
   switch (type.shape) {
     case 'full':
-      return tileTop;
+      return tileTop + (type.surfaceInset || 0) * TILE_SIZE / 16;
     case 'slab': {
       const pos = meta.slabPos || 'bottom';
       return pos === 'bottom' ? tileTop + TILE_SIZE / 2 : tileTop;
@@ -95,8 +100,19 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   const playerCenterY = player.y + player.height / 2;
   const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
   const playerTileY = Math.floor(playerCenterY / TILE_SIZE);
-  const inWater = world.inBounds(playerTileX, playerTileY) &&
-    world.getBlockId(playerTileX, playerTileY) === 'water';
+  // How much of the player is under water (0..1), from the water line in their column.
+  const waterAt = (y) => {
+    const ty = Math.floor(y / TILE_SIZE);
+    if (!world.inBounds(playerTileX, ty)) return false;
+    const m = waterMass(world.getCell(playerTileX, ty));
+    if (m <= 0) return false;
+    const aboveWet = world.inBounds(playerTileX, ty - 1) && waterMass(world.getCell(playerTileX, ty - 1)) > 0;
+    return aboveWet || y >= (ty + 1) * TILE_SIZE - Math.min(1, m) * TILE_SIZE;
+  };
+  const feetWet = waterAt(player.y + player.height - 1);
+  const waistWet = waterAt(player.y + player.height * 0.55);
+  const headWet = waterAt(player.y + 4);
+  const inWater = waistWet || (feetWet && !player.onGround);
 
   if (!player.creativeFlying) player.creativeFlying = false;
   if (!player.lastJumpPress) player.lastJumpPress = 0;
@@ -112,12 +128,11 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   let jumpVelocity = player.jumpVelocity;
   let accel = player.onGround ? (isSprinting ? 1100 : 900) : 600;
 
+  // Swimming, Minecraft-style: slower sideways, slowly sink, hold jump to swim up.
   if (inWater && !noClipMode) {
-    gravity *= 0.3;
-    walkSpeed *= 0.3;
-    sprintSpeed *= 0.3;
-    jumpVelocity *= 0.6;
-    accel = player.onGround ? 2400 * 0.4 : 1400 * 0.3;
+    walkSpeed *= 0.55;
+    sprintSpeed *= 0.7;
+    accel = 700;
   }
 
   const maxSpeed = isCrouching ? walkSpeed * CROUCH_SPEED : (isSprinting ? sprintSpeed : walkSpeed);
@@ -231,13 +246,37 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
     else if (input.isKeyDown(keybinds.backward)) player.vy = LADDER_CLIMB_SPEED;
     else if (isCrouching) player.vy = 0;
     else player.vy = Math.min(Math.max(player.vy, 0), LADDER_SLIDE_SPEED);
+  } else if (inWater) {
+    // Ease toward a swim speed: up while jump is held (bobbing once the head is out),
+    // down faster while crouching, otherwise a slow sink.
+    let target = SWIM_SINK_SPEED;
+    if (jumpKeyPressed && headWet) target = -SWIM_UP_SPEED;
+    else if (jumpKeyPressed) {
+      // Head out: hold the water line around the chest, bobbing gently.
+      let surfaceY = null;
+      for (let ty = Math.floor(player.y / TILE_SIZE); ty <= Math.floor((player.y + player.height) / TILE_SIZE); ty++) {
+        const m = world.inBounds(playerTileX, ty) ? waterMass(world.getCell(playerTileX, ty)) : 0;
+        if (m > 0) { surfaceY = (ty + 1) * TILE_SIZE - Math.min(1, m) * TILE_SIZE; break; }
+      }
+      if (surfaceY !== null) {
+        const bob = Math.sin(performance.now() / 350) * 1.5;
+        const wantY = surfaceY - player.height * 0.45 + bob;
+        target = Math.max(-SWIM_UP_SPEED, Math.min(SWIM_UP_SPEED, (wantY - player.y) * 5));
+      }
+    }
+    else if (isCrouching) target = SWIM_DIVE_SPEED;
+    player.vy += (target - player.vy) * Math.min(1, 6 * dt);
+    // Swimming into a ledge with the head out of the water hops up onto it.
+    const ahead = Math.sign(player.vx) || 0;
+    if (jumpKeyPressed && !headWet && ahead !== 0) {
+      const ledgeX = Math.floor((playerCenterX + ahead * (player.width / 2 + 2)) / TILE_SIZE);
+      const feetY = Math.floor((player.y + player.height - 1) / TILE_SIZE);
+      if (world.isSolidAt(ledgeX, feetY) && !world.isSolidAt(ledgeX, feetY - 1)) player.vy = Math.min(player.vy, -jumpVelocity * 0.55);
+    }
   } else if (jumpKeyPressed) {
     if (player.onGround) {
       player.vy = -jumpVelocity * 0.7;
       player.onGround = false;
-    } else if (inWater) {
-      player.vy -= 200 * dt;
-      if (player.vy < -jumpVelocity * 0.5) player.vy = -jumpVelocity * 0.5;
     }
   }
 
@@ -281,17 +320,13 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
     }
   }
 
-  if (inWater && (input.isKeyDown(keybinds.sprint) || input.isKeyDown('ShiftRight'))) {
-    player.vy += 200 * dt;
-  }
-
   if (onLadder) {
     if (player.vy > 0 && !jumpKeyPressed && !isCrouching && !input.isKeyDown(keybinds.backward)) player.vy = Math.min(player.vy + gravity * dt, LADDER_SLIDE_SPEED);
-  } else {
+  } else if (!inWater) {
     player.vy += gravity * dt;
   }
 
-  const maxFallSpeed = inWater ? player.maxFallSpeed * 0.4 : player.maxFallSpeed;
+  const maxFallSpeed = inWater ? SWIM_DIVE_SPEED * 1.5 : player.maxFallSpeed;
   if (player.vy > maxFallSpeed) player.vy = maxFallSpeed;
 
   let nextX = player.x + player.vx * dt;
@@ -382,7 +417,4 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   if (inWater || onLadder) player.cancelFall?.();
   else player.trackFall?.();
 
-  if (inWater && player.onGround) {
-    player.y += Math.sin(Date.now() / 200) * 0.5;
-  }
 }

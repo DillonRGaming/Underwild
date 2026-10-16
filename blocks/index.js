@@ -31,6 +31,7 @@ import shortGrass from './short_grass.js';
 import bush from './bush.js';
 import grassTuft from './grass_tuft.js';
 import rock from './rock.js';
+import dirtPath from './dirt_path.js';
 import pebble from './pebble.js';
 import poppy from './poppy.js';
 import fern from './fern.js';
@@ -58,6 +59,7 @@ import spruceChest from './spruce_chest.js';
 import pineChest from './pine_chest.js';
 import mapleChest from './maple_chest.js';
 import furnace from './furnace.js';
+import forgingTable from './forging_table.js';
 import stoneSlab from './stone_slab.js';
 import stoneStairs from './stone_stairs.js';
 import trapdoor from './trapdoor.js';
@@ -106,6 +108,7 @@ export function registerAllBlocks(registry) {
     bush,
     grassTuft,
     rock,
+    dirtPath,
     pebble,
     poppy,
     fern,
@@ -133,6 +136,7 @@ export function registerAllBlocks(registry) {
     pineChest,
     mapleChest,
     furnace,
+    forgingTable,
     stoneSlab,
     stoneStairs,
     trapdoor,
