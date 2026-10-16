@@ -706,7 +706,9 @@ class MenuManager {
         this.pendingHost = null;
         break;
       case 'pause-exit':
-        this.showMenu('exitMenu');
+        // In someone else's world there's nothing of yours to save: just leave.
+        if (multiplayer.isGuest) this.showMainMenu(true);
+        else this.showMenu('exitMenu');
         break;
       case 'exit-back':
         this.showMenu('pauseMenu');
@@ -1813,6 +1815,8 @@ class MenuManager {
     if (inventoryOpen || openContainer) closeInventory();
     gamePaused = true;
     breaker.cancel();
+    const exit = document.querySelector('#pauseMenu [data-action="pause-exit"]');
+    if (exit) exit.textContent = multiplayer.isGuest ? 'Leave' : 'Exit World';
     this.showMenu('pauseMenu');
   }
 
