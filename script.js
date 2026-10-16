@@ -3821,9 +3821,9 @@ window.addEventListener('contextmenu', (e) => {
   if (e.target.closest?.('.inventory-overlay, #hotbar')) e.preventDefault();
 });
 
-// True while a press that started on an empty cell (a wall) is held: dragging then keeps
-// digging out walls. A press that started on a block doesn't, so the wall behind a block
-// you just broke stays.
+// True while a press that started on the background (a wall or a background block) is
+// held: that press only breaks background. A press that started on a block only breaks
+// blocks, so it never eats the wall behind a block you just broke.
 let wallPress = false;
 window.addEventListener('mouseup', (e) => { if (e.button === 0) wallPress = false; });
 let lastHitTime = 0;
@@ -5222,12 +5222,17 @@ function initializeGameEngine() {
       const tileX = Math.floor(camera.screenToWorldX(input.mouse.x) / TILE_SIZE);
       const tileY = Math.floor(camera.screenToWorldY(input.mouse.y) / TILE_SIZE);
       if (world.inBounds(tileX, tileY) && inReach(tileX, tileY)) {
-        // Mining an empty cell digs out the natural wall behind it, but only on a fresh
-        // click there (or in background mode), so holding the button through a block you
-        // just broke doesn't keep eating the wall behind it.
-        const wallId = world.getBlockId(tileX, tileY) === 'air' && (backgroundBuild || wallPress)
-          ? window.renderer?.naturalWallId(tileX, tileY) : null;
-        breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), wallId);
+        // One press does one kind of thing: started on a block, it only breaks blocks;
+        // started on the background (a wall, or a background block you placed), it only
+        // breaks the background. Background build mode is always the background.
+        const id = world.getBlockId(tileX, tileY);
+        const isBackground = id === 'air' || world.getCell(tileX, tileY).meta?.layer === 'bg';
+        const onBackground = backgroundBuild || wallPress;
+        if (isBackground !== onBackground) breaker.cancel();
+        else {
+          const wallId = id === 'air' ? window.renderer?.naturalWallId(tileX, tileY) : null;
+          breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), wallId);
+        }
       } else {
         breaker.cancel();
       }

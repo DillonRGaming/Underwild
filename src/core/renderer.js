@@ -995,6 +995,13 @@ drawStars() {
       smoothGround.push(sum / (FOG_SMOOTH * 2 + 1));
     }
 
+    // Whether each column still has its ground block (the mist rests on it).
+    const fogGroundAt = [];
+    for (let x = startX; x <= endX; x++) {
+      const top = Math.floor(naturalHeightAt(x, seed, world.height, world.worldType));
+      fogGroundAt.push(!world.isChunkLoaded(world.chunkXFor(x)) || !!world.getBlockType(x, top)?.solid);
+    }
+
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     const layers = [
@@ -1010,6 +1017,8 @@ drawStars() {
       for (let x = startX; x <= endX; x++) {
         const density = fogAt(x, seed) * timeFactor * L.alpha;
         if (density < 0.02) continue;
+        // No mist over a column whose ground block has been dug out.
+        if (!fogGroundAt[x - startX]) continue;
         // Sit on this column's real ground (the bottom hides behind the block), never above it.
         const ground = Math.max(smoothGround[x - startX], naturalHeightAt(x, seed, world.height, world.worldType));
         const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
