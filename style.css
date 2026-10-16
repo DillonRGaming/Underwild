@@ -2431,3 +2431,11 @@ body.touch-mode .chat-send.touch-only {
 body.touch-mode .creative-grid { height: calc(3 * var(--slot-size) + 2 * var(--slot-gap)); }
 /* The chat's form is only there for phone keyboards; it doesn't change the layout. */
 .chat-form { display: contents; }
+
+/* Phones: tighter spacing at the top and bottom of the creative inventory. */
+body.touch-mode #inventory.creative-mode .inventory-content { padding-top: 8px; padding-bottom: 8px; }
+body.touch-mode #inventory.creative-mode .creative-header { margin-bottom: 4px; }
+body.touch-mode #inventory.creative-mode .creative-panel { margin-bottom: 8px; }
+body.touch-mode #inventory.creative-mode .inventory-hotbar { margin-top: 8px; }
+body.touch-mode #inventory.creative-mode .creative-tabs-top { margin-bottom: 2px; }
+body.touch-mode #inventory.creative-mode .creative-tabs-bottom { margin-top: 2px; }
