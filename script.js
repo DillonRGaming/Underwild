@@ -34,7 +34,7 @@ import { ItemEntity } from './src/entities/item.js';
 import { Multiplayer } from './src/multiplayer.js';
 import { WorldSerializer } from './src/core/worldSerializer.js';
 
-const GAME_VERSION = '0.5.2';
+const GAME_VERSION = '0.5.3';
 checkForAppUpdate(GAME_VERSION);
 
 let worldName = 'New World';
