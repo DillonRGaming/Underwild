@@ -1,3 +1,5 @@
+import './src/platform/webPlatform.js';
+import { checkForAppUpdate } from './src/platform/appUpdate.js';
 import { gameClock } from './src/core/gameClock.js';
 import { Engine } from './src/core/engine.js';
 import { Input } from './src/core/input.js';
@@ -32,7 +34,8 @@ import { ItemEntity } from './src/entities/item.js';
 import { Multiplayer } from './src/multiplayer.js';
 import { WorldSerializer } from './src/core/worldSerializer.js';
 
-const GAME_VERSION = '0.5.0';
+const GAME_VERSION = '0.5.1';
+checkForAppUpdate(GAME_VERSION);
 
 let worldName = 'New World';
 let worldSeed = '';
@@ -1605,7 +1608,7 @@ class MenuManager {
     };
     draw([]);
     if (!window.electronAPI?.mp) {
-      list.innerHTML = '<div class="mp-empty">Multiplayer only works in the desktop app.</div>';
+      list.innerHTML = '<div class="mp-empty">Multiplayer works in the desktop and Android apps.</div>';
       return;
     }
     multiplayer.startBrowsing(draw);

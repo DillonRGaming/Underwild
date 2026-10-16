@@ -1,5 +1,6 @@
-# Push a tag like v0.5.1 and this builds the Windows installer and publishes it as a
-# GitHub Release. Installed copies of the game find it there and update themselves.
+# Push a tag like v0.5.1 and this builds every version of the game and publishes them on
+# one GitHub Release: the Windows installer, the Linux AppImage (both update themselves
+# from it) and the Android APK (the app offers its update from it).
 name: Release
 
 on:
@@ -19,5 +20,53 @@ jobs:
           node-version: 20
       - run: npm ci
       - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # After Windows, so the release already exists when the others add to it.
+  linux:
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npx electron-builder --linux AppImage --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  android:
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - run: node scripts/build-web.mjs
+      - run: npx cap sync android
+      - name: Build the signed APK
+        working-directory: android
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/underwild.p12"
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+        env:
+          UNDERWILD_KEYSTORE: ${{ runner.temp }}/underwild.p12
+          UNDERWILD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          UNDERWILD_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          UNDERWILD_KEY_ALIAS: underwild
+      - name: Add the APK to the release
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cp android/app/build/outputs/apk/release/app-release.apk "Underwild-$VERSION.apk"
+          gh release upload "$GITHUB_REF_NAME" "Underwild-$VERSION.apk" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

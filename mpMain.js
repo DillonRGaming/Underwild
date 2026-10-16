@@ -2,13 +2,16 @@
 //
 // The host's game opens a TCP server (one JSON message per line) and announces itself on
 // the local network with UDP broadcasts every second, so guests see it in their list
-// without typing an address. The game logic lives in the page (src/multiplayer.js); this
+// without typing an address. Next to it (on the port after) is a WebSocket server for the
+// phone app, which can't open raw TCP sockets; both kinds of guest are treated the same. The game logic lives in the page (src/multiplayer.js); this
 // file only moves message strings between the page and the sockets.
 
 const net = require('net');
 const dgram = require('dgram');
 const os = require('os');
 const { StringDecoder } = require('string_decoder');
+let WebSocketServer = null;
+try { ({ WebSocketServer } = require('ws')); } catch (e) {}
 
 const GAME_PORT = 47777;       // first TCP port tried by a host
 const DISCOVERY_PORT = 47778;  // UDP port hosts announce on
@@ -38,7 +41,8 @@ function lineReader(onLine) {
 // --- Host ----------------------------------------------------------------------------
 
 let server = null;
-let clients = new Map();       // id -> socket
+let wsServer = null;
+let clients = new Map();       // id -> { write(line), end(), destroy() }
 let nextClientId = 1;
 let announce = null;           // { timer, socket, info }
 
@@ -50,6 +54,7 @@ function startHost(port = GAME_PORT) {
         const id = nextClientId++;
         socket.setNoDelay(true);
         clients.set(id, socket);
+        socket.on('error', () => {});
         send('mp:event', { type: 'guest-connect', id, address: socket.remoteAddress });
         socket.on('data', lineReader((line) => send('mp:event', { type: 'message', id, data: line })));
         const gone = () => {
@@ -66,11 +71,42 @@ function startHost(port = GAME_PORT) {
       });
       srv.listen(p, '0.0.0.0', () => {
         server = srv;
-        resolve({ ok: true, port: p, addresses: localAddresses() });
+        const wsPort = startWsServer(p + 1);
+        resolve({ ok: true, port: p, wsPort, addresses: localAddresses() });
       });
     };
     tryPort(port, 5);
   });
+}
+
+// Phone guests: one WebSocket message = one line.
+function startWsServer(port) {
+  if (!WebSocketServer) return null;
+  try {
+    wsServer = new WebSocketServer({ port, host: '0.0.0.0', maxPayload: MAX_LINE });
+  } catch (e) {
+    return null;
+  }
+  wsServer.on('error', () => {});
+  wsServer.on('connection', (ws, req) => {
+    const id = nextClientId++;
+    const client = {
+      write: (line) => { if (ws.readyState === 1) ws.send(line.endsWith('\n') ? line.slice(0, -1) : line); },
+      end: () => ws.close(),
+      destroy: () => ws.terminate()
+    };
+    clients.set(id, client);
+    send('mp:event', { type: 'guest-connect', id, address: req.socket.remoteAddress });
+    ws.on('message', (data) => send('mp:event', { type: 'message', id, data: data.toString('utf8') }));
+    const gone = () => {
+      if (!clients.has(id)) return;
+      clients.delete(id);
+      send('mp:event', { type: 'guest-disconnect', id });
+    };
+    ws.on('close', gone);
+    ws.on('error', gone);
+  });
+  return port;
 }
 
 function stopHost() {
@@ -79,6 +115,8 @@ function stopHost() {
   clients.clear();
   if (server) server.close();
   server = null;
+  if (wsServer) wsServer.close();
+  wsServer = null;
 }
 
 function hostSend(target, data) {

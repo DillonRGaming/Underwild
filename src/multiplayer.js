@@ -160,7 +160,7 @@ export class Multiplayer {
     if (!res.ok) return res;
     this.role = 'host';
     // The game is listed under the world's name.
-    this.settings = { ...settings, serverName: this.game.worldName(), port: res.port };
+    this.settings = { ...settings, serverName: this.game.worldName(), port: res.port, wsPort: res.wsPort || null };
     this.peers.clear();
     this.remotePlayers.clear();
     const world = this.game.world;
@@ -179,7 +179,8 @@ export class Multiplayer {
       mode: this.game.world?.creativeMode ? 'Creative' : 'Survival',
       players: this.peers.size + 1,
       max: this.settings.maxPlayers,
-      port: this.settings.port
+      port: this.settings.port,
+      wsPort: this.settings.wsPort
     });
   }
 
