@@ -2445,10 +2445,18 @@ body.touch-mode #inventory.creative-mode .creative-tabs-bottom { margin-top: 2px
 #inventory.creative-mode { --creative-scroll-room: 0px; }
 #inventory.creative-mode .creative-grid { padding-left: 0; padding-right: 0; scrollbar-width: none; }
 #inventory.creative-mode .creative-grid::-webkit-scrollbar { display: none; }
-/* Phones: the creative grid is shorter than the Inventory tab's rows, so on that tab the
-   box grows to fit them instead of letting them spill over the hotbar. */
-body.touch-mode #inventory.creative-mode[data-creative-tab="inventory"] .inventory-main { contain: inline-size; min-width: 0; }
-body.touch-mode #inventory.creative-mode[data-creative-tab="inventory"] .creative-panel.hidden { display: none !important; }
+/* Phones: the creative grid is only 3 rows tall, so on the Inventory tab the title and
+   recipe list squeeze into the space above the rows (the recipes scroll) and the box stays
+   the same size: the rows and hotbar sit exactly where they do on the creative tabs. */
+body.touch-mode #inventory.creative-mode .inventory-main .inventory-header {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  align-items: stretch;
+}
+body.touch-mode #inventory.creative-mode .inventory-main .recipe-panel { min-height: 0; overflow: hidden; }
+body.touch-mode #inventory.creative-mode .inventory-main .recipe-list { max-height: 100%; overflow-y: auto; }
+body.touch-mode #inventory.creative-mode .inventory-main { margin-bottom: 8px; } /* same as the creative panel */
 /* ...and the recipe list beside the title shrinks to the room left, instead of sticking out. */
 body.touch-mode #inventory .inventory-header { min-width: 0; }
 body.touch-mode #inventory .inventory-header .recipe-panel { flex: 1 1 0; min-width: 0; width: auto; }
