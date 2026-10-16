@@ -2290,6 +2290,7 @@ setupTouchControls({
   } : null,
   reach: () => (creativeMode ? 8 : 5) * TILE_SIZE * camera.zoom,
   aimMode: () => prefs.get('touchAimMode') || 'tap',
+  canReach: (tx, ty) => !!player && inReach(tx, ty),
   // The tile under a point on the canvas, and where that tile is (canvas pixels).
   tileAt: (sx, sy) => {
     const tx = Math.floor(camera.screenToWorldX(sx) / TILE_SIZE);

@@ -23,8 +23,8 @@ const AIM_SPEED = 1.8;     // reach-widths per second the aim moves at full push
 const AIM_MAX = 1;         // how far (in reaches) the sticks can take the aim
 const TAP_MS = 250;        // a touch on the world shorter than this (and barely moved) is a tap
 const TAP_MOVE_PX = 12;
-const HOLD_MS = 350;       // tap mode: holding this long brings up the magnifier and breaks
-const MAGNIFY_TILES = 9;   // blocks across the magnifier
+const HOLD_MS = 180;       // tap mode: holding this long brings up the magnifier and breaks
+const MAGNIFY_TILES = 3;   // blocks across the magnifier
 
 const ICONS = {
   up: '<path d="M8 3 L13 9 H10 V13 H6 V9 H3 Z"/>',
@@ -44,7 +44,7 @@ export function isTouchDevice() {
 }
 
 // playerScreen() -> { x, y }: the player's middle in canvas pixels. reach() -> canvas pixels.
-export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, playerScreen, reach, aimMode, tileAt }) {
+export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, playerScreen, reach, aimMode, tileAt, canReach }) {
   if (!isTouchDevice() || document.getElementById('touchControls')) return null;
   document.body.classList.add('touch-mode');
 
@@ -313,7 +313,7 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   canvas.addEventListener('touchend', endWorldTouch);
   canvas.addEventListener('touchcancel', endWorldTouch);
 
-  // The magnifier: the 9x9 blocks around the finger, drawn from the game's own frame, with
+  // The magnifier: the 3x3 blocks around the finger, drawn from the game's own frame, with
   // a grid and the targeted block outlined. It sits above the finger so it isn't covered.
   const drawMagnifier = () => {
     const rect = canvas.getBoundingClientRect();
@@ -340,14 +340,14 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       ctx.moveTo(0, p); ctx.lineTo(px, p);
     }
     ctx.stroke();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = Math.max(2, cell / 10);
+    // Red when the block is too far away to reach.
+    ctx.strokeStyle = canReach(tile.tx, tile.ty) ? '#fff' : '#ff4040';
+    ctx.lineWidth = Math.max(2, cell / 14);
     ctx.strokeRect(half * cell, half * cell, cell, cell);
-    // Above the finger, kept on screen; below it if there's no room above.
+    // Always above the finger, kept on screen.
     const gap = 28;
     let left = finger.x - cssSize / 2;
     let top = finger.y - cssSize - gap;
-    if (top < 8) top = finger.y + gap;
     left = Math.max(8, Math.min(window.innerWidth - cssSize - 8, left));
     top = Math.max(8, Math.min(window.innerHeight - cssSize - 8, top));
     magnifier.style.transform = `translate(${left}px, ${top}px)`;
