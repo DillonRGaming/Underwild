@@ -2426,3 +2426,8 @@ body.touch-mode .chat-send.touch-only {
   border: 2px solid var(--line, #fff);
   border-radius: var(--radius, 0);
 }
+
+/* Phones: the creative item grid is 3 rows tall, so the menu fits a landscape screen. */
+body.touch-mode .creative-grid { height: calc(3 * var(--slot-size) + 2 * var(--slot-gap)); }
+/* The chat's form is only there for phone keyboards; it doesn't change the layout. */
+.chat-form { display: contents; }

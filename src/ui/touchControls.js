@@ -373,6 +373,13 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     window.dispatchEvent(new KeyboardEvent('keyup', { code: `Digit${n}`, key: String(n), bubbles: true }));
   }, { passive: false });
 
+  // The phone keyboard's Go/Send key submits the chat form (some keyboards never send an
+  // Enter key press at all).
+  document.getElementById('chatForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter', key: 'Enter', bubbles: true }));
+  });
+
   // The send button next to the chat box (touching it doesn't close the keyboard first).
   document.getElementById('chatSend')?.addEventListener('touchstart', (e) => {
     e.preventDefault();

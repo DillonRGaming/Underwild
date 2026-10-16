@@ -304,8 +304,13 @@ const ZOOM_MAX = 6;
 const ZOOM_STEP = 0.5;
 const GUI_SCALES = [0.75, 0.9, 1, 1.15, 1.3];
 
+// Phones start zoomed in to 150%, since their screens are small.
+function defaultZoom() {
+  return document.body.classList.contains('touch-mode') || /[?&]touch\b/.test(location.search) || matchMedia?.('(pointer: coarse)').matches ? 4.5 : 3;
+}
+
 function applyViewSettings() {
-  if (camera) camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prefs.getNumber('cameraZoom', 3)));
+  if (camera) camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prefs.getNumber('cameraZoom', defaultZoom())));
   document.documentElement.style.setProperty('--gui-scale', String(prefs.getNumber('guiScale', 1)));
 }
 
@@ -2341,7 +2346,7 @@ setupTouchControls({
 });
 
 camera = new Camera();
-camera.zoom = Math.max(2.5, Math.min(6, prefs.getNumber('cameraZoom', 3)));
+camera.zoom = Math.max(2.5, Math.min(6, prefs.getNumber('cameraZoom', defaultZoom())));
 window.camera = camera;
 
 renderer = new Renderer(ctx, canvas, null, registry, camera, input, null, null, null, getRendererUI);
@@ -4086,7 +4091,13 @@ function handleChatKey(e) {
   // still be in the keyboard's suggestion bar, so read the box itself.
   const isEnter = e.code === 'Enter' || e.code === 'NumpadEnter' || e.key === 'Enter' || e.keyCode === 13;
   const chatBox = document.getElementById('chatInput');
-  if (isEnter && chatBox) textInputValue = chatBox.value;
+  let stale = false;
+  if (isEnter && chatBox && chatBox.value !== textInputValue) {
+    // The suggestions were for older text: redo them for what's really typed.
+    textInputValue = chatBox.value;
+    updateCommandSuggestions();
+    stale = true;
+  }
 
   if (e.code === 'Escape' || e.key === 'Escape') {
     closeChat();
@@ -4098,9 +4109,11 @@ function handleChatKey(e) {
     // Enter on a highlighted suggestion (or a half-typed command name) fills it in.
     const words = textInputValue.slice(1).split(' ');
     const last = words[words.length - 1].toLowerCase();
-    const exact = suggestionItems.some(el => (el.dataset.cmd || el.dataset.id || '').toLowerCase() === last);
-    if (textInputValue.startsWith('/') && suggestionItems.length > 0 && (currentIndex >= 0 || (last && !exact))) {
-      applySuggestion(suggestionItems[currentIndex >= 0 ? currentIndex : 0]);
+    const fresh = stale ? Array.from(dropdown?.querySelectorAll('.suggestion-item') || []) : suggestionItems;
+    const picked = stale ? -1 : currentIndex;
+    const exact = fresh.some(el => (el.dataset.cmd || el.dataset.id || '').toLowerCase() === last);
+    if (textInputValue.startsWith('/') && fresh.length > 0 && (picked >= 0 || (last && !exact))) {
+      applySuggestion(fresh[picked >= 0 ? picked : 0]);
       e.preventDefault();
       return;
     }
