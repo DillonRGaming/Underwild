@@ -2011,7 +2011,8 @@ drawStars() {
     const legWidth = 4;
     const legHeight = 12;
     
-    const scale = 3;
+    // The player is drawn at the camera's zoom like everything else (3 = normal zoom).
+    const scale = camera.zoom;
     const scaledHead = headSize * scale;
     const scaledTorsoWidth = torsoWidth * scale;
     const scaledTorsoHeight = torsoHeight * scale;
@@ -2247,7 +2248,7 @@ drawHeldItem(pose = null) {
       
       if (textureId && this.textures[textureId]) {
         if (pose) {
-          const handDist = pose.armTopOffset + pose.armLength - baseSize * 0.45 + 10;
+          const handDist = pose.armTopOffset + pose.armLength - baseSize * 0.45 + 10 * this.camera.zoom / 3;
           // Rotate with the arm; tools are gripped near the bottom of their handle.
           if (isTool) {
             const toolOffset = itemSize * (TOOL_GRIP_OFFSETS[textureId.split('_').pop()] ?? 0.3);
@@ -2269,7 +2270,7 @@ drawHeldItem(pose = null) {
       } else {
         const lightIntensity = Math.max(0.2, combinedLightFactor);
         if (pose) {
-          const handDist = pose.armTopOffset + pose.armLength - itemSize * 0.45 + 10;
+          const handDist = pose.armTopOffset + pose.armLength - itemSize * 0.45 + 10 * this.camera.zoom / 3;
           const screenX = Math.round(pose.pivotX - handDist * Math.sin(pose.angle));
           const screenY = Math.round(pose.pivotY + handDist * Math.cos(pose.angle) - 8);
           const rgb = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec('#8B4513');

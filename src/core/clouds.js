@@ -56,7 +56,8 @@ const LAYERS = [
 export class Clouds {
   // light: 0 (night) .. 1 (day)
   draw(ctx, camera, canvas, worldSeed, light) {
-    const z = camera.zoom;
+    // Clouds are far away: they keep their size whatever the camera's zoom.
+    const z = 3;
     const secs = gameClock.seconds();
     const t = secs * MORPH;
     const l = Math.max(0, Math.min(1, light));

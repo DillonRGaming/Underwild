@@ -313,6 +313,7 @@ function changeZoom(direction) {
   if (!camera) return;
   camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, camera.zoom + direction * ZOOM_STEP));
   prefs.set('cameraZoom', camera.zoom);
+  lastPreloadChunk = null; // load more chunks if the wider view needs them
   showToast(`Zoom: ${Math.round(camera.zoom / 3 * 100)}%`);
 }
 window.changeZoom = changeZoom;
@@ -2486,9 +2487,18 @@ function fillArea(x1, y1, x2, y2, blockId, fillType = 'solid', replaceBlock = nu
 
 let spawnTileX = 100;
 
+// Chunks loaded each side of the player: the render distance, or more when zoomed out
+// far enough to see past it, so the screen is always filled.
+function loadDistance() {
+  const base = Math.max(0, Math.floor(CHUNK_RENDER_DISTANCE));
+  if (!camera || !canvas || !world) return base;
+  const halfTiles = canvas.width / (TILE_SIZE * camera.zoom) / 2;
+  return Math.max(base, Math.ceil(halfTiles / world.chunkSize) + 1);
+}
+
 async function loadInitialChunks(originX) {
   const centerChunk = Math.floor(originX / world.chunkSize);
-  const dist = Math.max(0, Math.floor(CHUNK_RENDER_DISTANCE)) + 1;
+  const dist = loadDistance() + 1;
   const minChunk = Math.max(0, centerChunk - dist);
   const maxChunk = Math.min(Math.floor((world.width - 1) / world.chunkSize), centerChunk + dist);
   const loads = [];
@@ -4869,7 +4879,7 @@ function preloadChunksAroundPlayer() {
   lastPreloadChunk = signature;
 
   const lastChunk = Math.floor((world.width - 1) / world.chunkSize);
-  const dist = Math.max(0, Math.floor(CHUNK_RENDER_DISTANCE));
+  const dist = loadDistance();
   const keepMin = Math.max(0, centerChunk - dist - 1);
   const keepMax = Math.min(lastChunk, centerChunk + dist + 1);
   const ranges = [[keepMin, keepMax]];
@@ -4877,7 +4887,7 @@ function preloadChunksAroundPlayer() {
     ranges.push([Math.max(0, gc - multiplayer.keepRadius()), Math.min(lastChunk, gc + multiplayer.keepRadius())]);
   }
   const keep = (cx) => ranges.some(([a, b]) => cx >= a && cx <= b);
-  world.maxLoadedChunks = Math.max(30, (CHUNK_RENDER_DISTANCE + 2) * 2 + 1) + guestCenters.length * (multiplayer.keepRadius() * 2 + 1);
+  world.maxLoadedChunks = Math.max(30, (loadDistance() + 2) * 2 + 1) + guestCenters.length * (multiplayer.keepRadius() * 2 + 1);
 
   for (const key of Array.from(world.chunks.keys())) {
     const cx = parseInt(key, 10);
