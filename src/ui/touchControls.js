@@ -1,9 +1,9 @@
 // On-screen controls for phones and tablets, driving the same keys and mouse state the
 // keyboard and mouse do:
 //   - left pad: walk (up/down climb and fly)
-//   - right stick: aim around the player, and act while it's held: aiming at a block
-//     breaks it, aiming at an empty spot places the held block (decided when you start
-//     pushing, so breaking a block doesn't then place one back). Let go and the aim stays.
+//   - right stick: aim around the player, and act while it's held: it breaks, or places
+//     the held block, as set by the small break/place button above it. Let go and the aim
+//     stays where it was.
 //   - tap the world: use what's there (open a chest, light an explosive, place a block)
 //   - drag on the world: move the aim without doing anything
 //   - jump, down and sprint buttons; "..." for the inventory; chat and pause at the top.
@@ -17,6 +17,8 @@ const ICONS = {
   up: '<path d="M8 3 L13 9 H10 V13 H6 V9 H3 Z"/>',
   down: '<path d="M8 13 L13 7 H10 V3 H6 V7 H3 Z"/>',
   sprint: '<path d="M2 3 L7 8 L2 13 Z M8 3 L13 8 L8 13 Z"/>',
+  pickaxe: '<path d="M3 3 H11 L14 6 V8 L11 5 H8 L13 13 L11 14 L6 6 L3 6 Z"/>',
+  block: '<path d="M3 3 H13 V13 H3 Z M5 5 V11 H11 V5 Z"/>',
   chat: '<path d="M2 3 H14 V11 H7 L4 14 V11 H2 Z"/>',
   pause: '<path d="M4 3 H7 V13 H4 Z M9 3 H12 V13 H9 Z"/>'
 };
@@ -28,9 +30,8 @@ export function isTouchDevice() {
     && window.matchMedia?.('(pointer: coarse)').matches;
 }
 
-// aimTarget(canvasX, canvasY) -> { block, placeable }: what's at that spot on screen.
 // playerScreen() -> { x, y }: the player's middle in canvas pixels. reach() -> canvas pixels.
-export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, aimTarget, playerScreen, reach }) {
+export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, playerScreen, reach }) {
   if (!isTouchDevice() || document.getElementById('touchControls')) return null;
   document.body.classList.add('touch-mode');
 
@@ -45,6 +46,7 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       <button class="touch-btn touch-down" data-act="down">${svg('down')}</button>
     </div>
     <div class="touch-pad touch-aim"><div class="touch-pad-stick"></div></div>
+    <button class="touch-btn touch-mode-btn" data-act="mode">${svg('pickaxe')}</button>
     <button class="touch-btn touch-more" data-act="inventory">&middot;&middot;&middot;</button>
     <button class="touch-btn touch-chat" data-act="chat">${svg('chat')}</button>
     <button class="touch-btn touch-pause" data-act="pause">${svg('pause')}</button>`;
@@ -123,6 +125,8 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   let aimTouch = null;
   const aimVec = { x: 0, y: 0, len: 0 };
   let acting = null; // null | 'break' | 'place'
+  let stickMode = 'break';
+  const modeBtn = root.querySelector('.touch-mode-btn');
   const stopActing = () => {
     if (acting === 'break') mouse('mouseup', 0);
     if (acting === 'place') mouse('mouseup', 2);
@@ -151,8 +155,7 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     aimVec.y = dy;
     applyAim();
     if (!acting) {
-      const target = aimTarget(aim.x, aim.y);
-      acting = target.block ? 'break' : target.placeable ? 'place' : 'break';
+      acting = stickMode;
       mouse('mousedown', acting === 'break' ? 0 : 2);
     }
   };
@@ -186,6 +189,12 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       if (act === 'jump') keyDown(keybinds.jump);
       else if (act === 'down') keyDown(keybinds.crouch);
       else if (act === 'inventory') onInventory();
+      else if (act === 'mode') {
+        stickMode = stickMode === 'break' ? 'place' : 'break';
+        modeBtn.innerHTML = svg(stickMode === 'break' ? 'pickaxe' : 'block');
+        modeBtn.classList.toggle('on', stickMode === 'place');
+        if (acting) { stopActing(); if (aimVec.len >= AIM_DEAD_ZONE) { acting = stickMode; mouse('mousedown', acting === 'break' ? 0 : 2); } }
+      }
       else if (act === 'chat') window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.chat, key: 't', bubbles: true }));
       else if (act === 'pause') window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.pause, key: 'Escape', bubbles: true }));
       else if (act === 'sprint') {

@@ -2336,3 +2336,13 @@ body.touch-mode #hotbar { transform: translateX(calc(-50% + var(--hotbar-shift))
 body.touch-mode .ui-health { left: calc(50% - var(--stats-half-width) + var(--hotbar-shift)); }
 body.touch-mode .ui-hunger { right: calc(50% - var(--stats-half-width) - var(--hotbar-shift)); }
 body.touch-mode .touch-more { margin-left: var(--hotbar-shift); }
+
+/* Break / place switch for the aim stick, centred above it. */
+.touch-mode-btn {
+  position: absolute;
+  width: calc(var(--tb) * 0.7);
+  height: calc(var(--tb) * 0.7);
+  right: calc(var(--te) + var(--tb) + var(--tg) + clamp(90px, 31vh, 160px) / 2 - var(--tb) * 0.35);
+  bottom: calc(var(--te) + clamp(90px, 31vh, 160px) + var(--tg));
+}
+.touch-mode-btn.on { background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
