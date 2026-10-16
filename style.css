@@ -2271,7 +2271,7 @@ body.hide-window-controls #drag-zone {
 
 /* Smaller hotbar on phones so it fits between the pad and the buttons. */
 body.touch-mode {
-  --hotbar-slot-size: clamp(28px, 9vh, 48px);
+  --hotbar-slot-size: clamp(26px, 8vh, 44px);
   --hotbar-item-size: calc(var(--hotbar-slot-size) * 0.6);
 }
 
@@ -2282,15 +2282,15 @@ body.touch-mode #drag-zone { display: none !important; }
 
 /* Phones: a smaller inventory and menus, so they fit a landscape screen. */
 body.touch-mode {
-  --slot-size: clamp(30px, 9.5vh, 48px);
+  --slot-size: clamp(28px, 8.5vh, 44px);
   --item-size: calc(var(--slot-size) * 0.66);
-  --chest-slot-size: clamp(28px, 8.5vh, 40px);
+  --chest-slot-size: clamp(26px, 7.5vh, 36px);
   --chest-item-size: calc(var(--chest-slot-size) * 0.66);
 }
 body.touch-mode .menu-content {
-  zoom: 0.8;
+  zoom: 0.72;
   /* The height limit shrinks with the zoom too: undo that so menus use the whole screen. */
-  max-height: calc(96vh / 0.8);
+  max-height: calc(96vh / 0.72);
   height: auto;
 }
 
