@@ -2440,3 +2440,8 @@ body.touch-mode #inventory.creative-mode .creative-header { margin-bottom: 4px; 
 body.touch-mode #inventory.creative-mode .creative-panel { margin-bottom: 8px; }
 body.touch-mode #inventory.creative-mode .creative-tabs-top { margin-bottom: 2px; }
 body.touch-mode #inventory.creative-mode .creative-tabs-bottom { margin-top: 2px; }
+/* Phones scroll the creative grid by dragging, so it needs no scrollbar, nor the matching
+   room on the left that kept the slots centred around one. */
+body.touch-mode #inventory.creative-mode { --creative-scroll-room: 0px; }
+body.touch-mode #inventory.creative-mode .creative-grid { padding-left: 0; padding-right: 0; scrollbar-width: none; }
+body.touch-mode #inventory.creative-mode .creative-grid::-webkit-scrollbar { display: none; }
