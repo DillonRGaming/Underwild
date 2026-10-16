@@ -3865,7 +3865,8 @@ canvas.addEventListener('mousedown', (e) => {
     const { screenX, screenY } = getScreenCoordsFromEvent(e);
     const { tileX, tileY } = getMouseTileFromRaw(screenX, screenY);
     const targetId = world.getBlockId(tileX, tileY);
-    wallPress = targetId === 'air';
+    // Started on a background thing (a wall, or a background block you placed): drag on.
+    wallPress = targetId === 'air' || world.getCell(tileX, tileY).meta?.layer === 'bg';
     if (tryHitPlayer(screenX, screenY)) wallPress = false;
     if (targetId === 'air' || NATURE_BLOCKS.has(targetId)) player.playArmAction('attack');
   }
