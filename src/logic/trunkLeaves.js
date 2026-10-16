@@ -15,6 +15,20 @@ export function trunkLeafCover(world, x, y) {
   return null;
 }
 
+// The cover a trunk keeps: once it has leaves in front it remembers them (meta.leafCover),
+// so breaking the leaves beside it doesn't strip the trunk bare. Only breaking the trunk
+// takes them.
+export function keptLeafCover(world, x, y) {
+  const cell = world.getCell(x, y);
+  if (cell.meta?.leafCover) return cell.meta.leafCover;
+  const cover = trunkLeafCover(world, x, y);
+  if (cover) {
+    if (!cell.meta) cell.meta = {};
+    cell.meta.leafCover = cover;
+  }
+  return cover;
+}
+
 export function isTrunkId(id) {
   return id.endsWith('_log') || id === 'birch_log_base';
 }

@@ -1,7 +1,7 @@
 import { gameClock } from './gameClock.js';
 import { TILE_SIZE, darkenHex } from './utils.js';
 import { Clouds } from './clouds.js';
-import { trunkLeafCover } from '../logic/trunkLeaves.js';
+import { keptLeafCover } from '../logic/trunkLeaves.js';
 import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
 import { waterLevel, waterMass, WATER_LEVELS } from '../logic/water.js';
 import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
@@ -1773,7 +1773,7 @@ drawStars() {
     if (texture && meta?.axis !== 'x' && meta?.layer !== 'bg' && isTrunk(type.id)) {
       this.drawTrunk(texture, tileX, tileY, sx, sy, size, finalLightFactor);
       // Inside the crown: leaves in front of the trunk.
-      const leafId = trunkLeafCover(world, tileX, tileY);
+      const leafId = keptLeafCover(world, tileX, tileY);
       const leafTexture = leafId && this.biomeTexture(leafId, this.textures[leafId], tileX);
       if (leafTexture) this.drawBlockTexture(leafTexture, sx + this.leafSwayOffset(tileX, tileY, size), sy, size, finalLightFactor);
       return;

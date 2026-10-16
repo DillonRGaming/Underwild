@@ -4926,7 +4926,7 @@ function handleBrokenBlock(broke) {
   spawnItemEntity(broke.drop, centerX, centerY);
   if (broke.id.endsWith('_leaves')) burstLeaves(broke.id, broke.x, broke.y);
   // The leaves drawn in front of a trunk inside a tree's crown go with it.
-  const cover = isTrunkId(broke.id) && broke.meta?.axis !== 'x' ? trunkLeafCover(world, broke.x, broke.y) : null;
+  const cover = isTrunkId(broke.id) && broke.meta?.axis !== 'x' ? (broke.meta?.leafCover || trunkLeafCover(world, broke.x, broke.y)) : null;
   if (cover) {
     spawnItemEntity(cover, centerX, centerY);
     burstLeaves(cover, broke.x, broke.y);
