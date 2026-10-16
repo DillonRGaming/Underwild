@@ -308,10 +308,24 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
     if (jumpKeyPressed) player.vy -= flySpeed;
     if (input.isKeyDown('ControlLeft') || input.isKeyDown('ControlRight') || input.isKeyDown(keybinds.backward)) player.vy += flySpeed;
 
-    let nextX = player.x + player.vx * dt;
+    const wantX = player.x + player.vx * dt;
+    let nextX = sweepX(world, player, wantX, false);
+    // A 2-block gap fits the player exactly, but flying leaves you a hair off the block
+    // grid, so you'd catch the block above or below it. Blocked sideways: try lining up with
+    // the nearest row (up to half a block away) and go through if that clears the way.
+    if (player.vx === 0 && Math.abs(wantX - nextX) > 0.01) {
+      const savedY = player.y;
+      const aligned = Math.round(player.y / TILE_SIZE) * TILE_SIZE;
+      if (aligned !== savedY && Math.abs(aligned - savedY) <= TILE_SIZE / 2 && !boxBlocked(world, player.x, aligned, player)) {
+        player.y = aligned;
+        player.vx = wantX > player.x ? 1 : -1;
+        const tryX = sweepX(world, player, wantX, false);
+        if (Math.abs(tryX - player.x) > Math.abs(nextX - player.x) + 0.01) nextX = tryX;
+        else player.y = savedY;
+        player.vx = 0;
+      }
+    }
     let nextY = player.y + player.vy * dt;
-
-    nextX = sweepX(world, player, nextX, false);
 
     const dirY = Math.sign(player.vy);
     if (dirY !== 0) {
