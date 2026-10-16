@@ -325,25 +325,29 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     if (magnifier.width !== px) { magnifier.width = px; magnifier.height = px; }
     const ctx = magnifier.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    const half = Math.floor(MAGNIFY_TILES / 2);
+    // Centred on the finger itself (not snapped to a block), with the block grid and the
+    // targeted block drawn wherever they fall.
     const src = MAGNIFY_TILES * tile.size;
+    const srcLeft = sx - src / 2;
+    const srcTop = sy - src / 2;
+    const scale = px / src;
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, px, px);
-    ctx.drawImage(canvas, tile.x - half * tile.size, tile.y - half * tile.size, src, src, 0, 0, px, px);
-    const cell = px / MAGNIFY_TILES;
+    ctx.drawImage(canvas, srcLeft, srcTop, src, src, 0, 0, px, px);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let i = 1; i < MAGNIFY_TILES; i++) {
-      const p = Math.round(i * cell) + 0.5;
-      ctx.moveTo(p, 0); ctx.lineTo(p, px);
-      ctx.moveTo(0, p); ctx.lineTo(px, p);
+    for (let k = -2; k <= MAGNIFY_TILES + 1; k++) {
+      const gx = Math.round((tile.x + k * tile.size - srcLeft) * scale) + 0.5;
+      const gy = Math.round((tile.y + k * tile.size - srcTop) * scale) + 0.5;
+      if (gx > 0 && gx < px) { ctx.moveTo(gx, 0); ctx.lineTo(gx, px); }
+      if (gy > 0 && gy < px) { ctx.moveTo(0, gy); ctx.lineTo(px, gy); }
     }
     ctx.stroke();
     // Red when the block is too far away to reach.
     ctx.strokeStyle = canReach(tile.tx, tile.ty) ? '#fff' : '#ff4040';
-    ctx.lineWidth = Math.max(2, cell / 14);
-    ctx.strokeRect(half * cell, half * cell, cell, cell);
+    ctx.lineWidth = Math.max(2, tile.size * scale / 14);
+    ctx.strokeRect((tile.x - srcLeft) * scale, (tile.y - srcTop) * scale, tile.size * scale, tile.size * scale);
     // Always above the finger, kept on screen.
     const gap = 28;
     let left = finger.x - cssSize / 2;
