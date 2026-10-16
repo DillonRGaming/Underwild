@@ -2289,18 +2289,6 @@ body.touch-mode {
 }
 body.touch-mode .menu-content { zoom: 0.8; }
 
-/* Phones have no Escape key: an X closes the inventory, chests, furnaces... */
-:where(.inventory-frame, .inventory-content) { position: relative; }
-.touch-close {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 50;
-  width: 36px;
-  height: 36px;
-  font-size: 18px;
-}
-.touch-close.hidden { display: none; }
 
 .touch-pause {
   position: absolute;

@@ -2262,9 +2262,7 @@ setupTouchControls({
   input,
   keybinds,
   inGame: () => !!(world && player && !isLoading && !gamePaused && !inventoryOpen && !openContainer && !textInputMode),
-  onInventory: () => window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.inventory, key: 'e', bubbles: true })),
-  uiOpen: () => !!(world && (inventoryOpen || openContainer)),
-  closeUI: () => closeInventory()
+  onInventory: () => window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.inventory, key: 'e', bubbles: true }))
 });
 
 camera = new Camera();
@@ -3636,6 +3634,12 @@ window.addEventListener('mousedown', (e) => {
   const hit = getUIHitFromElement(e.target);
 
   if (!hit) {
+    // Clicking (or tapping) off the inventory with nothing in hand closes it.
+    const outside = e.target.closest?.('.inventory-overlay') && !e.target.closest('.inventory-content, .inventory-frame, .creative-tabs');
+    if (outside && !draggingStack && e.button === 0) {
+      closeInventory();
+      return;
+    }
     if (draggingStack && e.target.closest?.('.inventory-overlay') && !e.target.closest('.inventory-content')) {
       const count = e.button === 2 ? 1 : draggingStack.count;
       dropStackAtPlayer(draggingStack, count);
