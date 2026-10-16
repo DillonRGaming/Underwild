@@ -2252,7 +2252,8 @@ body.hide-window-controls #drag-zone {
   width: var(--hotbar-slot-size);
   height: var(--hotbar-slot-size);
   font-size: 20px;
-  letter-spacing: 1px;
+  letter-spacing: -3px;
+  text-indent: -3px; /* keep the tightened dots centred */
 }
 
 .touch-crosshair {
