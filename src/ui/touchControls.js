@@ -373,11 +373,22 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     window.dispatchEvent(new KeyboardEvent('keyup', { code: `Digit${n}`, key: String(n), bubbles: true }));
   }, { passive: false });
 
-  // Closing the phone keyboard (tapping away from the chat box) closes the chat too.
+  // The send button next to the chat box (touching it doesn't close the keyboard first).
+  document.getElementById('chatSend')?.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter', key: 'Enter', bubbles: true }));
+  }, { passive: false });
+
+  // Closing the phone keyboard (tapping away from the chat box) closes the chat too. Not at
+  // once: pressing the keyboard's send key blurs the box just before its Enter arrives.
   document.getElementById('chatInput')?.addEventListener('blur', () => {
-    if (!document.getElementById('chat')?.classList.contains('hidden')) {
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape', bubbles: true }));
-    }
+    setTimeout(() => {
+      const chatInput = document.getElementById('chatInput');
+      if (document.activeElement === chatInput) return;
+      if (!document.getElementById('chat')?.classList.contains('hidden')) {
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape', bubbles: true }));
+      }
+    }, 300);
   });
 
   // Show the controls only while playing, and keep the crosshair on the aim point.

@@ -4072,13 +4072,19 @@ function handleChatKey(e) {
     : [];
   const currentIndex = suggestionItems.findIndex(item => item.classList.contains('selected'));
 
-  if (e.code === 'Escape') {
+  // Phone keyboards often send Enter with no key code (only e.key), and the last word can
+  // still be in the keyboard's suggestion bar, so read the box itself.
+  const isEnter = e.code === 'Enter' || e.code === 'NumpadEnter' || e.key === 'Enter' || e.keyCode === 13;
+  const chatBox = document.getElementById('chatInput');
+  if (isEnter && chatBox) textInputValue = chatBox.value;
+
+  if (e.code === 'Escape' || e.key === 'Escape') {
     closeChat();
     e.preventDefault();
     return;
   }
 
-  if (e.code === 'Enter') {
+  if (isEnter) {
     // Enter on a highlighted suggestion (or a half-typed command name) fills it in.
     const words = textInputValue.slice(1).split(' ');
     const last = words[words.length - 1].toLowerCase();

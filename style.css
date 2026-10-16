@@ -2409,3 +2409,20 @@ body.touch-mode .touch-only { display: block; }
 .touch-chat  { top: var(--tt); right: calc(var(--tt) * 2 + var(--ts)); width: var(--ts); height: var(--ts); }
 .touch-zoom-in  { position: absolute; top: var(--tt); right: calc(var(--tt) * 3 + var(--ts) * 2); width: var(--ts); height: var(--ts); }
 .touch-zoom-out { position: absolute; top: var(--tt); right: calc(var(--tt) * 4 + var(--ts) * 3); width: var(--ts); height: var(--ts); }
+
+/* Send button beside the chat box on phones. */
+body.touch-mode .chat-input-wrapper { display: flex; align-items: center; gap: 6px; }
+body.touch-mode .chat-send.touch-only {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  font-size: 18px;
+  color: var(--line, #fff);
+  background: var(--fill, rgba(0, 0, 0, 0.35));
+  border: 2px solid var(--line, #fff);
+  border-radius: var(--radius, 0);
+}

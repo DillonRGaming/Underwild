@@ -226,7 +226,8 @@
    <div id="chat" class="chat-container hidden">
      <div class="chat-input-wrapper">
        <span id="chatPreview" class="chat-preview"></span>
-       <input type="text" id="chatInput" class="chat-input" maxlength="128" autocomplete="off" spellcheck="false">
+       <input type="text" id="chatInput" class="chat-input" maxlength="128" autocomplete="off" spellcheck="false" enterkeyhint="send">
+       <button type="button" id="chatSend" class="chat-send touch-only" aria-label="Send">&#8629;</button>
      </div>
      <div id="chatSuggestions" class="suggestions-dropdown hidden"></div>
    </div>
