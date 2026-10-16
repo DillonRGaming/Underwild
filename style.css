@@ -2445,3 +2445,7 @@ body.touch-mode #inventory.creative-mode .creative-tabs-bottom { margin-top: 2px
 #inventory.creative-mode { --creative-scroll-room: 0px; }
 #inventory.creative-mode .creative-grid { padding-left: 0; padding-right: 0; scrollbar-width: none; }
 #inventory.creative-mode .creative-grid::-webkit-scrollbar { display: none; }
+/* Phones: the creative grid is shorter than the Inventory tab's rows, so on that tab the
+   box grows to fit them instead of letting them spill over the hotbar. */
+body.touch-mode #inventory.creative-mode[data-creative-tab="inventory"] .inventory-main { contain: none; }
+body.touch-mode #inventory.creative-mode[data-creative-tab="inventory"] .creative-panel.hidden { display: none !important; }
