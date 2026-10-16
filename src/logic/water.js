@@ -1,3 +1,4 @@
+import { gameClock } from '../core/gameClock.js';
 // Water as a mass-based cellular simulation: every water cell holds a mass (1 = a full
 // block; deep water is very slightly compressed, which is what pushes water back up the
 // other side of a U-bend or out of a hole). Each step a cell pours down, shares with its
@@ -291,7 +292,7 @@ export class WaterSim {
       return;
     }
     if (cell.id !== 'water') {
-      world.setBlock(x, y, 'water', { mass, newAt: Date.now() });
+      world.setBlock(x, y, 'water', { mass, newAt: gameClock.now() });
       this.wakeAround(x, y);
       return;
     }
@@ -300,5 +301,24 @@ export class WaterSim {
     delete cell.meta.level;
     if (waterLevel(cell) !== before) world.touchCell(x, y);
     if (wake) this.wakeAround(x, y);
+  }
+
+  // A block was placed where `mass` of water was: push it into the open cells around
+  // (sides and up, then further out). Whatever finds no room is lost.
+  displace(x, y, mass) {
+    let left = mass;
+    for (let ring = 1; ring <= 3 && left > MIN_MASS; ring++) {
+      const spots = [[x - ring, y], [x + ring, y], [x, y - ring], [x - ring, y - 1], [x + ring, y - 1]];
+      for (const [nx, ny] of spots) {
+        if (left <= MIN_MASS) break;
+        if (!this.canHold(nx, ny) || this.world.getBlockId(nx, ny) !== 'air' && this.world.getBlockId(nx, ny) !== 'water') continue;
+        const here = this.mass(nx, ny);
+        const add = Math.min(left, MAX_MASS - here);
+        if (add <= 0) continue;
+        this.setMass(nx, ny, here + add, true);
+        left -= add;
+      }
+    }
+    this.wakeAround(x, y);
   }
 }

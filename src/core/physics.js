@@ -21,6 +21,55 @@ function hasGroundBelow(world, x, player) {
   return false;
 }
 
+// Whether the player's box at (x, y) overlaps anything solid.
+function boxBlocked(world, x, y, player) {
+  const l = Math.floor(x / TILE_SIZE), r = Math.floor((x + player.width - EDGE_EPS) / TILE_SIZE);
+  const t = Math.floor(y / TILE_SIZE), b = Math.floor((y + player.height - EDGE_EPS) / TILE_SIZE);
+  for (let tx = l; tx <= r; tx++) {
+    for (let ty = t; ty <= b; ty++) {
+      const b = solidBox(world, tx, ty);
+      if (b && b.bottom > y && b.top < y + player.height && b.right > x && b.left < x + player.width) return true;
+    }
+  }
+  return false;
+}
+
+// Move the player sideways to nextX, stopping at the first solid thing ahead (using each
+// cell's real solid part, so slabs and trapdoors only block where they are). Walking
+// players step up onto low ledges.
+function sweepX(world, player, nextX, canStep) {
+  const dirX = Math.sign(nextX - player.x);
+  if (dirX === 0) return nextX;
+  const top = Math.floor(player.y / TILE_SIZE);
+  const bottom = Math.floor((player.y + player.height - 1) / TILE_SIZE);
+  const feet = player.y + player.height;
+  const from = Math.floor(Math.min(player.x, nextX) / TILE_SIZE);
+  const to = Math.floor((Math.max(player.x, nextX) + player.width - EDGE_EPS) / TILE_SIZE);
+  for (let tx = dirX > 0 ? from : to; dirX > 0 ? tx <= to : tx >= from; tx += dirX) {
+    for (let ty = top; ty <= bottom; ty++) {
+      const box = solidBox(world, tx, ty);
+      if (!box || box.bottom <= player.y || box.top >= feet) continue;
+      if (dirX > 0 ? box.left >= nextX + player.width : box.right <= nextX) continue;
+      // Already overlapping something (a ledge we're dropping past): don't move further into
+      // it, but walking away from it is fine.
+      const overlapping = dirX > 0 ? box.left < player.x + player.width - EDGE_EPS : box.right > player.x + EDGE_EPS;
+      if (overlapping) {
+        const ahead = dirX > 0 ? box.left > player.x : box.right < player.x + player.width;
+        if (ahead) { player.vx = 0; return player.x; }
+        continue;
+      }
+      // A low ledge (a bottom slab or trapdoor) is stepped up onto if there's room.
+      if (canStep && player.onGround && feet - box.top <= TILE_SIZE / 2 && !boxBlocked(world, nextX, box.top - player.height - 0.01, player)) {
+        player.y = box.top - player.height - 0.01;
+        continue;
+      }
+      player.vx = 0;
+      return dirX > 0 ? box.left - player.width - 0.01 : box.right + 0.01;
+    }
+  }
+  return nextX;
+}
+
 function isOnLadder(player, world) {
   const left = Math.floor(player.x / TILE_SIZE);
   const right = Math.floor((player.x + player.width - EDGE_EPS) / TILE_SIZE);
@@ -51,6 +100,30 @@ function isBlockSolid(world, x, y) {
   return type.solid;
 }
 
+// The solid part of a cell in px ({ left, right, top, bottom }), or null if it isn't solid.
+// Slabs and closed trapdoors fill a band across the cell; an open trapdoor stands on end
+// as a thin strip against its hinge side.
+function solidBox(world, tx, ty) {
+  if (!isBlockSolid(world, tx, ty)) return null;
+  const left = tx * TILE_SIZE, top = ty * TILE_SIZE;
+  const box = { left, right: left + TILE_SIZE, top, bottom: top + TILE_SIZE };
+  const type = world.getBlockType(tx, ty);
+  if (type?.shape !== 'slab') {
+    box.top += (type?.surfaceInset || 0) * TILE_SIZE / 16; // dirt paths sit a texel low
+    return box;
+  }
+  const meta = world.getCell(tx, ty).meta || {};
+  const h = TILE_SIZE * (type.thickness ?? 8) / 16;
+  if (meta.open) {
+    if (meta.hinge === 'left') box.right = left + h;
+    else box.left = box.right - h;
+  } else if ((meta.slabPos || 'bottom') === 'top') box.bottom = top + h;
+  else box.top = box.bottom - h;
+  return box;
+}
+
+const isStrip = (box) => box.right - box.left < TILE_SIZE;
+
 function topSurfaceY(world, tileX, tileY, localX) {
   const type = world.getBlockType(tileX, tileY);
   const cell = world.getCell(tileX, tileY);
@@ -62,7 +135,8 @@ function topSurfaceY(world, tileX, tileY, localX) {
       return tileTop + (type.surfaceInset || 0) * TILE_SIZE / 16;
     case 'slab': {
       const pos = meta.slabPos || 'bottom';
-      return pos === 'bottom' ? tileTop + TILE_SIZE / 2 : tileTop;
+      // Slabs are half a block; thinner ones (trapdoors) set thickness in 16ths.
+      return pos === 'bottom' ? tileTop + TILE_SIZE * (16 - (type.thickness ?? 8)) / 16 : tileTop;
     }
     case 'stairs': {
       const orient = meta.orient || 'right';
@@ -85,7 +159,7 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
       return tileTop + TILE_SIZE;
     case 'slab': {
       const pos = meta.slabPos || 'top';
-      return pos === 'top' ? tileTop + TILE_SIZE / 2 : tileTop + TILE_SIZE;
+      return pos === 'top' ? tileTop + TILE_SIZE * (type.thickness ?? 8) / 16 : tileTop + TILE_SIZE;
     }
     case 'stairs': {
       return tileTop + TILE_SIZE;
@@ -95,7 +169,28 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
   }
 }
 
+// Crouching shrinks the hitbox (feet stay put) so you can duck under a trapdoor or slab in a
+// two-block gap. You stay crouched while there's no room to stand back up.
+const CROUCH_SHRINK = 6;
+
 export function resolvePlayerPhysics(player, world, input, dt, noClipMode = false, creativeMode = false, keybinds) {
+  const wantCrouch = !player.creativeFlying && input.isKeyDown(keybinds.crouch || 'ControlLeft');
+  // Something closing in on the head (a trapdoor shut above you) ducks you down too.
+  const stuck = !wantCrouch && !noClipMode && !player.creativeFlying
+    && boxBlocked(world, player.x, player.y, player)
+    && (player.crouchBox || !boxBlocked(world, player.x, player.y + CROUCH_SHRINK, { width: player.width, height: player.height - CROUCH_SHRINK }));
+  const small = !noClipMode && !player.creativeFlying && (wantCrouch || stuck);
+  if (small) { player.y += CROUCH_SHRINK; player.height -= CROUCH_SHRINK; }
+  try {
+    stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, keybinds, stuck);
+  } finally {
+    if (small) { player.height += CROUCH_SHRINK; player.y -= CROUCH_SHRINK; }
+  }
+  player.crouchBox = small;
+  if (stuck) player.crouching = true;
+}
+
+function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, keybinds, forceCrouch) {
   const playerCenterX = player.x + player.width / 2;
   const playerCenterY = player.y + player.height / 2;
   const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
@@ -118,7 +213,7 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   if (!player.lastJumpPress) player.lastJumpPress = 0;
   if (!player.jumpPressed) player.jumpPressed = false;
 
-  const isCrouching = !player.creativeFlying && input.isKeyDown(keybinds.crouch || 'ControlLeft');
+  const isCrouching = forceCrouch || (!player.creativeFlying && input.isKeyDown(keybinds.crouch || 'ControlLeft'));
   const isSprinting = !isCrouching && (input.isKeyDown(keybinds.sprint) || input.isKeyDown('ShiftRight'));
   player.crouching = isCrouching;
 
@@ -136,6 +231,26 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   }
 
   const maxSpeed = isCrouching ? walkSpeed * CROUCH_SPEED : (isSprinting ? sprintSpeed : walkSpeed);
+
+  // Double-tap jump toggles flying in creative. Every press is seen (from the key events,
+  // not frame polling), and a toggle uses up both taps so a third tap starts a new pair.
+  if (input.pressTimes) {
+    const now = performance.now();
+    const taps = [...input.pressTimes(keybinds.jump), ...input.pressTimes(keybinds.forward)]
+      .filter(t => t > (player.lastJumpSeen || 0) && t > now - 1000).sort((a, b) => a - b);
+    for (const t of taps) {
+      if (creativeMode && player.lastJumpPress && t - player.lastJumpPress < 350) {
+        player.creativeFlying = !player.creativeFlying;
+        player.isFlying = player.creativeFlying;
+        player.lastJumpPress = 0;
+      } else {
+        player.lastJumpPress = t;
+      }
+      player.lastJumpSeen = t;
+    }
+  }
+  // No-clip only lasts while flying.
+  if (!player.creativeFlying) noClipMode = false;
 
   if (noClipMode) {
     player.cancelFall?.();
@@ -157,11 +272,19 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
 
   const target = (input.isKeyDown(keybinds.right) ? 1 : 0) - (input.isKeyDown(keybinds.left) ? 1 : 0);
   const desiredVx = target * maxSpeed;
-  const dv = desiredVx - player.vx;
-  const step = Math.sign(dv) * Math.min(Math.abs(dv), accel * dt);
-  player.vx += step;
+  // Thrown faster than you can run (an explosion): keep the momentum through the air,
+  // slowing gently, rather than braking to a stop and dropping straight down.
+  const flung = !player.onGround && !inWater && Math.abs(player.vx) > maxSpeed;
+  if (flung) {
+    player.vx *= Math.max(0, 1 - 0.5 * dt);
+    if (target && Math.sign(target) !== Math.sign(player.vx)) player.vx += target * accel * 0.2 * dt;
+  } else {
+    const dv = desiredVx - player.vx;
+    const step = Math.sign(dv) * Math.min(Math.abs(dv), accel * dt);
+    player.vx += step;
+  }
 
-  if (target === 0) {
+  if (target === 0 && !flung) {
     const friction = inWater ? 6 : (player.onGround ? 12 : 1);
     player.vx *= Math.max(0, 1 - friction * dt);
     if (Math.abs(player.vx) < 1) player.vx = 0;
@@ -169,18 +292,6 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
 
   const jumpKeyPressed = input.isKeyDown(keybinds.forward) || input.isKeyDown(keybinds.jump);
 
-  if (creativeMode && jumpKeyPressed && !player.jumpPressed) {
-    const now = Date.now();
-    if (now - player.lastJumpPress < 500) {
-      const wasFlying = player.creativeFlying;
-      player.creativeFlying = !player.creativeFlying;
-
-      if (wasFlying !== player.creativeFlying) {
-        player.isFlying = player.creativeFlying;
-      }
-    }
-    player.lastJumpPress = now;
-  }
   player.jumpPressed = jumpKeyPressed;
 
   if (creativeMode && player.creativeFlying) {
@@ -200,22 +311,7 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
     let nextX = player.x + player.vx * dt;
     let nextY = player.y + player.vy * dt;
 
-    const dirX = Math.sign(player.vx);
-    if (dirX !== 0) {
-      const left = Math.floor(nextX / TILE_SIZE);
-      const right = Math.floor((nextX + player.width - EDGE_EPS) / TILE_SIZE);
-      const top = Math.floor(player.y / TILE_SIZE);
-      const bottom = Math.floor((player.y + player.height - 1) / TILE_SIZE);
-      for (let ty = top; ty <= bottom; ty++) {
-        const tx = dirX > 0 ? right : left;
-        if (isBlockSolid(world, tx, ty)) {
-          if (dirX > 0) nextX = tx * TILE_SIZE - player.width - 0.01;
-          else nextX = (tx + 1) * TILE_SIZE + 0.01;
-          player.vx = 0;
-          break;
-        }
-      }
-    }
+    nextX = sweepX(world, player, nextX, false);
 
     const dirY = Math.sign(player.vy);
     if (dirY !== 0) {
@@ -223,13 +319,16 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
       const right = Math.floor((nextX + player.width - EDGE_EPS) / TILE_SIZE);
       const top = Math.floor(nextY / TILE_SIZE);
       const bottom = Math.floor((nextY + player.height - 1) / TILE_SIZE);
+      const from = Math.floor(Math.min(player.y, nextY) / TILE_SIZE);
+      const to = Math.floor((Math.max(player.y, nextY) + player.height - EDGE_EPS) / TILE_SIZE);
       for (let tx = left; tx <= right; tx++) {
-        const ty = dirY > 0 ? bottom : top;
-        if (isBlockSolid(world, tx, ty)) {
-          if (dirY > 0) nextY = ty * TILE_SIZE - player.height - 0.01;
-          else nextY = (ty + 1) * TILE_SIZE + 0.01;
+        for (let ty = from; ty <= to; ty++) {
+          const box = solidBox(world, tx, ty);
+          if (!box || box.right <= nextX || box.left >= nextX + player.width) continue;
+          if (dirY > 0 && box.top >= player.y + player.height - EDGE_EPS && box.top < nextY + player.height) nextY = box.top - player.height - 0.01;
+          else if (dirY < 0 && box.bottom <= player.y + EDGE_EPS && box.bottom > nextY) nextY = box.bottom + 0.01;
+          else continue;
           player.vy = 0;
-          break;
         }
       }
     }
@@ -280,42 +379,21 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
     }
   }
 
+  // Auto-jump: hop up a one-block step at the feet when there's room above it, but not
+  // into a wall that's taller than that.
   if (player.onGround && player.autoJump !== false) {
-    const playerCenterX = player.x + player.width / 2;
-    const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
-    const playerTileY = Math.floor(player.y / TILE_SIZE);
-
     const direction = Math.sign(player.vx);
     if (direction !== 0) {
-      const aheadX = playerTileX + direction;
-      const aheadY = playerTileY;
-
-      if (world.inBounds(aheadX, aheadY)) {
-        const aheadBlock = world.getBlockType(aheadX, aheadY);
-        const aheadCell = world.getCell(aheadX, aheadY);
-
-        if (aheadBlock && aheadBlock.solid && !aheadCell.meta?.noCollision && aheadCell.meta?.layer !== 'bg') {
-          const aboveX = aheadX;
-          const aboveY = aheadY - 1;
-
-          if (world.inBounds(aboveX, aboveY)) {
-            const aboveBlock = world.getBlockType(aboveX, aboveY);
-            const aboveCell = world.getCell(aboveX, aboveY);
-
-            if (!aboveBlock || !aboveBlock.solid || aboveCell.meta?.noCollision) {
-              const playerHeadY = playerTileY - 1;
-              if (world.inBounds(playerTileX, playerHeadY)) {
-                const headBlock = world.getBlockType(playerTileX, playerHeadY);
-                const headCell = world.getCell(playerTileX, playerHeadY);
-
-                if (!headBlock || !headBlock.solid || headCell.meta?.noCollision) {
-                  player.vy = -jumpVelocity * 0.6;
-                  player.onGround = false;
-                }
-              }
-            }
-          }
-        }
+      const tileX = Math.floor((player.x + player.width / 2) / TILE_SIZE);
+      const aheadX = tileX + direction;
+      // The row just above the feet (standing on a dirt path puts the feet a texel low).
+      const feetRow = Math.floor((player.y + player.height - TILE_SIZE / 4) / TILE_SIZE);
+      const headRow = Math.floor(player.y / TILE_SIZE);
+      const solidFull = (x, y) => world.inBounds(x, y) && isBlockSolid(world, x, y) && world.getBlockType(x, y)?.shape !== 'slab';
+      const free = (x, y) => !world.inBounds(x, y) || !isBlockSolid(world, x, y);
+      if (solidFull(aheadX, feetRow) && free(aheadX, headRow) && free(aheadX, headRow - 1) && free(tileX, headRow - 1)) {
+        player.vy = -jumpVelocity * 0.6;
+        player.onGround = false;
       }
     }
   }
@@ -323,7 +401,8 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   if (onLadder) {
     if (player.vy > 0 && !jumpKeyPressed && !isCrouching && !input.isKeyDown(keybinds.backward)) player.vy = Math.min(player.vy + gravity * dt, LADDER_SLIDE_SPEED);
   } else if (!inWater) {
-    player.vy += gravity * dt;
+    // A little gentler on the way down, so falls aren't so sudden (jumps stay the same).
+    player.vy += gravity * (player.vy > 0 ? 0.85 : 1) * dt;
   }
 
   const maxFallSpeed = inWater ? SWIM_DIVE_SPEED * 1.5 : player.maxFallSpeed;
@@ -332,22 +411,7 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
   let nextX = player.x + player.vx * dt;
 
   if (!noClipMode) {
-    const dirX = Math.sign(player.vx);
-    if (dirX !== 0) {
-      const left = Math.floor(nextX / TILE_SIZE);
-      const right = Math.floor((nextX + player.width - EDGE_EPS) / TILE_SIZE);
-      const top = Math.floor(player.y / TILE_SIZE);
-      const bottom = Math.floor((player.y + player.height - 1) / TILE_SIZE);
-      for (let ty = top; ty <= bottom; ty++) {
-        const tx = dirX > 0 ? right : left;
-        if (isBlockSolid(world, tx, ty)) {
-          if (dirX > 0) nextX = tx * TILE_SIZE - player.width - 0.01;
-          else nextX = (tx + 1) * TILE_SIZE + 0.01;
-          player.vx = 0;
-          break;
-        }
-      }
-    }
+    nextX = sweepX(world, player, nextX, true);
   }
   if (isCrouching && player.onGround && !onLadder && !hasGroundBelow(world, nextX, player)) {
     nextX = player.x;
@@ -372,41 +436,89 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
         Math.floor(feetLeftX / TILE_SIZE),
         Math.floor(feetRightX / TILE_SIZE)
       ];
-      const footTileY = Math.floor((newBottom - EDGE_EPS) / TILE_SIZE);
-      let minSurface = null;
-      for (const tx of footTilesX) {
-        const localLeft = (feetLeftX - tx * TILE_SIZE) / TILE_SIZE;
-        const localRight = (feetRightX - tx * TILE_SIZE) / TILE_SIZE;
-        const s1 = topSurfaceY(world, tx, footTileY, localLeft);
-        const s2 = topSurfaceY(world, tx, footTileY, localRight);
-        const s = (s1 !== null && s2 !== null) ? Math.min(s1, s2) : (s1 ?? s2);
-        if (s !== null) {
-          if (minSurface === null || s < minSurface) minSurface = s;
+      // Check every row the feet pass through this frame, so a fast fall can't skip a
+      // thin trapdoor. Rows passed over only count surfaces we were above.
+      const oldBottom = player.y + player.height;
+      const lastRow = Math.floor((newBottom - EDGE_EPS) / TILE_SIZE);
+      for (let footTileY = Math.floor((oldBottom - EDGE_EPS) / TILE_SIZE); footTileY <= lastRow; footTileY++) {
+        let minSurface = null;
+        for (const tx of footTilesX) {
+          const localLeft = (feetLeftX - tx * TILE_SIZE) / TILE_SIZE;
+          const localRight = (feetRightX - tx * TILE_SIZE) / TILE_SIZE;
+          const box = solidBox(world, tx, footTileY);
+          let s;
+          if (box && isStrip(box)) s = box.right > feetLeftX && box.left < feetRightX ? box.top : null;
+          else {
+            const s1 = topSurfaceY(world, tx, footTileY, localLeft);
+            const s2 = topSurfaceY(world, tx, footTileY, localRight);
+            s = (s1 !== null && s2 !== null) ? Math.min(s1, s2) : (s1 ?? s2);
+          }
+          if (s !== null) {
+            if (minSurface === null || s < minSurface) minSurface = s;
+          }
+        }
+        if (minSurface !== null && newBottom >= minSurface && (footTileY === lastRow ? minSurface >= oldBottom - TILE_SIZE / 2 : minSurface >= oldBottom - 0.5)) {
+          // (Never snap up onto something far above the feet, like a plank at head height.)
+          nextY = minSurface - player.height;
+          player.vy = 0;
+          player.onGround = true;
+          if (!wasOnGround) player.land?.();
+          break;
         }
       }
-      if (minSurface !== null && newBottom >= minSurface) {
-        nextY = minSurface - player.height;
-        player.vy = 0;
-        player.onGround = true;
-        
-        if (!wasOnGround) player.land?.();
+      // Feet slip past ledges by a few pixels, but the body mustn't drop deep into a block
+      // beside them: slide off it sideways, or land on it if there's no room to.
+      if (!player.onGround) {
+        const l = Math.floor((player.x + EDGE_EPS) / TILE_SIZE), r = Math.floor((player.x + player.width - EDGE_EPS) / TILE_SIZE);
+        const t = Math.floor((oldBottom - EDGE_EPS) / TILE_SIZE), b = Math.floor((nextY + player.height - EDGE_EPS) / TILE_SIZE);
+        for (let tx = l; tx <= r; tx++) {
+          for (let ty = t; ty <= b; ty++) {
+            const box = solidBox(world, tx, ty);
+            if (!box || box.top < oldBottom - 0.5 || box.top >= nextY + player.height) continue;
+            // Just walked off this ledge (only the few px the feet may hang over overlap):
+            // fall straight down past it rather than snapping sideways.
+            const overlap = Math.min(box.right, player.x + player.width) - Math.max(box.left, player.x);
+            if (overlap <= 0 || overlap <= FEET_INSET + 0.5) continue;
+            const outLeft = box.left - player.width - 0.01, outRight = box.right + 0.01;
+            const toX = Math.abs(outLeft - player.x) < Math.abs(outRight - player.x) ? outLeft : outRight;
+            if (!boxBlocked(world, toX, nextY, player)) player.x = toX;
+            else {
+              nextY = box.top - player.height;
+              player.vy = 0;
+              player.onGround = true;
+              if (!wasOnGround) player.land?.();
+            }
+          }
+        }
       }
     }
 
     if (goingUp) {
       const headY = nextY;
-      const headTilesY = Math.floor(headY / TILE_SIZE);
       const leftTileX = Math.floor(player.x / TILE_SIZE);
       const rightTileX = Math.floor((player.x + player.width - EDGE_EPS) / TILE_SIZE);
+      // Every row the head passes through this frame (nearest first), so a jump can't
+      // skip through a thin trapdoor. Rows passed over only count ceilings we were below.
+      const firstRow = Math.floor(player.y / TILE_SIZE);
+      let hitCeiling = false;
+      for (let headTilesY = firstRow; headTilesY >= Math.floor(headY / TILE_SIZE) && !hitCeiling; headTilesY--)
       for (let tx = leftTileX; tx <= rightTileX; tx++) {
         const localLeft = (player.x - tx * TILE_SIZE) / TILE_SIZE;
         const localRight = ((player.x + player.width - EDGE_EPS) - tx * TILE_SIZE) / TILE_SIZE;
-        const c1 = ceilingSurfaceY(world, tx, headTilesY, localLeft);
-        const c2 = ceilingSurfaceY(world, tx, headTilesY, localRight);
-        const ceilY = (c1 !== null && c2 !== null) ? Math.min(c1, c2) : (c1 ?? c2);
-        if (ceilY !== null && headY <= ceilY) {
-          nextY = ceilY + 0.01;
+        const box = solidBox(world, tx, headTilesY);
+        let ceilY;
+        if (box && isStrip(box)) ceilY = box.right > player.x && box.left < player.x + player.width ? box.bottom : null;
+        else {
+          const c1 = ceilingSurfaceY(world, tx, headTilesY, localLeft);
+          const c2 = ceilingSurfaceY(world, tx, headTilesY, localRight);
+          ceilY = (c1 !== null && c2 !== null) ? Math.min(c1, c2) : (c1 ?? c2);
+        }
+        if (ceilY !== null && headY <= ceilY && (headTilesY === Math.floor(headY / TILE_SIZE) || ceilY <= player.y + 0.5)) {
+          // A bump never pushes you down (into the ground) if your head is already level
+          // with or past the ceiling, e.g. under a trapdoor that swung over you.
+          nextY = Math.min(ceilY + 0.01, player.y);
           player.vy = 0;
+          hitCeiling = true;
           break;
         }
       }
@@ -415,6 +527,7 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
 
   player.y = nextY;
   if (inWater || onLadder) player.cancelFall?.();
+  else if (player.onGround) player.land?.();
   else player.trackFall?.();
 
 }

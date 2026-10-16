@@ -19,14 +19,18 @@ export class Breaker {
     this.registry = registry;
     this.state = { active: false, progress: 0, x: 0, y: 0, id: null, shards: makeShards() };
   }
-  begin(world, x, y, creativeMode = false, heldItem = null) {
-    const id = world.getBlockId(x, y);
+  // wallId: mining an empty cell digs out the natural wall behind it (dirt, stone...).
+  begin(world, x, y, creativeMode = false, heldItem = null, wallId = null) {
+    let id = world.getBlockId(x, y);
+    const wall = id === 'air' && wallId ? wallId : null;
+    if (wall) id = wall;
     // Water can't be mined or picked up as a block (collect it with a bucket instead).
     if (id === 'air' || id === 'water') {
       this.cancel();
       return;
     }
-    if (!this.state.active || this.state.x !== x || this.state.y !== y) {
+    if (!this.state.active || this.state.x !== x || this.state.y !== y || this.state.wall !== wall) {
+      this.state.wall = wall;
       this.state.active = true;
       this.state.x = x;
       this.state.y = y;
@@ -46,7 +50,7 @@ export class Breaker {
   }
   update(world, dt) {
     if (!this.state.active) return null;
-    const type = this.registry.get(world.getBlockId(this.state.x, this.state.y)) || this.registry.get(this.state.id);
+    const type = this.registry.get(this.state.wall || world.getBlockId(this.state.x, this.state.y)) || this.registry.get(this.state.id);
     if (!type) {
       this.cancel();
       return null;
@@ -60,7 +64,7 @@ export class Breaker {
     if (this.state.heldItem && this.state.heldItem.type === 'item') {
       const itemType = this.registry.get(this.state.heldItem.itemId);
       if (itemType && itemType.type === 'tool') {
-        const blockId = world.getBlockId(this.state.x, this.state.y);
+        const blockId = this.state.wall || world.getBlockId(this.state.x, this.state.y);
         if (itemType.miningSpeed && itemType.miningSpeed[blockId]) {
           speedMultiplier = itemType.miningSpeed[blockId];
         }
@@ -72,6 +76,13 @@ export class Breaker {
     if (!this.state.creative) {
       const rate = (speedMultiplier * 1.5) / (hardness * 0.5);
       this.state.progress += dt * rate;
+    }
+    if (this.state.progress >= 1 && this.state.wall) {
+      const { x, y, wall } = this.state;
+      this.cancel();
+      if (world.getBlockId(x, y) !== 'air') return null;
+      world.setBlock(x, y, 'air', { noWall: true });
+      return { id: wall, drop: this.registry.get(wall)?.drop ?? wall, meta: null, x, y, extraDrops: [] };
     }
     if (this.state.progress >= 1) {
       const x = this.state.x;

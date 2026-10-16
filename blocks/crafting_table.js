@@ -7,7 +7,7 @@ export default {
   texture: 'crafting_table.png',
   hardness: 2.5,
   lightLevel: 0,
-  maxStack: 64,
+  maxStack: 24,
   canPlaceOnGround: true,
   canPlaceOn: true,
   tick: null

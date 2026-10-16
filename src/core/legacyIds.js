@@ -13,7 +13,9 @@ const LEGACY_IDS = {
   diamond_pickaxe: null,
   diamond_axe: null,
   diamond_shovel: null,
-  diamond_sword: null
+  diamond_sword: null,
+  trowel: null,
+  trapdoor: 'oak_trapdoor'
 };
 
 export function migrateLegacyId(id) {

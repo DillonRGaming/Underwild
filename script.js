@@ -1,3 +1,4 @@
+import { gameClock } from './src/core/gameClock.js';
 import { Engine } from './src/core/engine.js';
 import { Input } from './src/core/input.js';
 import { Renderer } from './src/core/renderer.js';
@@ -8,23 +9,27 @@ import { Player } from './src/entities/player.js';
 import { TILE_SIZE, rectsOverlap } from './src/core/utils.js';
 import { registerAllBlocks } from './blocks/index.js';
 import { isChest } from './blocks/chest.js';
-import { ensureFurnaceMeta, SMELTING, fuelTime } from './blocks/furnace.js';
+import { ensureFurnaceMeta, SMELTING, fuelTime, CRUCIBLES, OUT as FURNACE_OUT, FUEL as FURNACE_FUEL, crucibleRecipe, crucibleState } from './blocks/furnace.js';
 import { HEAD_TYPES, heatedIngotMaterial } from './blocks/forging_table.js';
 import { migrateLegacyId } from './src/core/legacyIds.js';
 import { registerAllItems } from './items/index.js';
 import { sampleBlockAt, nearestFallenTreeX, nearestLakeX } from './src/logic/terrainGen.js';
-import { findBiomeId, nearestBiomeEdge, leafFallAt, BIOME_ZONE } from './src/logic/biomes.js';
+import { findBiomeId, nearestBiomeEdge, leafFallAt, BIOME_ZONE, BIOMES } from './src/logic/biomes.js';
 import { Placer } from './src/logic/placing.js';
 import { Breaker } from './src/logic/breaking.js';
-import { findMatchingRecipe, consumeRecipeIngredients, createRecipeOutput } from './src/logic/crafting.js';
+import { findMatchingRecipe, consumeRecipeIngredients, createRecipeOutput, getAllRecipes, recipeNeeds, fitsSmallGrid, itemMatchesIngredient } from './src/logic/crafting.js';
 import { LeafParticle } from './src/entities/leaf_particle.js';
+import { trunkLeafCover, isTrunkId } from './src/logic/trunkLeaves.js';
 import { ExplosionFX } from './src/entities/explosion_fx.js';
 import { PrimedExplosive } from './src/entities/primed_explosive.js';
+import { isExplosive } from './blocks/explosive.js';
 import { ModManager } from './mods/index.js';
 import { SaveManager } from './src/core/saveManager.js';
 import { Preferences } from './src/core/preferences.js';
 
 import { ItemEntity } from './src/entities/item.js';
+import { Multiplayer } from './src/multiplayer.js';
+import { WorldSerializer } from './src/core/worldSerializer.js';
 
 const GAME_VERSION = '0.5.0';
 
@@ -74,7 +79,7 @@ const musicTracks = {
 
 let currentTrackId = 'underwild-mystic';
 
-let backgroundBlocks = ['dirt', 'coarse_dirt'];
+let backgroundBlocks = ['sand', 'smooth_sandstone'];
 
 let world = null;
 let currentSeed = Math.floor(Math.random() * 1000000);
@@ -96,8 +101,175 @@ const saveManager = new SaveManager();
 const prefs = new Preferences();
 let currentWorldSaveName = null;
 
+// --- Multiplayer -----------------------------------------------------------------------
+// What src/multiplayer.js needs from the game.
+const multiplayer = new Multiplayer({
+  get world() { return world; },
+  get player() { return player; },
+  get items() { return items; },
+  get registry() { return registry; },
+  playerName: () => playerName(),
+  playerSkin: () => playerSkin(),
+  worldName: () => currentWorldSaveName || 'World',
+  sessionMeta: () => getSessionMeta(),
+  spawnPoint: () => ({ x: spawnTileX * TILE_SIZE, y: findSurfaceY(spawnTileX) * TILE_SIZE - 33 }),
+  clock: () => gameClock.ms,
+  setTime: (time, clock) => {
+    if (!world) return;
+    world.time = time;
+    gameClock.ms = clock;
+  },
+  localState: () => localPlayerState(),
+  guestSaveData: () => (player ? {
+    inv: inventory.serialize(),
+    x: player.x,
+    y: player.y,
+    health: player.health,
+    hunger: player.hunger,
+    selectedIndex
+  } : null),
+  spawnItemLocal: (id, x, y, count, vx, vy) => spawnItemEntity(id, x, y, count, vx, vy, true),
+  makeItemEntity: (id, x, y) => {
+    if (!registry.get(id)) return null;
+    const e = new ItemEntity(id, x, y, world?.time ?? 0);
+    e.pickupDelay = Infinity;
+    return e;
+  },
+  receiveItem: (id, count) => {
+    const leftover = registry.isItem(id) ? inventory.addItem(id, count) : inventory.addBlock(id, count);
+    if (leftover > 0 && player) spawnItemEntity(id, player.x + player.width / 2, player.y, leftover);
+  },
+  onRemoteCell: (x, y, id) => {
+    saveManager.markDirty();
+    if (openContainer && openContainer.tileY === y && (openContainer.tileX === x || openContainer.ownerX === x)) {
+      const blockId = world.getBlockId(openContainer.tileX, openContainer.tileY);
+      if (!isChest(blockId) && blockId !== 'crafting_table' && blockId !== 'furnace' && blockId !== 'forging_table') closeInventory();
+    }
+  },
+  containerSignature: () => {
+    if (!openContainer || !world || openContainer.title === 'Crafting Table') return null;
+    const cell = world.getCell(openContainer.ownerX ?? openContainer.tileX, openContainer.tileY);
+    return cell.meta ? JSON.stringify(cell.meta.inv ?? null) : null;
+  },
+  touchOpenContainer: () => {
+    if (openContainer) world.touchCell(openContainer.ownerX ?? openContainer.tileX, openContainer.tileY);
+  },
+  startGuestWorld: (decoded, saved, spawn, serverName) => menuManager.startGuestWorld(decoded, saved, spawn, serverName),
+  leaveToMenu: (message) => {
+    menuManager.showMainMenu();
+    if (message) menuManager.showNotice(message);
+  },
+  toast: (text) => showToast(text),
+  applyAction: (a) => applyPlayerAction(a),
+  setTimeFromGuest: (time, manual) => {
+    if (!world) return;
+    world.time = time;
+    world.timeManuallySet = manual;
+  },
+  explosion: (x, y) => remoteExplosion(x, y),
+  primed: (x, y, fuse, vx, vy, blockId) => primedExplosives.push(Object.assign(new PrimedExplosive(x, y, TILE_SIZE, fuse), { vx: vx || 0, vy: vy || 0, blockId: blockId || 'explosive', remote: true }))
+});
+window.multiplayer = multiplayer;
+
+function playerName() {
+  return String(prefs.get('playerUsername') || 'Player').slice(0, 20);
+}
+
+// The skin to show and send to other players: a built-in name, or 'custom' with the
+// imported PNG as a data URL.
+function playerSkin() {
+  const skin = prefs.get('playerSelectedSkin') || 'steve';
+  return skin === 'custom' ? { skin, skinData: prefs.get('playerCustomSkin') || null } : { skin, skinData: null };
+}
+
+function localPlayerState() {
+  const held = inventory.getSlot(selectedIndex);
+  const uiOpen = inventoryOpen || !!openContainer || textInputMode;
+  return {
+    x: Math.round(player.x * 100) / 100,
+    y: Math.round(player.y * 100) / 100,
+    vx: Math.round(player.vx),
+    vy: Math.round(player.vy),
+    ground: !!player.onGround,
+    cr: !!player.crouching,
+    fly: !!player.creativeFlying,
+    ax: Math.round(camera.screenToWorldX(input.mouse.x)),
+    ay: Math.round(camera.screenToWorldY(input.mouse.y)),
+    mine: !!(breaker.state?.active || (input.mouse.leftDown && !uiOpen)),
+    sw: Math.round((player.swingingArm || 0) * 100) / 100,
+    act: player.armAction?.type || null,
+    actKey: player.armAction?.start || 0,
+    held: held ? { type: held.type, blockId: held.blockId, itemId: held.itemId, count: 1 } : null,
+    hu: player.hurtAt || 0
+  };
+}
+
+// Draws a skin's side view (head, body, arm, leg, as the game shows players) to a canvas.
+function drawSkinPreview(canvas, img) {
+  if (!canvas || !img) return;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const s = Math.min(canvas.width / 8, canvas.height / 32);
+  const cx = canvas.width / 2;
+  ctx.drawImage(img, 0, 8, 8, 8, cx - 4 * s, 0, 8 * s, 8 * s);          // head
+  ctx.drawImage(img, 4, 20, 4, 12, cx - 2 * s, 20 * s, 4 * s, 12 * s);   // leg
+  ctx.drawImage(img, 32, 20, 4, 12, cx - 2 * s, 8 * s, 4 * s, 12 * s);   // body
+  ctx.drawImage(img, 44, 20, 4, 12, cx - 2 * s, 8 * s, 4 * s, 12 * s);   // arm
+}
+
+// Points the local player at the chosen skin (a built-in texture or an imported PNG).
+function applyLocalSkin() {
+  if (!player) return;
+  const { skin, skinData } = playerSkin();
+  player.skin = skin;
+  player.skinImage = null;
+  if (skinData) {
+    const img = new Image();
+    img.onload = () => { if (player) player.skinImage = img; };
+    img.src = skinData;
+  }
+}
+
+// Options > App: window controls on/off (the icon and fullscreen are applied by the app).
+function applyAppSettings() {
+  document.body.classList.toggle('hide-window-controls', !prefs.getBool('appWindowControls', true));
+}
+
+// A block texture scaled up pixel-sharp to every common icon size and set as the
+// window/taskbar icon. One big image gets shrunk by the system to odd sizes and blurs;
+// with exact sizes it can pick one that's a whole multiple of the 16px texture.
+const APP_ICON_SIZES = [16, 32, 48, 64, 128, 256];
+function setAppIcon(img) {
+  const data = APP_ICON_SIZES.map(size => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0, size, size);
+    return canvas.toDataURL('image/png');
+  });
+  prefs.set('appIcon', img.dataset.id);
+  prefs.set('appIconData', data);
+  window.electronAPI?.app?.setIcon(data);
+}
+
+function showToast(text) {
+  const el = document.getElementById('mpToast');
+  if (!el) return;
+  const line = document.createElement('div');
+  line.className = 'mp-toast-line';
+  line.textContent = text;
+  el.appendChild(line);
+  while (el.childElementCount > 5) el.firstChild.remove();
+  setTimeout(() => line.classList.add('fading'), 4000);
+  setTimeout(() => line.remove(), 4600);
+}
+
 (async () => {
   await prefs.init();
+  applyAppSettings();
+  window.electronAPI?.app?.ready?.({ ua: navigator.userAgent });
   loadBackgroundConfig();
   loadAudioSettings();
   loadKeybinds();
@@ -161,7 +333,7 @@ function loadBackgroundConfig() {
     try {
       backgroundBlocks = JSON.parse(saved);
     } catch (e) {
-      backgroundBlocks = ['dirt', 'coarse_dirt'];
+      backgroundBlocks = ['sand', 'smooth_sandstone'];
     }
   }
 
@@ -502,8 +674,27 @@ class MenuManager {
   handleButtonClick(action, button) {
     switch (action) {
        case 'single-player':
-         this.showMenu('createWorldMenu');
+         this.pendingHost = null;
+         this.showMenu('singlePlayerMenu');
          break;
+      case 'sp-new-world':
+        this.pendingHost = null;
+        this.showMenu('createWorldMenu');
+        break;
+      case 'create-world-back':
+        // Back to wherever the new world was started from.
+        this.showMenu(this.pendingHost ? 'mpCreateMenu' : 'singlePlayerMenu');
+        this.pendingHost = null;
+        break;
+      case 'pause-exit':
+        this.showMenu('exitMenu');
+        break;
+      case 'exit-back':
+        this.showMenu('pauseMenu');
+        break;
+      case 'exit-no-save':
+        this.showMainMenu(false);
+        break;
       case 'load-world':
         this.showWorldList();
         break;
@@ -516,8 +707,59 @@ class MenuManager {
         this.showMenu('optionsMenu');
         break;
       case 'skins-options':
-        this.showMenu('skinMenu');
-        this.initializeSkinMenu();
+      case 'player-options':
+        this.showPlayerOptions();
+        break;
+      case 'player-import-skin':
+        document.getElementById('playerSkinFile')?.click();
+        break;
+      case 'player-done':
+        this.savePlayerName();
+        this.showMenu(world ? (gamePaused ? 'pauseMenu' : null) : 'mainMenu');
+        break;
+      case 'app-options':
+        this.showAppOptions();
+        break;
+      case 'app-controls':
+        prefs.set('appWindowControls', button.dataset.value === 'on');
+        applyAppSettings();
+        this.showAppOptions();
+        break;
+      case 'app-gpu':
+        // main.js reads this at startup (it also turns it off itself if the screen stays black).
+        prefs.set('disableGpu', button.dataset.value === 'off');
+        this.showAppOptions();
+        break;
+      case 'app-fullscreen':
+        prefs.set('appFullscreen', button.dataset.value === 'on');
+        window.electronAPI?.app?.setFullscreen(button.dataset.value === 'on');
+        this.showAppOptions();
+        break;
+      case 'multiplayer':
+        multiplayer.stopBrowsing();
+        this.showMenu('multiplayerMenu');
+        break;
+      case 'mp-create':
+        this.showMpCreate();
+        break;
+      case 'mp-join':
+        this.showMpJoin();
+        break;
+      case 'mp-join-back':
+        multiplayer.stopBrowsing();
+        this.showMenu('multiplayerMenu');
+        break;
+      case 'mp-max':
+      case 'mp-build':
+      case 'mp-lan':
+        button.parentElement.querySelectorAll('.minecraft-button').forEach(b => b.removeAttribute('data-selected'));
+        button.setAttribute('data-selected', 'true');
+        break;
+      case 'mp-start-host':
+        this.startHosting();
+        break;
+      case 'mp-join-address':
+        this.joinAddress();
         break;
       case 'quit':
         if (window.electronAPI?.window) window.electronAPI.window.close();
@@ -1001,8 +1243,6 @@ class MenuManager {
     gameSpeed = 1;
     setPosition1 = null;
     setPosition2 = null;
-    fillPos1 = null;
-    fillPos2 = null;
     selectedIndex = 0;
     lastPreloadChunk = null;
     tpVisited.clear();
@@ -1016,7 +1256,10 @@ class MenuManager {
     world = new World(width, height, registry, seed);
     world.items = items;
     world.maxLoadedChunks = Math.max(30, (CHUNK_RENDER_DISTANCE + 2) * 2 + 1);
-    world.onBlockChanged = () => saveManager.markDirty();
+    world.onBlockChanged = (x, y) => {
+      saveManager.markDirty();
+      multiplayer.onCellChanged(x, y);
+    };
     // Decaying leaves drift down as a falling leaf.
     world.onLeafDecayed = (leafId, x, y) => {
       if (!renderFallingLeaves || leafParticles.length > 90) return;
@@ -1030,7 +1273,7 @@ class MenuManager {
     player.keybinds = keybinds;
     player.autoJump = autoJump;
     player.fallDamageEnabled = !creativeMode;
-    player.skin = prefs.get('playerSelectedSkin') || 'steve';
+    applyLocalSkin();
     return player;
   }
 
@@ -1051,16 +1294,18 @@ class MenuManager {
     camera.followTo(head.x, head.y, canvas, world);
 
     saveManager.setWorldName(currentWorldSaveName);
-    saveManager.startAutoSave(getSaveState);
+    // No autosave: the world is saved only by Save and Exit (and when the window closes).
 
     initializeGameEngine();
     isLoading = false;
     engine.start();
+    if (this.pendingHost) this.beginHosting();
     setTimeout(() => startBackgroundMusic(), 500);
   }
 
   failSession(message) {
     isLoading = false;
+    this.pendingHost = null;
     this.resetSessionState();
     alert(message);
     this.showMenu('mainMenu');
@@ -1101,6 +1346,7 @@ class MenuManager {
 
       const timeMap = { day: 0.5, night: 0.0, sunset: 0.75, dawn: 0.25 };
       world.time = (timeMap[worldStartingTime] ?? 0.5) * world.dayLength;
+      gameClock.ms = 0;
 
       if (window.modManager) window.modManager.initialize(registry, world);
 
@@ -1135,7 +1381,7 @@ class MenuManager {
       if (!savedData) throw new Error('Save file not found or unreadable.');
 
       this.resetSessionState();
-      const { worldWidth, worldHeight, worldMeta, chunkData, playerData, inventoryData, itemEntities } = savedData;
+      const { worldWidth, worldHeight, worldMeta, chunkData, playerData, inventoryData, itemEntities, mpPlayers } = savedData;
 
       currentSeed = worldMeta.currentSeed ?? worldMeta.seed ?? 0;
       worldGameMode = worldMeta.gameMode || 'survival';
@@ -1145,11 +1391,13 @@ class MenuManager {
       world.worldType = worldMeta.worldType || 'regular';
       world.superflatLayers = worldMeta.superflatLayers || null;
       world.time = worldMeta.time || 0;
+      gameClock.ms = worldMeta.clock || 0;
       world.timeManuallySet = !!worldMeta.timeManuallySet;
       world.cheatsEnabled = !!worldMeta.cheatsEnabled;
       world.allowCommands = !!worldMeta.allowCommands;
       world.difficulty = worldMeta.difficulty || 'normal';
       world.creativeMode = creativeMode;
+      world.mpPlayers = mpPlayers || {};
 
       const expectedLength = world.chunkSize * world.height;
       for (const [cx, cells] of chunkData) {
@@ -1167,7 +1415,7 @@ class MenuManager {
       player.creativeFlying = !!playerData.creativeFlying;
       player.isFlying = !!playerData.isFlying;
 
-      inventory.deserialize(inventoryData);
+      const inventoryOverflow = inventory.deserialize(inventoryData);
       selectedIndex = Math.max(0, Math.min(8, playerData.selectedIndex ?? 0));
 
       for (const ent of itemEntities) {
@@ -1181,6 +1429,7 @@ class MenuManager {
 
       await loadInitialChunks(Math.floor(player.x / TILE_SIZE));
       ensurePlayerNotInSolid();
+      for (const stack of inventoryOverflow || []) dropStackAtPlayer(stack);
       player.spawnPoint = { x: spawnTileX * TILE_SIZE, y: (findSurfaceY(spawnTileX) * TILE_SIZE) - player.height - 1 };
 
       this.beginSession();
@@ -1197,11 +1446,12 @@ class MenuManager {
 
     this.showMenu('modsMenu');
     const titleEl = document.querySelector('#modsMenu .menu-title');
-    if (titleEl) titleEl.textContent = 'Select World';
+    if (titleEl) titleEl.textContent = 'Load World';
+    document.getElementById('modsBackButton').dataset.action = 'single-player';
 
     modsGrid.innerHTML = '';
     if (worlds.length === 0) {
-      modsGrid.innerHTML = '<div class="no-mods-message"><p>No saved worlds</p><p style="font-size: 14px; color: #888;">Create a new world to get started</p></div>';
+      modsGrid.innerHTML = '<div class="no-mods-message"><p>No saved worlds</p></div>';
       return;
     }
 
@@ -1222,10 +1472,12 @@ class MenuManager {
     }
   }
 
-  showMainMenu() {
+  // save = false leaves the world file as it was last saved (autosave runs every few seconds).
+  showMainMenu(save = true) {
     if (engine) engine.stop();
+    multiplayer.stop(save);
     saveManager.stopAutoSave();
-    const state = getSaveState();
+    const state = save ? getSaveState() : null;
     if (state) saveManager.saveSync(state.world, state.player, state.items, state.inventory, state.meta);
     currentWorldSaveName = null;
     saveManager.setWorldName(null);
@@ -1238,12 +1490,310 @@ class MenuManager {
     updateHTMLUI();
   }
 
+  // --- Multiplayer menus ---------------------------------------------------------------
+
+  showNotice(text, title = 'Multiplayer') {
+    document.getElementById('noticeTitle').textContent = title;
+    document.getElementById('noticeText').textContent = text;
+    this.showMenu('noticeMenu');
+  }
+
+  async showMpCreate() {
+    this.showMenu('mpCreateMenu');
+    const status = document.getElementById('mpCreateStatus');
+    status.textContent = '';
+    status.classList.remove('error');
+    const list = document.getElementById('mpWorldList');
+    list.innerHTML = '';
+    const worlds = await saveManager.listWorlds();
+    const entries = [{ fileName: null, name: 'New World', sub: '' }]
+      .concat(worlds.map(w => ({ fileName: w.fileName.replace(/\.json$/, ''), name: w.name || w.fileName, sub: `${w.gameMode === 'creative' ? 'Creative' : 'Survival'} | Seed ${w.seed}` })));
+    if (this.mpWorld === undefined) this.mpWorld = entries[1]?.fileName ?? null;
+    for (const w of entries) {
+      const item = document.createElement('div');
+      item.className = 'mp-list-item' + (w.fileName === this.mpWorld ? ' selected' : '');
+      item.innerHTML = `<div class="mp-list-icon">${w.fileName ? 'W' : '+'}</div><div class="mp-list-text"><span class="mp-list-name"></span><span class="mp-list-sub"></span></div>`;
+      item.querySelector('.mp-list-name').textContent = w.name;
+      item.querySelector('.mp-list-sub').textContent = w.sub;
+      item.addEventListener('click', () => {
+        this.mpWorld = w.fileName;
+        list.querySelectorAll('.mp-list-item').forEach(el => el.classList.remove('selected'));
+        item.classList.add('selected');
+      });
+      list.appendChild(item);
+    }
+  }
+
+  readHostSettings() {
+    const pick = (id) => document.querySelector(`#${id} [data-selected="true"]`)?.dataset.value;
+    return {
+
+      maxPlayers: parseInt(pick('mpMaxPlayers') || '4', 10),
+      allowBuild: pick('mpAllowBuild') !== 'off',
+      lan: pick('mpLan') !== 'off'
+    };
+  }
+
+  async startHosting() {
+    if (!window.electronAPI?.mp) {
+      this.showNotice('Multiplayer only works in the desktop app.');
+      return;
+    }
+    const settings = this.readHostSettings();
+    if (this.mpWorld) {
+      this.pendingHost = settings;
+      await this.loadSavedWorld(this.mpWorld);
+    } else {
+      // A new world: the normal Create World screen, then hosting starts once it's made.
+      this.pendingHost = settings;
+      this.showMenu('createWorldMenu');
+    }
+  }
+
+  async beginHosting() {
+    const settings = this.pendingHost;
+    this.pendingHost = null;
+    if (!settings) return;
+    const res = await multiplayer.host(settings);
+    if (!res.ok) {
+      showToast(`Couldn't start the game: ${res.error}`);
+      return;
+    }
+    const addresses = (res.addresses || []).join(', ');
+    if (addresses) showToast(`Others can join at ${addresses}`);
+  }
+
+  showMpJoin() {
+    this.showMenu('mpJoinMenu');
+    const status = document.getElementById('mpJoinStatus');
+    status.textContent = '';
+    status.classList.remove('error');
+    const list = document.getElementById('mpHostList');
+    const draw = (hosts) => {
+      list.innerHTML = '';
+      if (!hosts.length) {
+        list.innerHTML = '<div class="mp-empty">Looking for games...</div>';
+        return;
+      }
+      for (const h of hosts) {
+        const item = document.createElement('div');
+        item.className = 'mp-list-item';
+        item.innerHTML = `<div class="mp-list-icon">W</div><div class="mp-list-text"><span class="mp-list-name"></span><span class="mp-list-sub"></span></div><span class="mp-list-side"></span>`;
+        item.querySelector('.mp-list-name').textContent = h.name || 'Game';
+        item.querySelector('.mp-list-sub').textContent = `${h.host || '?'} | ${h.mode || ''}`;
+        item.querySelector('.mp-list-side').textContent = `${h.players}/${h.max}`;
+        item.addEventListener('click', () => this.joinGame(h.address, h.port));
+        list.appendChild(item);
+      }
+    };
+    draw([]);
+    if (!window.electronAPI?.mp) {
+      list.innerHTML = '<div class="mp-empty">Multiplayer only works in the desktop app.</div>';
+      return;
+    }
+    multiplayer.startBrowsing(draw);
+  }
+
+  joinAddress() {
+    const raw = document.getElementById('mpAddress').value.trim();
+    if (!raw) return;
+    const [address, port] = raw.split(':');
+    this.joinGame(address, port ? parseInt(port, 10) : undefined);
+  }
+
+  async joinGame(address, port) {
+    if (this.joining) return;
+    this.joining = true;
+    const status = document.getElementById('mpJoinStatus');
+    status.classList.remove('error');
+    status.textContent = `Joining ${address}...`;
+    multiplayer.stopBrowsing();
+    const res = await multiplayer.join(address, port);
+    this.joining = false;
+    if (!res.ok) {
+      // Loading may have hidden the menus; put the join screen back with the reason.
+      if (!world) {
+        this.showMpJoin();
+        const st = document.getElementById('mpJoinStatus');
+        st.textContent = res.error;
+        st.classList.add('error');
+      }
+    }
+  }
+
+  // A guest's copy of the host's world: like loading a save, but nothing is saved here.
+  async startGuestWorld(decoded, saved, spawn, serverName) {
+    isLoading = true;
+    document.querySelectorAll('.menu-container').forEach(menu => menu.classList.add('hidden'));
+    try {
+      this.resetSessionState();
+      const { worldWidth, worldHeight, worldMeta, chunkData } = decoded;
+      currentSeed = worldMeta.currentSeed ?? worldMeta.seed ?? 0;
+      worldGameMode = worldMeta.gameMode || 'survival';
+      creativeMode = worldMeta.creativeMode ?? worldGameMode === 'creative';
+
+      this.createSessionWorld(worldWidth, worldHeight, worldMeta.seed ?? currentSeed);
+      world.remote = true;
+      world.worldType = worldMeta.worldType || 'regular';
+      world.superflatLayers = worldMeta.superflatLayers || null;
+      world.time = worldMeta.time || 0;
+      gameClock.ms = worldMeta.clock || 0;
+      world.timeManuallySet = !!worldMeta.timeManuallySet;
+      world.cheatsEnabled = !!worldMeta.cheatsEnabled;
+      world.allowCommands = !!worldMeta.allowCommands;
+      world.difficulty = worldMeta.difficulty || 'normal';
+      world.creativeMode = creativeMode;
+      const expectedLength = world.chunkSize * world.height;
+      for (const [cx, cells] of chunkData) {
+        if (cells.length === expectedLength) world._savedChunks.set(cx, cells);
+      }
+
+      spawnTileX = Math.floor(world.width / 2);
+      const start = saved && Number.isFinite(saved.x) ? saved : spawn;
+      this.createSessionPlayer(start.x, start.y);
+      if (saved) {
+        player.health = saved.health ?? player.maxHealth;
+        player.hunger = saved.hunger ?? player.maxHunger;
+        inventory.deserialize(saved.inv);
+        selectedIndex = Math.max(0, Math.min(8, saved.selectedIndex ?? 0));
+      }
+      this.attachRenderer();
+      currentWorldSaveName = null;
+      await loadInitialChunks(Math.floor(player.x / TILE_SIZE));
+      ensurePlayerNotInSolid();
+      player.spawnPoint = { ...spawn };
+      this.beginSession();
+    } catch (e) {
+      isLoading = false;
+      this.resetSessionState();
+      throw e;
+    }
+  }
+
+  // --- App settings --------------------------------------------------------------------
+
+  showAppOptions() {
+    this.showMenu('appOptionsMenu');
+    const mark = (id, on) => document.querySelectorAll(`#${id} .minecraft-button`).forEach(b => {
+      if ((b.dataset.value === 'on') === on) b.setAttribute('data-selected', 'true');
+      else b.removeAttribute('data-selected');
+    });
+    mark('appWindowControls', prefs.getBool('appWindowControls', true));
+    mark('appFullscreen', prefs.getBool('appFullscreen', false));
+    mark('appGpu', !prefs.getBool('disableGpu', false));
+    const grid = document.getElementById('appIconGrid');
+    if (grid.childElementCount) {
+      grid.querySelectorAll('img').forEach(img => img.classList.toggle('selected', img.dataset.id === (prefs.get('appIcon') || 'grass')));
+      return;
+    }
+    const ids = [...registry.map.keys()].filter(id => {
+      const t = registry.get(id);
+      return id !== 'air' && id !== 'water' && !registry.isItem(id) && t?.shape === 'full' && t.solid;
+    });
+    for (const id of ids) {
+      const img = document.createElement('img');
+      img.src = `textures/${id}.png`;
+      img.dataset.id = id;
+      img.title = registry.get(id)?.displayName || id;
+      img.onerror = () => img.remove();
+      img.classList.toggle('selected', id === (prefs.get('appIcon') || 'grass'));
+      img.addEventListener('click', () => {
+        setAppIcon(img);
+        grid.querySelectorAll('img').forEach(el => el.classList.toggle('selected', el === img));
+      });
+      grid.appendChild(img);
+    }
+  }
+
+  // --- Player settings -----------------------------------------------------------------
+
+  showPlayerOptions() {
+    this.showMenu('playerOptionsMenu');
+    const nameInput = document.getElementById('playerNameInput');
+    nameInput.value = prefs.get('playerUsername') || '';
+    const fileInput = document.getElementById('playerSkinFile');
+    if (!fileInput._bound) {
+      fileInput._bound = true;
+      fileInput.addEventListener('change', () => this.importSkin(fileInput));
+      nameInput.addEventListener('change', () => this.savePlayerName());
+    }
+    this.drawPlayerSkins();
+  }
+
+  savePlayerName() {
+    const name = document.getElementById('playerNameInput').value.trim().slice(0, 20);
+    prefs.set('playerUsername', name || 'Player');
+    if (player) player.username = name || 'Player';
+  }
+
+  drawPlayerSkins() {
+    const grid = document.getElementById('playerSkinsGrid');
+    grid.innerHTML = '';
+    const current = prefs.get('playerSelectedSkin') || 'steve';
+    const custom = prefs.get('playerCustomSkin');
+    const options = [{ id: 'steve', name: 'Steve', src: 'textures/steve.png' }];
+    if (custom) options.push({ id: 'custom', name: 'Custom', src: custom });
+    for (const opt of options) {
+      const item = document.createElement('div');
+      item.className = 'skin-item' + (opt.id === current ? ' selected' : '');
+      const preview = document.createElement('canvas');
+      preview.className = 'skin-preview';
+      preview.width = 16;
+      preview.height = 64;
+      preview.style.width = '20px';
+      preview.style.height = '80px';
+      const img = new Image();
+      img.onload = () => drawSkinPreview(preview, img);
+      img.src = opt.src;
+      const label = document.createElement('div');
+      label.className = 'skin-name';
+      label.textContent = opt.name;
+      item.append(preview, label);
+      item.addEventListener('click', () => {
+        prefs.set('playerSelectedSkin', opt.id);
+        applyLocalSkin();
+        this.drawPlayerSkins();
+      });
+      grid.appendChild(item);
+      if (opt.id === current) img.addEventListener('load', () => drawSkinPreview(document.getElementById('playerSkinPreview'), img));
+    }
+  }
+
+  importSkin(fileInput) {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    const status = document.getElementById('playerSkinStatus');
+    status.classList.remove('error');
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        if (img.width !== 64 || (img.height !== 64 && img.height !== 32)) {
+          status.textContent = 'Skins must be 64x64 (or 64x32) PNGs, like Minecraft skins.';
+          status.classList.add('error');
+          return;
+        }
+        prefs.set('playerCustomSkin', reader.result);
+        prefs.set('playerSelectedSkin', 'custom');
+        status.textContent = 'Skin imported!';
+        applyLocalSkin();
+        this.drawPlayerSkins();
+      };
+      img.onerror = () => {
+        status.textContent = 'That file isn\'t a PNG image.';
+        status.classList.add('error');
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
   showPauseMenu() {
     if (inventoryOpen || openContainer) closeInventory();
     gamePaused = true;
     breaker.cancel();
     this.showMenu('pauseMenu');
-    saveCurrentWorld();
   }
 
   resumeGame() {
@@ -1256,6 +1806,7 @@ class MenuManager {
     if (!modsGrid) return;
     const titleEl = document.querySelector('#modsMenu .menu-title');
     if (titleEl) titleEl.textContent = 'Mods';
+    document.getElementById('modsBackButton').dataset.action = 'back-to-main';
     modsGrid.innerHTML = '';
     if (!window.modManager) return;
     for (const mod of window.modManager.getAllMods()) {
@@ -1716,28 +2267,32 @@ window.modManager = modManager;
 let chatHistory = [];
 let chatHistoryIndex = -1;
 
+// Each argument lists its choices; `name` is shown when it takes free input, `kind` pulls
+// suggestions from the registry, and `optional` args are drawn dimmer.
+const TIME_NAMES = { dawn: 0.25, day: 0.5, noon: 0.5, sunset: 0.75, night: 0, midnight: 0 };
+const ITEM_CONFIG_KEYS = ['pickuprange', 'attractionrange', 'attractionforce', 'pickupdelay', 'gravity', 'maxlife'];
 const availableCommands = [
-  { cmd: 'give', usage: 'give <item> [amount]', needsItem: true },
-  { cmd: 'giveall', usage: 'giveall <category>', needsCategory: true },
-  { cmd: 'clear', usage: 'clear' },
-  { cmd: 'mode', usage: 'mode <s|survival|c|creative|toggle>' },
-  { cmd: 'time', usage: 'time <value> or time <HH:MM>' },
-  { cmd: 'giverandom', usage: 'giverandom [count]' },
-  { cmd: 'setpos1', usage: 'setpos1' },
-  { cmd: 'setpos2', usage: 'setpos2' },
-  { cmd: 'setposclear', usage: 'setposclear' },
-  { cmd: 'fill', usage: 'fill <block> [type] [replaceBlock]', needsBlock: true },
-  { cmd: 'tick', usage: 'tick <speed>' },
-  { cmd: 'tp', usage: 'tp <x> <y> | tp <biome> | tp fallen | tp water' },
-  { cmd: 'seed', usage: 'seed [newSeed]' },
-  { cmd: 'itemconfig', usage: 'itemconfig [setting] [value]' },
-  { cmd: 'fly', usage: 'fly <true|false>' },
-  { cmd: 'noclip', usage: 'noclip' },
-  { cmd: 'lighting', usage: 'lighting [recalc]' }
+  { cmd: 'give', args: [{ name: 'item', kind: 'item' }, { name: 'amount', optional: true }, { name: 'player', kind: 'player', optional: true }] },
+  { cmd: 'giveall', args: [{ name: 'category', kind: 'category' }] },
+  { cmd: 'giverandom', args: [{ name: 'count', optional: true }] },
+  { cmd: 'clear', args: [{ name: 'player', kind: 'player', optional: true }] },
+  { cmd: 'mode', args: [{ options: ['survival', 'creative'], optional: true }, { name: 'player', kind: 'player', optional: true }] },
+  { cmd: 'time', args: [{ options: ['set', 'add', 'auto'] }, { options: ['dawn', 'day', 'sunset', 'night'], name: 'HH:MM', optional: true }] },
+  { cmd: 'tick', args: [{ options: ['0.5', '1', '2', '5', '10', '20'], optional: true }] },
+  { cmd: 'tp', args: [{ options: ['fallen', 'water'], kind: 'biome', players: true, name: 'x' }, { name: 'y', kind: 'player', optional: true }] },
+  { cmd: 'fly', args: [{ options: ['on', 'off'], optional: true }] },
+  { cmd: 'noclip', args: [{ options: ['on', 'off'], optional: true }] },
+  { cmd: 'setpos1', args: [] },
+  { cmd: 'setpos2', args: [] },
+  { cmd: 'setposclear', args: [] },
+  { cmd: 'fill', args: [{ name: 'block', kind: 'block' }, { options: ['solid', 'hollow', 'replace'], optional: true }, { name: 'block', kind: 'block', optional: true }] },
+  { cmd: 'seed', args: [{ name: 'seed', optional: true }] },
+  { cmd: 'itemconfig', args: [{ options: ITEM_CONFIG_KEYS }, { name: 'value' }] },
+  { cmd: 'lighting', args: [{ options: ['recalc'] }] }
 ];
 
 const itemCategories = {
-  tools: ['wooden_sword', 'wooden_pickaxe', 'wooden_shovel', 'wooden_axe', 'trowel', 'copper_sword', 'copper_pickaxe', 'copper_shovel', 'copper_axe', 'steel_sword', 'steel_pickaxe', 'steel_shovel', 'steel_axe', 'gold_sword', 'gold_pickaxe', 'gold_shovel', 'gold_axe'],
+  tools: ['wooden_sword', 'wooden_pickaxe', 'wooden_shovel', 'wooden_axe', 'copper_sword', 'copper_pickaxe', 'copper_shovel', 'copper_axe', 'steel_sword', 'steel_pickaxe', 'steel_shovel', 'steel_axe', 'gold_sword', 'gold_pickaxe', 'gold_shovel', 'gold_axe'],
   forging: ['copper_ingot_heated', 'copper_pickaxe_head', 'copper_pickaxe_head_heated', 'copper_axe_head', 'copper_axe_head_heated', 'copper_shovel_head', 'copper_shovel_head_heated', 'copper_sword_head', 'copper_sword_head_heated', 'steel_ingot_heated', 'steel_pickaxe_head', 'steel_pickaxe_head_heated', 'steel_axe_head', 'steel_axe_head_heated', 'steel_shovel_head', 'steel_shovel_head_heated', 'steel_sword_head', 'steel_sword_head_heated', 'gold_ingot_heated', 'gold_pickaxe_head', 'gold_pickaxe_head_heated', 'gold_axe_head', 'gold_axe_head_heated', 'gold_shovel_head', 'gold_shovel_head_heated', 'gold_sword_head', 'gold_sword_head_heated', 'forging_table', 'blacksmith_hammer', 'bucket', 'water_bucket'],
   woods: ['oak_log', 'birch_log', 'spruce_log', 'maple_log', 'pine_log'],
   planks: ['oak_planks', 'birch_planks', 'spruce_planks', 'maple_planks', 'pine_planks'],
@@ -1870,7 +2425,7 @@ class Inventory {
   constructor(registry) {
     this.registry = registry;
     this.HOTBAR_SIZE = 9;
-    this.TOTAL_SLOTS = 36;
+    this.TOTAL_SLOTS = 27;  // hotbar + 2 rows
     this.slots = Array.from({ length: this.TOTAL_SLOTS }, () => null);
   }
 
@@ -1906,7 +2461,7 @@ class Inventory {
       [type === 'item' ? 'itemId' : 'blockId']: id,
       displayName: def?.displayName || id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
       count,
-      maxStack: def?.maxStack ?? 64
+      maxStack: def?.maxStack ?? 24
     };
   }
 
@@ -1914,8 +2469,8 @@ class Inventory {
     const template = this.createStack(type, id, 0);
     for (let i = 0; i < this.TOTAL_SLOTS && count > 0; i++) {
       const s = this.slots[i];
-      if (s && this.canMerge(s, template) && s.count < (s.maxStack ?? 64)) {
-        const take = Math.min((s.maxStack ?? 64) - s.count, count);
+      if (s && this.canMerge(s, template) && s.count < (s.maxStack ?? 24)) {
+        const take = Math.min((s.maxStack ?? 24) - s.count, count);
         s.count += take;
         count -= take;
       }
@@ -1945,20 +2500,21 @@ class Inventory {
   getCreativeCategories() {
     const categories = {
       building: { name: 'Building', items: [] },
-      nature: { name: 'Nature', items: [] },
-      tools: { name: 'Tools', items: [] },
+      nature: { name: 'Nature', icon: 'grass', items: [] },
+      tools: { name: 'Tools', icon: 'gold_sword', items: [] },
       materials: { name: 'Materials', items: [] },
-      functional: { name: 'Functional', items: [] }
+      functional: { name: 'Functional', icon: 'crafting_table', items: [] }
     };
 
     for (const [id] of this.registry.blocks()) {
-      if (id === 'air') continue;
+      // Water is only carried in buckets, never as a block.
+      if (id === 'air' || id === 'water') continue;
       const stack = this.createStack('block', id, 1);
       if (id.includes('leaves') || id.includes('log') || id.includes('grass') || id.includes('dirt') ||
         id.includes('sand') || id.includes('gravel') || id.includes('water') || id.includes('fern') ||
         id.includes('flower') || id.includes('poppy') || id === 'mud') {
         categories.nature.items.push(stack);
-      } else if (id.endsWith('_chest') || id === 'crafting_table' || id === 'furnace' || id.endsWith('torch') || id === 'trapdoor' || id === 'explosive' || id === 'ladder') {
+      } else if (id.endsWith('_chest') || id === 'crafting_table' || id === 'furnace' || id.endsWith('torch') || id.endsWith('_trapdoor') || isExplosive(id) || id === 'ladder') {
         categories.functional.items.push(stack);
       } else if (id.endsWith('_ore') || id.includes('copper') || id.endsWith('_block')) {
         categories.materials.items.push(stack);
@@ -1993,10 +2549,21 @@ class Inventory {
       const id = migrateLegacyId(type === 'item' ? d.itemId : d.blockId);
       if (!id) return;
       const stack = this.createStack(type, id, Math.max(1, d.count || 1));
+      // Stacks bigger than the stack limit (it used to be 64) spill the rest.
+      if (stack.count > stack.maxStack) {
+        overflow.push({ ...stack, count: stack.count - stack.maxStack });
+        stack.count = stack.maxStack;
+      }
       if (i < this.TOTAL_SLOTS) this.slots[i] = stack;
       else overflow.push(stack);
     });
-    for (const stack of overflow) this.add(stack.type, stack.blockId || stack.itemId, stack.count);
+    // Stacks that no longer fit (the inventory used to be bigger) are returned so they can be dropped.
+    const leftover = [];
+    for (const stack of overflow) {
+      const left = this.add(stack.type, stack.blockId || stack.itemId, stack.count);
+      if (left > 0) leftover.push({ ...stack, count: left });
+    }
+    return leftover;
   }
 }
 
@@ -2012,17 +2579,17 @@ let gamePaused = false;
 
 inventory = new Inventory(registry);
 
-function mergeSameToSlot(targetIndex) {
-  const target = inventory.getSlot(targetIndex);
-  if (!target) return false;
-  const maxStack = target.maxStack ?? 64;
+// Double-click: the first click picked the stack up; pull every matching stack in the
+// inventory onto it, up to a full stack. Things that don't stack are left alone.
+function gatherSameIntoHand() {
+  const max = draggingStack.maxStack ?? 24;
+  if (max <= 1) return false;
   let moved = false;
-  for (let i = 0; i < inventory.TOTAL_SLOTS && target.count < maxStack; i++) {
-    if (i === targetIndex) continue;
+  for (let i = 0; i < inventory.TOTAL_SLOTS && draggingStack.count < max; i++) {
     const s = inventory.getSlot(i);
-    if (!inventory.canMerge(target, s)) continue;
-    const take = Math.min(maxStack - target.count, s.count);
-    target.count += take;
+    if (!inventory.canMerge(draggingStack, s)) continue;
+    const take = Math.min(max - draggingStack.count, s.count);
+    draggingStack.count += take;
     s.count -= take;
     moved = moved || take > 0;
     if (s.count <= 0) inventory.setSlot(i, null);
@@ -2034,6 +2601,13 @@ function mergeSameToSlot(targetIndex) {
 function throwSelectedBlock() {
   const hotSlot = inventory.getSlot(selectedIndex);
   if (!hotSlot) return;
+  throwFromStack(hotSlot, 1, () => inventory.setSlot(selectedIndex, null));
+}
+
+// Throws `count` from a stack toward the mouse; onEmpty runs if the stack is used up.
+function throwFromStack(stack, count, onEmpty) {
+  count = Math.min(count, stack.count);
+  if (count <= 0) return false;
 
   const playerCenterX = player.x + player.width / 2;
   const playerCenterY = player.y + player.height / 2;
@@ -2055,13 +2629,35 @@ function throwSelectedBlock() {
     spawnY -= TILE_SIZE * 0.25;
   }
 
-  if (!spawnItemEntity(stackId(hotSlot), spawnX, spawnY, 1, nx * 3, ny * 3)) return;
-  hotSlot.count -= 1;
-  if (hotSlot.count <= 0) inventory.setSlot(selectedIndex, null);
+  if (!spawnItemEntity(stackId(stack), spawnX, spawnY, count, nx * 3, ny * 3)) return false;
+  stack.count -= count;
+  if (stack.count <= 0) onEmpty();
+  return true;
 }
 
-let fillPos1 = null;
-let fillPos2 = null;
+// Q in the inventory: throw one of what you're holding on the cursor, or of the slot under
+// the mouse (Ctrl+Q throws the whole stack).
+function throwFromInventory(all) {
+  if (draggingStack) {
+    throwFromStack(draggingStack, all ? draggingStack.count : 1, () => { draggingStack = null; });
+    recomputeCraft();
+    return;
+  }
+  const hit = getUIHitFromElement(document.elementFromPoint(lastMouseClient.x, lastMouseClient.y));
+  if (!hit || hit.area === 'craftOut' || hit.area === 'creative' || hit.area === 'creativeTab') return;
+  const ref = getSlotRef(hit.area, hit.index);
+  const slot = ref?.get();
+  if (!slot) return;
+  throwFromStack(slot, all ? slot.count : 1, () => ref.set(null));
+  recomputeCraft();
+}
+
+const lastMouseClient = { x: 0, y: 0 };
+window.addEventListener('mousemove', (e) => {
+  lastMouseClient.x = e.clientX;
+  lastMouseClient.y = e.clientY;
+});
+
 
 placer = new Placer(registry);
 breaker = new Breaker(registry);
@@ -2071,155 +2667,149 @@ craftGrid = Array.from({ length: 9 }, () => null);
 craftOutput = null;
 craftMatch = null;
 
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+}
+
+// "/give [item] [amount]": each argument a pill showing its choices, the one being typed lit.
+// --- Command targets: a name, or @s (you), @p (nearest other player), @a (everyone), @r (random).
+const SELECTORS = ['@s', '@p', '@a', '@r'];
+function commandPlayers() {
+  const self = { id: multiplayer.isGuest ? multiplayer.myId : 0, name: playerName(), self: true, x: player.x, y: player.y };
+  const others = [...multiplayer.remotePlayers.values()].map(rp => ({ id: rp.id, name: rp.name, x: rp.x, y: rp.y }));
+  return [self, ...others];
+}
+function commandPlayerChoices() {
+  return [...SELECTORS, ...commandPlayers().map(p => p.name)];
+}
+function isPlayerRef(sel) {
+  if (!sel) return false;
+  if (SELECTORS.includes(sel.toLowerCase())) return true;
+  return commandPlayers().some(p => p.name.toLowerCase() === sel.toLowerCase());
+}
+function resolvePlayers(sel) {
+  const all = commandPlayers();
+  const s = (sel || '@s').toLowerCase();
+  if (s === '@s') return [all[0]];
+  if (s === '@a') return all;
+  if (s === '@r') return [all[Math.floor(Math.random() * all.length)]];
+  if (s === '@p') {
+    const others = all.slice(1).sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y));
+    return [others[0] || all[0]];
+  }
+  return all.filter(p => p.name.toLowerCase() === s);
+}
+// Do something to a player: here if it's us, otherwise sent to their game.
+function actOnPlayer(target, action) {
+  if (target.self) applyPlayerAction(action);
+  else multiplayer.sendAction(target.id, action);
+}
+function applyPlayerAction(a) {
+  if (!world || !player) return;
+  switch (a.k) {
+    case 'clear':
+      // Everything you carry: inventory, the stack in your hand and the 2x2 crafting grid.
+      inventory.clear();
+      draggingStack = null;
+      inventoryCraftGrid.fill(null);
+      recomputeCraft();
+      if (multiplayer.isGuest) multiplayer.sendGuestSave();
+      break;
+    case 'give': giveById(a.id, a.n); break;
+    case 'mode': setCreativeMode(a.c == null ? !creativeMode : !!a.c); break;
+    case 'tp': teleportPlayerTo(a.x, a.y); break;
+    case 'hit': hurtPlayer(a.dmg, a.vx, a.vy); break;
+  }
+}
+function teleportPlayerTo(px, py) {
+  player.x = px;
+  player.y = py;
+  player.vx = 0;
+  player.vy = 0;
+  player.onGround = false;
+  player.cancelFall();
+  lastPreloadChunk = null;
+  loadInitialChunks(Math.floor(player.x / TILE_SIZE)).then(ensurePlayerNotInSolid);
+}
+
+function commandSignature(command, activeArg = -1) {
+  const pills = command.args.map((arg, i) => {
+    const choices = [...(arg.options || [])];
+    if (arg.kind === 'biome') choices.push('biome');
+    if (arg.name) choices.push(arg.name);
+    const cls = `cmd-arg${arg.optional ? ' optional' : ''}${i === activeArg ? ' active' : ''}`;
+    return `<span class="${cls}">${choices.map(escapeHtml).join('<span class="cmd-sep">|</span>')}</span>`;
+  }).join('');
+  return `<strong>/${command.cmd}</strong>${pills}`;
+}
+
+// Choices for the argument being typed, filtered by what's typed so far.
+function argumentChoices(arg, typed) {
+  const q = typed.toLowerCase();
+  const match = (id, name = id) => id.toLowerCase().startsWith(q) || name.toLowerCase().includes(q);
+  const out = [];
+  for (const option of arg.options || []) if (match(option)) out.push({ id: option, displayName: option });
+  if (arg.kind === 'item' || arg.kind === 'block') {
+    const source = arg.kind === 'block' ? registry.blocks() : registry.entries();
+    for (const [id, def] of source) {
+      if (id !== 'air' && id !== 'water' && match(id, def.displayName || id)) out.push({ id, displayName: def.displayName || id, icon: true });
+    }
+  } else if (arg.kind === 'player') {
+    for (const p of commandPlayerChoices()) if (match(p)) out.push({ id: p, displayName: p });
+  } else if (arg.kind === 'category') {
+    for (const id of Object.keys(itemCategories)) if (match(id)) out.push({ id, displayName: id });
+  } else if (arg.kind === 'biome') {
+    if (arg.players) for (const p of commandPlayerChoices()) if (match(p)) out.push({ id: p, displayName: p });
+    for (const [id, biome] of Object.entries(BIOMES)) if (match(id, biome.name)) out.push({ id, displayName: biome.name });
+  }
+  return out.slice(0, 10);
+}
+
 function updateCommandSuggestions() {
   commandSuggestions = [];
   selectedSuggestionIndex = -1;
   itemSuggestions = [];
   selectedItemIndex = -1;
-
+  const dropdown = document.getElementById('chatSuggestions');
+  if (!dropdown) return;
+  dropdown.innerHTML = '';
   if (!textInputValue.startsWith('/')) {
-    const suggestionsDropdown = document.getElementById('chatSuggestions');
-    if (suggestionsDropdown) {
-      suggestionsDropdown.classList.add('hidden');
-    }
+    dropdown.classList.add('hidden');
     return;
   }
 
   const parts = textInputValue.slice(1).split(' ');
   const commandPart = parts[0].toLowerCase();
+  const command = parts.length > 1 ? availableCommands.find(c => c.cmd === commandPart) : null;
+  const addRow = (cls, html, onClick) => {
+    const row = document.createElement('div');
+    row.className = cls;
+    row.innerHTML = html;
+    if (onClick) row.addEventListener('click', () => { onClick(row); document.getElementById('chatInput')?.focus(); });
+    dropdown.appendChild(row);
+    return row;
+  };
 
-  if (parts.length === 1) {
-    if (commandPart.length === 0) {
-      commandSuggestions = [...availableCommands];
-    } else {
-      commandSuggestions = availableCommands.filter(cmd =>
-        cmd.cmd.toLowerCase().startsWith(commandPart) ||
-        cmd.cmd.toLowerCase().includes(commandPart)
-      );
+  if (!command) {
+    commandSuggestions = availableCommands.filter(c => c.cmd.startsWith(commandPart));
+    for (const c of commandSuggestions) {
+      const row = addRow('suggestion-item', `<div class="suggestion-text">${commandSignature(c)}</div>`, applySuggestion);
+      row.dataset.cmd = c.cmd;
     }
-
-    commandSuggestions = commandSuggestions.slice(0, 8);
   } else {
-    const command = availableCommands.find(cmd => cmd.cmd === commandPart);
-    if (command) {
-      currentCommand = command;
-      currentArgIndex = parts.length - 2;
-
-      commandSuggestions = [command];
-
-      if (command.needsItem && currentArgIndex === 0) {
-        const allItems = [];
-        for (const [id, def] of registry.entries()) {
-          if (id !== 'air') allItems.push({ id, type: def.isItem ? 'item' : 'block', displayName: def.displayName || id });
-        }
-
-        const currentArg = parts[1].toLowerCase();
-        itemSuggestions = allItems.filter(item =>
-          item.id.toLowerCase().startsWith(currentArg) ||
-          item.displayName.toLowerCase().includes(currentArg)
-        );
-
-        itemSuggestions = itemSuggestions.slice(0, 10);
-      } else if (command.needsCategory && currentArgIndex === 0) {
-        const currentArg = parts[1].toLowerCase();
-        itemSuggestions = Object.keys(itemCategories).filter(category =>
-          category.toLowerCase().startsWith(currentArg)
-        ).map(category => ({ id: category, type: 'category', displayName: category }));
-      } else if (command.needsBlock && currentArgIndex === 0) {
-        const currentArg = parts[1].toLowerCase();
-        const allBlocks = [];
-
-        for (const [id, block] of registry.blocks()) {
-          if (id !== 'air') {
-            allBlocks.push({ id, type: 'block', displayName: block.displayName || id });
-          }
-        }
-
-        itemSuggestions = allBlocks.filter(block =>
-          block.id.toLowerCase().startsWith(currentArg) ||
-          block.displayName.toLowerCase().includes(currentArg)
-        );
-
-        itemSuggestions = itemSuggestions.slice(0, 10);
-      }
-    } else {
-      commandSuggestions = availableCommands.filter(cmd =>
-        cmd.cmd.toLowerCase().startsWith(commandPart) ||
-        cmd.cmd.toLowerCase().includes(commandPart)
-      ).slice(0, 8);
+    currentCommand = command;
+    currentArgIndex = parts.length - 2;
+    addRow('suggestion-head', `<div class="suggestion-text">${commandSignature(command, currentArgIndex)}</div>`);
+    const arg = command.args[currentArgIndex];
+    itemSuggestions = arg ? argumentChoices(arg, parts[parts.length - 1]) : [];
+    for (const choice of itemSuggestions) {
+      const icon = choice.icon ? `<img src="textures/${choice.id}.png" alt="" class="suggestion-icon" onerror="this.src='textures/stone.png';">` : '';
+      const id = choice.displayName !== choice.id ? ` <span class="suggestion-id">${escapeHtml(choice.id)}</span>` : '';
+      const row = addRow('suggestion-item', `${icon}<div class="suggestion-text"><strong>${escapeHtml(choice.displayName)}</strong>${id}</div>`, applySuggestion);
+      row.dataset.id = choice.id;
     }
   }
-
-  const suggestionsDropdown = document.getElementById('chatSuggestions');
-  if (suggestionsDropdown) {
-    suggestionsDropdown.innerHTML = '';
-    
-    if (commandSuggestions.length > 0 && itemSuggestions.length === 0) {
-      commandSuggestions.forEach((suggestion, index) => {
-        const suggestionItem = document.createElement('div');
-        suggestionItem.className = 'suggestion-item';
-        if (index === selectedSuggestionIndex) {
-          suggestionItem.classList.add('selected');
-        }
-        
-        let params = '';
-        if (suggestion.usage) {
-          const usageParts = suggestion.usage.split(' ');
-          if (usageParts[0] === suggestion.cmd) {
-            params = usageParts.slice(1).join(' ');
-          } else {
-            params = suggestion.usage;
-          }
-        }
-        
-        let formattedParams = params;
-        if (formattedParams) {
-          formattedParams = formattedParams.replace(/<([^>]+)>/g, '($1)').replace(/\[([^\]]+)\]/g, '($1)');
-        }
-        
-        suggestionItem.innerHTML = `
-          <div class="suggestion-text">
-            <strong>/${suggestion.cmd}</strong> ${formattedParams ? formattedParams : ''}
-          </div>
-        `;
-        
-        suggestionItem.addEventListener('click', () => {
-          applySuggestion(suggestionItem);
-          document.getElementById('chatInput')?.focus();
-        });
-        
-        suggestionsDropdown.appendChild(suggestionItem);
-      });
-      
-      suggestionsDropdown.classList.remove('hidden');
-    } else if (itemSuggestions.length > 0) {
-      itemSuggestions.forEach((suggestion, index) => {
-        const suggestionItem = document.createElement('div');
-        suggestionItem.className = 'suggestion-item';
-        if (index === selectedItemIndex) {
-          suggestionItem.classList.add('selected');
-        }
-        
-        suggestionItem.dataset.id = suggestion.id;
-        suggestionItem.innerHTML = `
-          <img src="textures/${suggestion.id}.png" alt="" class="suggestion-icon" onerror="this.src='textures/stone.png';">
-          <div class="suggestion-text">
-            <strong>${suggestion.displayName || suggestion.id}</strong> <span class="suggestion-id">${suggestion.id}</span>
-          </div>
-        `;
-        suggestionItem.addEventListener('click', () => {
-          applySuggestion(suggestionItem);
-          document.getElementById('chatInput')?.focus();
-        });
-        
-        suggestionsDropdown.appendChild(suggestionItem);
-      });
-      
-      suggestionsDropdown.classList.remove('hidden');
-    } else {
-      suggestionsDropdown.classList.add('hidden');
-    }
-  }
+  dropdown.classList.toggle('hidden', dropdown.children.length === 0);
 }
 
 function parseCoord(coord, defaultValue) {
@@ -2250,13 +2840,14 @@ function setCreativeMode(enabled) {
 }
 
 function giveById(id, amount) {
-  if (!registry.has(id) || id === 'air') return;
+  if (!registry.has(id) || id === 'air' || id === 'water') return;
   const leftover = inventory.addById(id, amount);
   if (leftover > 0) dropStackAtPlayer({ type: registry.isItem(id) ? 'item' : 'block', blockId: id, itemId: id }, leftover);
 }
 
 function commandsAllowed() {
-  return !!(creativeMode || world?.allowCommands || world?.cheatsEnabled);
+  // Also a world made in Creative, so /mode can switch back after going to Survival.
+  return !!(creativeMode || worldGameMode === 'creative' || world?.allowCommands || world?.cheatsEnabled);
 }
 
 function processTextInputCommand(command) {
@@ -2277,48 +2868,80 @@ function processTextInputCommand(command) {
 
   switch (cmd) {
     case 'give': {
-      const amount = parts.length > 2 ? parseInt(parts[2], 10) : 1;
-      if (parts[1] && !Number.isNaN(amount) && amount > 0) giveById(parts[1], amount);
+      // /give <item> [amount] [player]; the amount can be left out: /give <item> <player>.
+      let target = parts[3];
+      let amountText = parts[2];
+      if (amountText && Number.isNaN(parseInt(amountText, 10)) && isPlayerRef(amountText)) { target = amountText; amountText = undefined; }
+      const amount = amountText ? parseInt(amountText, 10) : 1;
+      if (!parts[1] || Number.isNaN(amount) || amount <= 0 || !registry.has(parts[1])) return;
+      for (const t of resolvePlayers(target)) actOnPlayer(t, { k: 'give', id: parts[1], n: amount });
       return;
     }
 
     case 'giveall': {
       const category = itemCategories[(parts[1] || '').toLowerCase()];
       if (!category) return;
-      for (const id of category) giveById(id, registry.isItem(id) ? 1 : 64);
+      for (const id of category) giveById(id, registry.isItem(id) ? 1 : 24);
       return;
     }
 
     case 'clear':
-      inventory.clear();
+      for (const t of resolvePlayers(parts[1])) actOnPlayer(t, { k: 'clear' });
       return;
 
     case 'mode': {
-      const mode = (parts[1] || '').toLowerCase();
-      if (mode === 's' || mode === 'survival') setCreativeMode(false);
-      else if (mode === 'c' || mode === 'creative') setCreativeMode(true);
-      else if (mode === 'toggle' || mode === 't' || mode === '') setCreativeMode(!creativeMode);
+      let mode = (parts[1] || '').toLowerCase();
+      let target = parts[2];
+      if (!target && isPlayerRef(parts[1]) && !['s', 'c', 'survival', 'creative', 'toggle'].includes(mode)) { target = parts[1]; mode = ''; }
+      const targets = resolvePlayers(target);
+      for (const t of targets) {
+        let c;
+        if (mode === 's' || mode === 'survival') c = false;
+        else if (mode === 'c' || mode === 'creative') c = true;
+        else if (mode === '' || mode === 'toggle') c = t.self ? !creativeMode : null;
+        else continue;
+        actOnPlayer(t, { k: 'mode', c });
+      }
       return;
     }
 
     case 'time': {
-      const value = parts[1];
-      if (!value) return;
-      if (value === 'auto') {
+      // /time set <dawn|day|…|HH:MM|0-1>, /time add <hours|HH:MM>, /time auto.
+      // A bare /time <value> still sets it.
+      let action = (parts[1] || '').toLowerCase();
+      let value = (parts[2] || '').toLowerCase();
+      if (action !== 'set' && action !== 'add' && action !== 'auto') { value = action; action = 'set'; }
+      if (action === 'auto') {
         world.timeManuallySet = false;
+        multiplayer.sendTime(false);
+        return;
+      }
+      const hhmm = text => {
+        const [hours, minutes] = text.split(':').map(v => parseInt(v, 10));
+        if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 0 || minutes < 0 || minutes > 59) return null;
+        return hours + minutes / 60;
+      };
+      const day = world.dayLength;
+      if (action === 'add') {
+        const hours = value.includes(':') ? hhmm(value) : parseFloat(value);
+        if (hours === null || Number.isNaN(hours)) return;
+        world.time = (((world.time + hours / 24 * day) % day) + day) % day;
+        multiplayer.sendTime(world.timeManuallySet);
         return;
       }
       let time;
-      if (value.includes(':')) {
-        const [hours, minutes] = value.split(':').map(v => parseInt(v, 10));
-        if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return;
-        time = (hours + minutes / 60) / 24;
+      if (value in TIME_NAMES) time = TIME_NAMES[value];
+      else if (value.includes(':')) {
+        const hours = hhmm(value);
+        if (hours === null || hours >= 24) return;
+        time = hours / 24;
       } else {
         time = parseFloat(value);
         if (Number.isNaN(time) || time < 0 || time > 1) return;
       }
-      world.time = time * world.dayLength;
+      world.time = time * day;
       world.timeManuallySet = true;
+      multiplayer.sendTime(true);
       return;
     }
 
@@ -2360,27 +2983,29 @@ function processTextInputCommand(command) {
       return;
     }
 
-    case 'fill1':
-      fillPos1 = { x: Math.floor((player.x + player.width / 2) / TILE_SIZE), y: Math.floor((player.y + player.height / 2) / TILE_SIZE) };
-      return;
-
-    case 'fill2': {
-      const blockId = parts[1];
-      if (!fillPos1 || !registry.isBlock(blockId)) return;
-      fillPos2 = { x: Math.floor((player.x + player.width / 2) / TILE_SIZE), y: Math.floor((player.y + player.height / 2) / TILE_SIZE) };
-      fillArea(fillPos1.x, fillPos1.y, fillPos2.x, fillPos2.y, blockId);
-      fillPos1 = null;
-      fillPos2 = null;
-      return;
-    }
-
     case 'tick': {
-      const val = parseFloat(parts[1]);
-      if (!Number.isNaN(val) && val > 0) gameSpeed = val;
+      const val = parts[1] === undefined ? 1 : parseFloat(parts[1]);
+      if (!Number.isNaN(val) && val > 0) gameSpeed = Math.min(val, 1000);
       return;
     }
 
     case 'tp':
+      // /tp <player>: go to them. /tp <player> <player>: send the first to the second.
+      if (isPlayerRef(parts[1])) {
+        const dest = parts[2] && isPlayerRef(parts[2]) ? resolvePlayers(parts[2])[0] : null;
+        if (dest) {
+          for (const t of resolvePlayers(parts[1])) if (t.id !== dest.id || t.self !== dest.self) actOnPlayer(t, { k: 'tp', x: dest.x, y: dest.y });
+        } else if (parts[2] !== undefined) {
+          // /tp <player> <x> <y>
+          const x = parseCoord(parts[2], playerTileX) * TILE_SIZE;
+          const y = parseCoord(parts[3], playerTileY) * TILE_SIZE;
+          for (const t of resolvePlayers(parts[1])) actOnPlayer(t, { k: 'tp', x, y });
+        } else {
+          const to = resolvePlayers(parts[1])[0];
+          if (to && !to.self) teleportPlayerTo(to.x, to.y);
+        }
+        return;
+      }
       if (parts[1] && Number.isNaN(Number(parts[1])) && !parts[1].startsWith('~')) {
         // /tp fallen: jump next to the nearest fallen tree.
         // /tp <biome>: jump to the nearest edge of the closest zone of that biome.
@@ -2416,21 +3041,14 @@ function processTextInputCommand(command) {
         loadInitialChunks(edgeX).then(() => placePlayerAtSurface(edgeX));
         return;
       }
-      player.x = parseCoord(parts[1], playerTileX) * TILE_SIZE;
-      player.y = parseCoord(parts[2], playerTileY) * TILE_SIZE;
-      player.vx = 0;
-      player.vy = 0;
-      player.onGround = false;
-      player.cancelFall();
-      lastPreloadChunk = null;
-      loadInitialChunks(Math.floor(player.x / TILE_SIZE)).then(ensurePlayerNotInSolid);
+      teleportPlayerTo(parseCoord(parts[1], playerTileX) * TILE_SIZE, parseCoord(parts[2], playerTileY) * TILE_SIZE);
       return;
 
     case 'fly': {
       const val = (parts[1] || '').toLowerCase();
       let flying = !player.creativeFlying;
-      if (val === 'true' || val === '1') flying = true;
-      else if (val === 'false' || val === '0') flying = false;
+      if (val === 'on' || val === 'true') flying = true;
+      else if (val === 'off' || val === 'false') flying = false;
       if (flying && !creativeMode) setCreativeMode(true);
       player.creativeFlying = flying;
       player.isFlying = flying;
@@ -2438,13 +3056,16 @@ function processTextInputCommand(command) {
       return;
     }
 
-    case 'noclip':
-      noClipMode = !noClipMode;
+    case 'noclip': {
+      const val = (parts[1] || '').toLowerCase();
+      noClipMode = val === 'on' || val === 'true' ? true : val === 'off' || val === 'false' ? false : !noClipMode;
       if (noClipMode && !creativeMode) setCreativeMode(true);
+      if (noClipMode) { player.creativeFlying = true; player.isFlying = true; }
       return;
+    }
 
     case 'seed': {
-      const newSeed = parseInt(parts[1], 10);
+      const newSeed = parts[1] === undefined ? Math.floor(Math.random() * 2147483647) : parseInt(parts[1], 10);
       if (Number.isNaN(newSeed)) return;
       currentSeed = newSeed;
       world.seed = newSeed;
@@ -2460,7 +3081,7 @@ function processTextInputCommand(command) {
     }
 
     case 'itemconfig': {
-      if (parts.length !== 3) return;
+      if (parts.length < 3) return;
       const value = parseFloat(parts[2]);
       if (Number.isNaN(value)) return;
       const keys = {
@@ -2477,7 +3098,7 @@ function processTextInputCommand(command) {
     }
 
     case 'lighting':
-      if (parts[1] === 'recalc') world.initializeLighting();
+      if (!parts[1] || parts[1] === 'recalc') world.initializeLighting();
       return;
 
     default:
@@ -2539,7 +3160,7 @@ function tryPickupCraft() {
     recomputeCraft();
     return true;
   } else if (inventory.canMerge(draggingStack, craftOutput)) {
-    const room = (draggingStack.maxStack ?? 64) - draggingStack.count;
+    const room = (draggingStack.maxStack ?? 24) - draggingStack.count;
     if (room < craftOutput.count) return false;
     if (!consumeCraftInputs(craftMatch)) return false;
     draggingStack.count += craftOutput.count;
@@ -2584,6 +3205,8 @@ function getRendererUI() {
     backgroundBlocks,
     keybinds,
     showOutline,
+    canPlaceAt,
+    reach: creativeMode ? 64 : SURVIVAL_REACH,
     setPosition1,
     setPosition2,
     isLoading,
@@ -2635,8 +3258,15 @@ function addStackToInventory(stack) {
     : inventory.addBlock(stack.blockId, stack.count);
 }
 
-function spawnItemEntity(id, x, y, count = 1, vx = 0, vy = 0) {
-  if (!id || count <= 0 || items.length >= ItemEntity.getConfig().maxItems) return null;
+function spawnItemEntity(id, x, y, count = 1, vx = 0, vy = 0, local = false) {
+  if (!id || count <= 0) return null;
+  // In multiplayer the host runs every dropped item; a guest asks it to make one.
+  if (multiplayer.isGuest && !local) {
+    multiplayer.send({ t: 'spawnItem', id, x, y, count, vx, vy });
+    return true;
+  }
+  // At the item limit the oldest dropped item disappears to make room.
+  if (items.length >= ItemEntity.getConfig().maxItems) items.shift();
   const entity = new ItemEntity(id, x, y, world.time);
   entity.count = count;
   entity.vx = vx;
@@ -2684,11 +3314,14 @@ function openChest(tileX, tileY) {
   }
 
   const isDouble = owner.meta.chestType === 'left';
-  const capacity = isDouble ? 54 : 27;
-  if (!Array.isArray(owner.meta.inv) || owner.meta.inv.length < capacity) {
-    const inv = Array.from({ length: capacity }, () => null);
-    (owner.meta.inv || []).forEach((s, i) => { if (i < capacity) inv[i] = s; });
-    owner.meta.inv = inv;
+  const capacity = isDouble ? 36 : 18;
+  if (!Array.isArray(owner.meta.inv) || owner.meta.inv.length !== capacity) {
+    // Resize, packing stacks to the front; any that don't fit (chests used to be bigger) drop out.
+    const stacks = (owner.meta.inv || []).filter(Boolean);
+    owner.meta.inv = Array.from({ length: capacity }, (_, i) => stacks[i] ?? null);
+    for (const stack of stacks.slice(capacity)) {
+      spawnItemEntity(stackId(stack), (tileX + 0.5) * TILE_SIZE, (tileY - 0.5) * TILE_SIZE, stack.count);
+    }
   }
 
   openContainer = {
@@ -2696,7 +3329,8 @@ function openChest(tileX, tileY) {
     slots: owner.meta.inv,
     capacity,
     tileX,
-    tileY
+    tileY,
+    ownerX: owner === cell ? tileX : tileX - 1
   };
   inventoryOpen = true;
   recomputeCraft();
@@ -2706,7 +3340,7 @@ function openFurnace(tileX, tileY) {
   const cell = world.getCell(tileX, tileY);
   if (!cell.meta) cell.meta = {};
   ensureFurnaceMeta(cell.meta);
-  openContainer = { title: 'Furnace', kind: 'furnace', slots: cell.meta.inv, meta: cell.meta, capacity: 3, tileX, tileY };
+  openContainer = { title: 'Furnace', kind: 'furnace', slots: cell.meta.inv, meta: cell.meta, capacity: cell.meta.inv.length, tileX, tileY };
   inventoryOpen = true;
   recomputeCraft();
 }
@@ -2729,7 +3363,7 @@ function forgeOutput() {
   const id = `${material}_${openContainer.choice}_head_heated`;
   if (!registry.get(id)) return null;
   // The head keeps the ingot's heat: it cools on the same clock.
-  return { ...inventory.createStack('item', id, 1), heatedAt: ingot.heatedAt ?? Date.now() };
+  return { ...inventory.createStack('item', id, 1), heatedAt: ingot.heatedAt ?? gameClock.now() };
 }
 
 // Heated metal cools back down over HEAT_COOL_MS: a heated ingot turns back into an
@@ -2739,8 +3373,9 @@ const HEAT_COOL_MS = 30000;
 function coolStack(stack) {
   const id = stackId(stack);
   if (!id || !id.endsWith('_heated')) return stack;
-  if (!stack.heatedAt) stack.heatedAt = Date.now();
-  if (Date.now() - stack.heatedAt < HEAT_COOL_MS) return stack;
+  // Missing, or a wall-clock timestamp from before the game clock: start cooling now.
+  if (!stack.heatedAt || stack.heatedAt > gameClock.now()) stack.heatedAt = gameClock.now();
+  if (gameClock.now() - stack.heatedAt < HEAT_COOL_MS) return stack;
   const coolId = id.slice(0, -'_heated'.length);
   if (!registry.get(coolId)) return stack;
   return inventory.createStack(registry.isItem(coolId) ? 'item' : 'block', coolId, stack.count);
@@ -2795,16 +3430,20 @@ function getSlotRef(area, index) {
       const ok = index === 0 ? (st) => stackId(st) === 'blacksmith_hammer' : (st) => !!heatedIngotMaterial(stackId(st));
       return { get: () => slots[index] ?? null, accepts: ok, set: (v) => { slots[index] = v; } };
     }
-    if (openContainer.kind === 'furnace' && index === 2) {
-      // The furnace output can only be taken from, never placed into.
-      return {
-        get: () => slots[2] ?? null,
-        accepts: () => false,
-        set: (v) => {
-          const cur = slots[2];
-          if (!v || (cur && stackId(v) === stackId(cur) && v.count < cur.count)) slots[2] = v;
-        }
-      };
+    if (openContainer.kind === 'furnace') {
+      if (index >= FURNACE_OUT && index < FURNACE_OUT + CRUCIBLES) {
+        // Outputs can only be taken from, never placed into.
+        return {
+          get: () => slots[index] ?? null,
+          accepts: () => false,
+          set: (v) => {
+            const cur = slots[index];
+            if (!v || (cur && stackId(v) === stackId(cur) && v.count < cur.count)) slots[index] = v;
+          }
+        };
+      }
+      const ok = index === FURNACE_FUEL ? (st) => fuelTime(stackId(st)) > 0 : (st) => !!SMELTING[stackId(st)];
+      return { get: () => slots[index] ?? null, accepts: ok, set: (v) => { slots[index] = v; } };
     }
     return { get: () => slots[index] ?? null, set: (v) => { slots[index] = v; } };
   }
@@ -2820,7 +3459,7 @@ function moveStackInto(stack, slots, start, end) {
   for (let i = start; i < end && stack.count > 0; i++) {
     const target = slots[i];
     if (target && inventory.canMerge(target, stack)) {
-      const take = Math.min((target.maxStack ?? 64) - target.count, stack.count);
+      const take = Math.min((target.maxStack ?? 24) - target.count, stack.count);
       if (take > 0) {
         target.count += take;
         stack.count -= take;
@@ -2847,15 +3486,15 @@ function shiftClickTransfer(hit) {
       if (id === 'blacksmith_hammer') moveStackInto(stack, chestSlots, 0, 1);
       else if (heatedIngotMaterial(id)) moveStackInto(stack, chestSlots, 1, 2);
     } else if (openContainer?.kind === 'furnace') {
-      // Smeltables go in the top slot, fuel in the bottom one.
+      // Smeltables fill the crucibles (same kind first), fuel goes in the fuel slot.
       const id = stackId(stack);
-      if (SMELTING[id]) moveStackInto(stack, chestSlots, 0, 1);
-      else if (fuelTime(id) > 0) moveStackInto(stack, chestSlots, 1, 2);
+      if (SMELTING[id]) moveStackInto(stack, chestSlots, 0, CRUCIBLES);
+      else if (fuelTime(id) > 0) moveStackInto(stack, chestSlots, FURNACE_FUEL, FURNACE_FUEL + 1);
     } else if (chestSlots) moveStackInto(stack, chestSlots, 0, chestSlots.length);
-    else if (hit.index < 9) moveStackInto(stack, inventory.slots, 9, 36);
+    else if (hit.index < 9) moveStackInto(stack, inventory.slots, 9, inventory.TOTAL_SLOTS);
     else moveStackInto(stack, inventory.slots, 0, 9);
   } else {
-    moveStackInto(stack, inventory.slots, 0, 36);
+    moveStackInto(stack, inventory.slots, 0, inventory.TOTAL_SLOTS);
   }
 
   if (stack.count <= 0) ref.set(null);
@@ -2895,9 +3534,12 @@ function handleInventoryClick(hit, isRightClick = false) {
     const item = getCreativeTabItems(creativeTab)[hit.index];
     if (!item) return false;
     if (draggingStack && inventory.canMerge(draggingStack, item)) {
-      draggingStack.count = Math.min(draggingStack.maxStack ?? 64, draggingStack.count + 1);
+      draggingStack.count = Math.min(draggingStack.maxStack ?? 24, draggingStack.count + 1);
+    } else if (draggingStack) {
+      // Dropping something else on the creative menu throws it away.
+      draggingStack = null;
     } else {
-      draggingStack = { ...item, count: isRightClick ? 1 : (item.maxStack ?? 64) };
+      draggingStack = { ...item, count: isRightClick ? 1 : (item.maxStack ?? 24) };
     }
     return true;
   }
@@ -2909,7 +3551,7 @@ function handleInventoryClick(hit, isRightClick = false) {
   // A slot that won't take what you're holding (a furnace or forge output, a forge input
   // for something else): click it to scoop up its contents onto your stack if they match.
   if (draggingStack && slotRef.accepts && !slotRef.accepts(draggingStack)) {
-    if (slot && inventory.canMerge(slot, draggingStack) && draggingStack.count + slot.count <= (draggingStack.maxStack ?? 64)) {
+    if (slot && inventory.canMerge(slot, draggingStack) && draggingStack.count + slot.count <= (draggingStack.maxStack ?? 24)) {
       draggingStack.count += slot.count;
       slotRef.set(null);
     }
@@ -2935,7 +3577,7 @@ function handleInventoryClick(hit, isRightClick = false) {
       draggingStack = null;
     }
   } else if (inventory.canMerge(slot, draggingStack)) {
-    const room = (slot.maxStack ?? 64) - slot.count;
+    const room = (slot.maxStack ?? 24) - slot.count;
     const take = Math.min(room, isRightClick ? 1 : draggingStack.count);
     slot.count += take;
     draggingStack.count -= take;
@@ -2952,10 +3594,18 @@ function handleInventoryClick(hit, isRightClick = false) {
 let lastClickTime = 0;
 let lastClickSlot = null;
 let dragStartSlot = null;
+let dragStartPos = null;
 let lastPaintSlot = null;
 
 window.addEventListener('mousedown', (e) => {
   if (!world || !(inventoryOpen || openContainer)) return;
+  // Put the held-item icon under the cursor right away, before any mousemove; otherwise
+  // it first shows wherever it last was (the top-left corner on the first drag).
+  const draggingDiv = document.getElementById('dragging-item');
+  if (draggingDiv) {
+    draggingDiv.style.left = e.clientX + 'px';
+    draggingDiv.style.top = e.clientY + 'px';
+  }
   if (e.target.closest?.('#chat')) return;
   const hit = getUIHitFromElement(e.target);
 
@@ -2973,6 +3623,7 @@ window.addEventListener('mousedown', (e) => {
   e.preventDefault();
   const slotKey = `${hit.area}:${hit.index ?? hit.tabId}`;
   dragStartSlot = slotKey;
+  dragStartPos = { x: e.clientX, y: e.clientY };
   lastPaintSlot = slotKey;
 
   if (e.button === 0 && e.shiftKey) {
@@ -2984,8 +3635,8 @@ window.addEventListener('mousedown', (e) => {
 
   if (e.button === 0 && hit.area === 'inventory') {
     const now = Date.now();
-    if (now - lastClickTime < 300 && lastClickSlot === hit.index && !draggingStack) {
-      mergeSameToSlot(hit.index);
+    if (now - lastClickTime < 300 && lastClickSlot === hit.index && draggingStack && !inventory.getSlot(hit.index)) {
+      gatherSameIntoHand();
       lastClickTime = 0;
       lastClickSlot = null;
       return;
@@ -3016,7 +3667,7 @@ window.addEventListener('mousemove', (e) => {
   if (!slot) {
     ref.set({ ...draggingStack, count: 1 });
     draggingStack.count -= 1;
-  } else if (inventory.canMerge(slot, draggingStack) && slot.count < (slot.maxStack ?? 64)) {
+  } else if (inventory.canMerge(slot, draggingStack) && slot.count < (slot.maxStack ?? 24)) {
     slot.count += 1;
     draggingStack.count -= 1;
   }
@@ -3025,25 +3676,78 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mouseup', (e) => {
-  if (draggingStack && (inventoryOpen || openContainer) && e.button === 0 && dragStartSlot) {
+  // Only a real drag drops the stack on release; a plain click just picks it up, even if
+  // the slots shift under the cursor or the release lands a hair over the border.
+  const dragged = dragStartPos && Math.hypot(e.clientX - dragStartPos.x, e.clientY - dragStartPos.y) > 8;
+  if (draggingStack && (inventoryOpen || openContainer) && e.button === 0 && dragStartSlot && dragged) {
     const hit = getUIHitFromElement(document.elementFromPoint(e.clientX, e.clientY));
-    if (hit && `${hit.area}:${hit.index ?? hit.tabId}` !== dragStartSlot && hit.area !== 'creative' && hit.area !== 'creativeTab') {
+    if (hit && (hit.area === 'creative' || hit.area === 'creativeTab')) {
+      // Let go over the creative menu: the stack is thrown away.
+      if (creativeMode) draggingStack = null;
+    } else if (hit && `${hit.area}:${hit.index ?? hit.tabId}` !== dragStartSlot) {
       handleInventoryClick(hit, false);
     }
   }
   dragStartSlot = null;
+  dragStartPos = null;
   lastPaintSlot = null;
 });
+
+// Stop the browser's own image dragging (the ghost picture you get on Windows).
+window.addEventListener('dragstart', (e) => e.preventDefault());
+
+document.getElementById('clearInventoryButton')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  applyPlayerAction({ k: 'clear' });
+});
+document.getElementById('clearInventoryButton')?.addEventListener('mousedown', (e) => e.stopPropagation());
 
 window.addEventListener('contextmenu', (e) => {
   if (e.target.closest?.('.inventory-overlay, #hotbar')) e.preventDefault();
 });
 
+let wallPressTile = null;
+let lastHitTime = 0;
+const HIT_REACH = 4;          // blocks
+const HIT_COOLDOWN_MS = 400;
+// Multiplayer: a left click on another player hits them (harder with a sword).
+function tryHitPlayer(screenX, screenY) {
+  if (!multiplayer.active || multiplayer.remotePlayers.size === 0) return false;
+  const wx = camera.screenToWorldX(screenX);
+  const wy = camera.screenToWorldY(screenY);
+  const now = performance.now();
+  for (const rp of multiplayer.remotePlayers.values()) {
+    if (wx < rp.x - 2 || wx > rp.x + rp.width + 2 || wy < rp.y - 2 || wy > rp.y + rp.height + 2) continue;
+    const dist = Math.hypot(rp.x - player.x, rp.y - player.y) / TILE_SIZE;
+    if (dist > HIT_REACH) return true;
+    if (now - lastHitTime < HIT_COOLDOWN_MS) return true;
+    lastHitTime = now;
+    const held = inventory.getSlot(selectedIndex);
+    const heldType = held?.type === 'item' ? registry.get(held.itemId) : null;
+    const dmg = heldType?.toolType === 'sword' ? 2 + Math.round((heldType.materialMultiplier || 1)) : heldType?.type === 'tool' ? 2 : 1;
+    const dir = rp.x + rp.width / 2 > player.x + player.width / 2 ? 1 : -1;
+    multiplayer.sendAction(rp.id, { k: 'hit', dmg, vx: dir * 260, vy: -180 });
+    rp.hurtAt = now;
+    player.playArmAction('attack');
+    return true;
+  }
+  return false;
+}
+
+// Hurt by another player.
+function hurtPlayer(dmg, vx, vy) {
+  if (!player) return;
+  player.vx += vx || 0;
+  player.vy += vy || 0;
+  player.takeDamage(dmg);
+}
 canvas.addEventListener('mousedown', (e) => {
   if (world && player && !gamePaused && !isLoading && !inventoryOpen && !openContainer && e.button === 0) {
     const { screenX, screenY } = getScreenCoordsFromEvent(e);
     const { tileX, tileY } = getMouseTileFromRaw(screenX, screenY);
     const targetId = world.getBlockId(tileX, tileY);
+    wallPressTile = targetId === 'air' ? tileX + ',' + tileY : null;
+    if (tryHitPlayer(screenX, screenY)) wallPressTile = null;
     if (targetId === 'air' || NATURE_BLOCKS.has(targetId)) player.playArmAction('attack');
   }
   if (!world || !player || gamePaused || isLoading || inventoryOpen || openContainer || e.button !== 2) return;
@@ -3069,8 +3773,14 @@ canvas.addEventListener('mousedown', (e) => {
     openForge(tileX, tileY);
     return;
   }
-  if (clickedId === 'explosive') {
-    registry.get('explosive').prime(world, tileX, tileY, explosionContext());
+  if (clickedId.endsWith('_trapdoor')) {
+    const meta = world.getCell(tileX, tileY).meta || {};
+    // It always swings up on its hinge side, whichever side you open it from.
+    world.setBlock(tileX, tileY, clickedId, { ...meta, open: !meta.open, hinge: meta.hinge || 'right' });
+    return;
+  }
+  if (isExplosive(clickedId)) {
+    registry.get(clickedId).prime(world, tileX, tileY, explosionContext());
     return;
   }
   if (useBucket(tileX, tileY)) return;
@@ -3141,8 +3851,15 @@ function tryPlaceBlockAt(screenX, screenY, isRepeat = false) {
   const clickedId = world.getBlockId(tileX, tileY);
   const hotSlot = inventory.getSlot(selectedIndex);
   if (!hotSlot || hotSlot.type !== 'block' || !world.inBounds(tileX, tileY)) return;
+  if (!multiplayer.canBuild() || !inReach(tileX, tileY)) return;
 
-  if (clickedId !== 'air' && !NATURE_BLOCKS.has(clickedId)) return;
+  // In creative, placing on a block swaps it for the held one.
+  const cell = world.getCell(tileX, tileY);
+  const open = clickedId === 'air' || clickedId === 'water' || NATURE_BLOCKS.has(clickedId) || cell.meta?.layer === 'bg'
+    || (backgroundBuild && !registry.get(clickedId)?.solid);
+  const replace = creativeMode && !backgroundBuild && !open && clickedId !== hotSlot.blockId;
+  if (!open && !replace) return;
+  if (replace && isRepeat) return;
 
   if (rectsOverlap(tileX * TILE_SIZE, tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE, player.x, player.y, player.width, player.height) && !backgroundBuild && hotSlot.blockId !== 'ladder') return;
 
@@ -3151,13 +3868,39 @@ function tryPlaceBlockAt(screenX, screenY, isRepeat = false) {
     mouseWorldY: worldY,
     modifierFlip: input.isKeyDown(keybinds.flip),
     rotate: input.isKeyDown(keybinds.rotate),
-    background: backgroundBuild
+    facing: worldX > player.x + player.width / 2 ? 1 : -1, // the way the player is drawn facing (toward the mouse)
+    background: backgroundBuild,
+    hasWall: !!window.renderer?.naturalWallId(tileX, tileY),
+    anywhere: creativeMode,
+    replace
   });
   if (placed) player.playArmAction('place');
+  if (placed && hotSlot.blockId.endsWith('_leaves')) burstLeaves(hotSlot.blockId, tileX, tileY, 2);
   if (placed && !creativeMode) {
     hotSlot.count -= 1;
     if (hotSlot.count <= 0) inventory.setSlot(selectedIndex, null);
   }
+}
+
+// Survival players reach this many blocks; creative reaches anywhere on screen.
+const SURVIVAL_REACH = 10;
+function inReach(tileX, tileY) {
+  if (creativeMode) return true;
+  const dx = (tileX + 0.5) * TILE_SIZE - (player.x + player.width / 2);
+  const dy = (tileY + 0.5) * TILE_SIZE - (player.y + player.height / 2);
+  return Math.hypot(dx, dy) <= SURVIVAL_REACH * TILE_SIZE;
+}
+
+// Whether the held block could be placed in this empty cell (for the hover outline).
+function canPlaceAt(tileX, tileY) {
+  const slot = inventory.getSlot(selectedIndex);
+  if (!slot || slot.type !== 'block' || !inReach(tileX, tileY) || !multiplayer.canBuild()) return false;
+  if (creativeMode || backgroundBuild) return true;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    if (world.inBounds(tileX + dx, tileY + dy) && world.isSolidAt(tileX + dx, tileY + dy)) return true;
+  }
+  const type = registry.get(slot.blockId);
+  return (type?.shape === 'torch' || slot.blockId === 'ladder') && !!window.renderer?.naturalWallId(tileX, tileY);
 }
 
 function updateHeldPlacement(uiOpen) {
@@ -3212,15 +3955,11 @@ function openChat(initialValue) {
 }
 
 function applySuggestion(element) {
-  const strong = element.querySelector('strong');
-  const label = strong ? strong.textContent : '';
-  if (label.startsWith('/')) {
-    setChatValue(`${label} `);
-  } else {
-    const itemId = element.dataset.id;
-    if (!itemId) return;
+  if (element.dataset.cmd) {
+    setChatValue(`/${element.dataset.cmd} `);
+  } else if (element.dataset.id) {
     const parts = textInputValue.slice(1).split(' ');
-    parts[Math.max(1, parts.length - 1)] = itemId;
+    parts[Math.max(1, parts.length - 1)] = element.dataset.id;
     setChatValue('/' + parts.join(' ') + ' ');
   }
   updateCommandSuggestions();
@@ -3240,6 +3979,15 @@ function handleChatKey(e) {
   }
 
   if (e.code === 'Enter') {
+    // Enter on a highlighted suggestion (or a half-typed command name) fills it in.
+    const words = textInputValue.slice(1).split(' ');
+    const last = words[words.length - 1].toLowerCase();
+    const exact = suggestionItems.some(el => (el.dataset.cmd || el.dataset.id || '').toLowerCase() === last);
+    if (textInputValue.startsWith('/') && suggestionItems.length > 0 && (currentIndex >= 0 || (last && !exact))) {
+      applySuggestion(suggestionItems[currentIndex >= 0 ? currentIndex : 0]);
+      e.preventDefault();
+      return;
+    }
     const command = textInputValue;
     if (command.trim()) {
       chatHistory.push(command);
@@ -3326,7 +4074,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  if (uiOpen) return;
+  if (uiOpen) {
+    if (e.code === keybinds.drop && !e.repeat) throwFromInventory(e.ctrlKey);
+    return;
+  }
 
   if (e.code === keybinds.chat || e.code === 'Slash') {
     openChat(e.code === 'Slash' ? '/' : '');
@@ -3338,8 +4089,11 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'BracketRight') setRenderDistance(CHUNK_RENDER_DISTANCE + 1);
   if (e.code === 'KeyP') showOutline = !showOutline;
   if (e.code === keybinds.drop && !isDropKeyHeld) {
+    // Throw straight away (a quick tap can be released before the next frame), then keep
+    // throwing while it's held.
     isDropKeyHeld = true;
-    lastDropTime = 0;
+    throwSelectedBlock();
+    lastDropTime = performance.now();
   }
 });
 
@@ -3392,7 +4146,7 @@ function updateSlot(slot, stack, isSelected) {
         heat.appendChild(document.createElement('div'));
         slot.appendChild(heat);
       }
-      heat.firstChild.style.width = `${Math.max(0, 100 - (Date.now() - stack.heatedAt) / HEAT_COOL_MS * 100)}%`;
+      heat.firstChild.style.width = `${Math.max(0, 100 - (gameClock.now() - stack.heatedAt) / HEAT_COOL_MS * 100)}%`;
     } else if (heat) heat.remove();
   } else if (slot.firstChild) {
     slot.innerHTML = '';
@@ -3405,7 +4159,7 @@ function updateSlot(slot, stack, isSelected) {
 function updateOverlaySlots(overlay) {
   for (const slotEl of overlay.querySelectorAll('.inventory-slot:not(.container-slot):not(.creative-slot), .hotbar-slot')) {
     const idx = Number(slotEl.dataset.index);
-    updateSlot(slotEl, inventory.getSlot(idx), idx === selectedIndex && slotEl.classList.contains('hotbar-slot'));
+    updateSlot(slotEl, slotForDisplay(idx), idx === selectedIndex && slotEl.classList.contains('hotbar-slot'));
   }
   const grid = getActiveCraftGrid();
   for (const slotEl of overlay.querySelectorAll('.crafting-slot')) {
@@ -3467,14 +4221,14 @@ function updateCreativePanel() {
   const bottomTabs = document.getElementById('creativeTabsBottom');
   if (tabs && !tabs.childElementCount) {
     for (const [tabId, category] of Object.entries(categories)) {
-      tabs.appendChild(createCreativeTab(tabId, category.name, stackId(category.items[0]) || 'stone'));
+      tabs.appendChild(createCreativeTab(tabId, category.name, category.icon || stackId(category.items[0]) || 'stone'));
     }
     const search = createCreativeTab(CREATIVE_SEARCH_TAB, 'Search Items', 'stick');
     search.classList.add('creative-tab-search');
     tabs.appendChild(search);
   }
   if (bottomTabs && !bottomTabs.childElementCount) {
-    const survival = createCreativeTab(CREATIVE_INVENTORY_TAB, 'Survival Inventory', 'oak_chest');
+    const survival = createCreativeTab(CREATIVE_INVENTORY_TAB, 'Inventory', 'oak_chest');
     survival.classList.add('creative-tab-inventory');
     bottomTabs.appendChild(survival);
   }
@@ -3509,7 +4263,7 @@ function shiftClickCreative(index) {
   if (!creativeMode) return;
   const item = getCreativeTabItems(creativeTab)[index];
   if (!item) return;
-  addStackToInventory({ ...item, count: item.maxStack ?? 64 });
+  addStackToInventory({ ...item, count: item.maxStack ?? 24 });
 }
 
 function bindCreativeSearch() {
@@ -3526,9 +4280,9 @@ function bindCreativeSearch() {
 }
 bindCreativeSearch();
 
-// The furnace window: a copy of the chest window with the chest grid swapped for an
-// input slot over a flame (fuel burning) and a fuel slot, an arrow (cooking progress) and
-// the output slot.
+// The furnace window: the fuel slot on the left with a line showing how much of the current
+// fuel is left, then the four crucibles in a row with their outputs underneath. Under each
+// crucible a thin bar shows its cooking progress.
 function ensureFurnaceUI() {
   if (document.getElementById('furnaceUI')) return;
   const chest = document.getElementById('chestUI');
@@ -3538,19 +4292,40 @@ function ensureFurnaceUI() {
   ui.classList.add('hidden');
   ui.querySelector('#chestTitle').id = 'furnaceTitle';
   ui.querySelector('#furnaceTitle').textContent = 'Furnace';
-  const grid = ui.querySelector('#chestGrid');
+  const crucibles = Array.from({ length: CRUCIBLES }, (_, i) => `
+    <div class="furnace-cell crucible" data-crucible="${i}">
+      <div class="inventory-slot container-slot" data-index="${i}"></div>
+      <div class="furnace-bar"><div></div></div>
+    </div>`).join('');
+  const outputs = Array.from({ length: CRUCIBLES }, (_, i) => `
+    <div class="furnace-cell out"><div class="inventory-slot container-slot" data-index="${FURNACE_OUT + i}"></div></div>`).join('');
   const area = document.createElement('div');
-  area.className = 'furnace-area';
+  area.className = 'furnace-layout';
   area.innerHTML = `
-    <div class="furnace-left">
-      <div class="inventory-slot container-slot" data-index="0" title="Smelt"></div>
-      <div class="furnace-flame"><div class="furnace-flame-fill"></div></div>
-      <div class="inventory-slot container-slot" data-index="1" title="Fuel"></div>
+    <div class="furnace-cell fuel">
+      <div class="inventory-slot container-slot" data-index="${FURNACE_FUEL}"></div>
+      <div class="furnace-bar fuel-bar"><div></div></div>
     </div>
-    <div class="furnace-arrow"><div class="furnace-arrow-fill"></div></div>
-    <div class="inventory-slot container-slot furnace-output" data-index="2" title="Output"></div>`;
-  grid.replaceWith(area);
+    <div class="furnace-grid">${crucibles}${outputs}</div>`;
+  ui.querySelector('#chestGrid').replaceWith(area);
   chest.after(ui);
+}
+
+function updateFurnaceUI(overlay) {
+  const m = ensureFurnaceMeta(openContainer.meta);
+  for (const slotEl of overlay.querySelectorAll('.container-slot')) {
+    updateSlot(slotEl, m.inv[Number(slotEl.dataset.index)], false);
+  }
+  for (const el of overlay.querySelectorAll('.furnace-cell.crucible')) {
+    const i = Number(el.dataset.crucible);
+    const r = crucibleRecipe(m, i);
+    el.dataset.state = crucibleState(m, i, registry);
+    el.querySelector('.furnace-bar > div').style.width = `${r ? Math.round(Math.min(1, m.cook[i] / r[1]) * 100) : 0}%`;
+    el.title = r ? `Makes ${registry.get(r[0])?.displayName || r[0]}` : 'Ore, raw ore, sand or an ingot';
+  }
+  const fuel = overlay.querySelector('.furnace-cell.fuel');
+  fuel.querySelector('.furnace-bar > div').style.width = `${m.burnMax > 0 ? Math.round(m.burn / m.burnMax * 100) : 0}%`;
+  fuel.title = m.burn > 0 ? `Burning ${registry.get(m.burnId)?.displayName || 'fuel'}` : 'Fuel: coal or anything wooden';
 }
 
 // The forging table window, laid out like a cartography table: hammer over ingot on the
@@ -3615,6 +4390,240 @@ function updateForgeUI(overlay) {
   }
 }
 
+// ---------------------------------------------------------------- "Can make" crafting
+// No crafting grid: the inventory (and crafting table) list everything you can make from
+// what you carry. Hold the mouse on a recipe: a
+// line sweeps across the row, then it crafts and the item zips into your inventory; keep
+// holding to keep crafting. Shift-click crafts as many as you can at once.
+let recipeHold = null;
+// How long one craft takes: bigger recipes take longer (a crafting table ~0.7s, a furnace ~1.1s).
+// Shift-hold crafts everything at once, so its sweep takes twice as long.
+function holdMs(hold) {
+  return craftMsFor(hold.entry) * (hold.all ? 2 : 1);
+}
+function craftMsFor(entry) {
+  const parts = entry.entries.reduce((n, x) => n + x.n, 0);
+  return Math.max(300, Math.min(1800, 250 + 110 * parts));
+}
+const CRAFT_PAUSE_MS = 150; // beat between crafts while holding
+
+function inventoryCount(ingredient) {
+  let n = 0;
+  for (let i = 0; i < inventory.TOTAL_SLOTS; i++) {
+    const s = inventory.getSlot(i);
+    if (s && itemMatchesIngredient(stackId(s), ingredient)) n += s.count;
+  }
+  return n;
+}
+
+function canCraftRecipe(recipe) {
+  const needs = recipeNeeds(recipe);
+  return Object.entries(needs).every(([id, n]) => inventoryCount(id) >= n);
+}
+
+function craftRecipeFromInventory(recipe) {
+  if (!creativeMode && !canCraftRecipe(recipe)) return false;
+  if (!creativeMode) {
+    for (const [id, n] of Object.entries(recipeNeeds(recipe))) {
+      let left = n;
+      for (let i = 0; i < inventory.TOTAL_SLOTS && left > 0; i++) {
+        const s = inventory.getSlot(i);
+        if (!s || !itemMatchesIngredient(stackId(s), id)) continue;
+        const take = Math.min(left, s.count);
+        s.count -= take;
+        left -= take;
+        if (s.count <= 0) inventory.setSlot(i, null);
+      }
+    }
+  }
+  returnStackToInventory(createRecipeOutput(recipe, registry));
+  return true;
+}
+
+// Recipes to show: everything you can make now, then a few you're close to (greyed).
+function recipeEntries(bigTable) {
+  const seen = new Set();
+  const ready = [], close = [];
+  for (const recipe of getAllRecipes()) {
+    if (!bigTable && !fitsSmallGrid(recipe)) continue;
+    const outId = recipe.out.blockId || recipe.out.itemId;
+    if (!registry.get(outId)) continue;
+    const needs = recipeNeeds(recipe);
+    const key = outId + JSON.stringify(needs);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entries = Object.entries(needs).map(([id, n]) => ({ id, n, have: inventoryCount(id) }));
+    if (entries.every(e => e.have >= e.n)) ready.push({ recipe, outId, entries, ok: true, key });
+    else if (entries.some(e => e.have > 0)) close.push({ recipe, outId, entries, ok: false, key });
+  }
+  return [...ready, ...close.slice(0, 8)];
+}
+
+// A real item id for an ingredient group like 'planks', for its icon.
+function ingredientIcon(id) {
+  if (registry.get(id)) return id;
+  for (let i = 0; i < inventory.TOTAL_SLOTS; i++) {
+    const s = inventory.getSlot(i);
+    if (s && itemMatchesIngredient(stackId(s), id)) return stackId(s);
+  }
+  return id === 'planks' ? 'oak_planks' : id === 'wood' ? 'oak_log' : 'stone';
+}
+
+function ensureRecipeLists() {
+  for (const id of ['inventory', 'craftingTable']) {
+    const overlay = document.getElementById(id);
+    if (!overlay || overlay.querySelector('.recipe-panel')) continue;
+    const grid = overlay.querySelector('.crafting-grid');
+    if (!grid) continue;
+    grid.classList.add('hidden');
+    const panel = document.createElement('div');
+    panel.className = 'recipe-panel';
+    panel.innerHTML = '<div class="recipe-list"></div>';
+    grid.after(panel);
+    const list = panel.querySelector('.recipe-list');
+    list.addEventListener('mousedown', (e) => {
+      const row = e.target.closest('.recipe-row');
+      if (!row || e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const entry = list._entries?.find(x => x.key === row.dataset.key);
+      if (!entry || !entry.ok) return;
+      // Shift still shows the sweep; when it finishes it crafts as many as it can.
+      recipeHold = { key: entry.key, entry, overlay, start: performance.now(), all: e.shiftKey };
+    });
+    list.addEventListener('mouseleave', () => { recipeHold = null; });
+  }
+}
+
+window.addEventListener('mouseup', () => { recipeHold = null; });
+
+// Inventory slot index -> what's in it, to spot where a crafted item landed.
+function inventorySnapshot() {
+  return Array.from({ length: inventory.TOTAL_SLOTS }, (_, i) => {
+    const st = inventory.getSlot(i);
+    return st ? `${stackId(st)}:${st.count}` : '';
+  });
+}
+
+// Crafts once; if fly is set, the result's icon zips from the recipe row to the slot it
+// landed in. Returns false if it couldn't craft.
+// Slots whose new contents are still flying in: they keep showing what they had until the
+// icon lands. index -> { shown: stack (copy), token }
+const pendingSlots = new Map();
+
+function slotForDisplay(i) {
+  return pendingSlots.has(i) ? pendingSlots.get(i).shown : inventory.getSlot(i);
+}
+
+function craftWithFlight(overlay, entry, fly = true) {
+  const beforeStacks = Array.from({ length: inventory.TOTAL_SLOTS }, (_, i) => {
+    const st = inventory.getSlot(i);
+    return st ? { ...st } : null;
+  });
+  const before = inventorySnapshot();
+  if (!craftRecipeFromInventory(entry.recipe)) return false;
+  if (!fly) return true;
+  const after = inventorySnapshot();
+  const landed = after.findIndex((v, i) => v !== before[i] && v.startsWith(entry.outId + ':'));
+  const from = overlay.querySelector(`.recipe-row[data-key="${CSS.escape(entry.key)}"] > img`);
+  // The visible slot it landed in (hidden copies of the same slot report a 0x0 box at the
+  // top left of the page).
+  const to = landed >= 0 ? [...overlay.querySelectorAll(`.inventory-slot[data-index="${landed}"]:not(.container-slot):not(.creative-slot), .hotbar-slot[data-index="${landed}"]`)]
+    .find(el => el.getBoundingClientRect().width > 0) : null;
+  if (!from || !to) return true;
+  // Keep showing the slot's old contents (or the oldest still-pending ones) until landing.
+  const token = {};
+  pendingSlots.set(landed, { shown: pendingSlots.get(landed)?.shown ?? beforeStacks[landed], token });
+  const a = from.getBoundingClientRect(), b = to.getBoundingClientRect();
+  const ghost = from.cloneNode();
+  ghost.className = 'craft-flyer';
+  Object.assign(ghost.style, { left: `${a.left}px`, top: `${a.top}px`, width: `${a.width}px`, height: `${a.height}px` });
+  document.body.appendChild(ghost);
+  const size = Math.min(b.width, b.height) * 0.7;
+  requestAnimationFrame(() => {
+    ghost.style.transform = `translate(${b.left + (b.width - size) / 2 - a.left}px, ${b.top + (b.height - size) / 2 - a.top}px) scale(${size / a.width})`;
+  });
+  setTimeout(() => {
+    ghost.remove();
+    if (pendingSlots.get(landed)?.token === token) pendingSlots.delete(landed);
+    to.classList.remove('craft-landed');
+    void to.offsetWidth;
+    to.classList.add('craft-landed');
+  }, 260);
+  return true;
+}
+
+// In creative every tab keeps the same window height: the item tabs set it, and the
+// inventory tab (recipe list) and search tab (search box) fit inside it by shrinking their
+// scrolling part, so the tab buttons never jump.
+function keepCreativeHeight(overlay) {
+  const content = overlay.querySelector('.inventory-content');
+  const list = overlay.querySelector('.recipe-list');
+  const grid = overlay.querySelector('.creative-grid');
+  if (!content || !list || !grid) return;
+  const tab = overlay.dataset.creativeTab;
+  const reset = () => { content.style.height = ''; list.style.height = ''; grid.style.height = ''; };
+  if (!creativeMode) return reset();
+  if (tab !== 'inventory' && tab !== 'search') {
+    reset();
+    if (content.offsetHeight) overlay._creativeHeight = content.offsetHeight;
+    return;
+  }
+  const target = overlay._creativeHeight;
+  if (!target) return;
+  content.style.height = `${target}px`;
+  const fit = tab === 'inventory' ? list : grid;
+  const extra = content.scrollHeight - content.clientHeight;
+  if (Math.abs(extra) > 1) fit.style.height = `${Math.max(40, fit.getBoundingClientRect().height - extra)}px`;
+}
+
+// The UI refreshes every few frames; the held row's sweep line runs every frame so it's smooth.
+(function sweepCraftLine() {
+  if (recipeHold) {
+    const row = [...recipeHold.overlay.querySelectorAll('.recipe-row')].find(r => r.dataset.key === recipeHold.key);
+    const t = (performance.now() - recipeHold.start) / holdMs(recipeHold);
+    row?.style.setProperty('--craft', Math.max(0, Math.min(1, t)).toFixed(4));
+  }
+  requestAnimationFrame(sweepCraftLine);
+})();
+
+function updateRecipeList(overlay, bigTable) {
+  const list = overlay.querySelector('.recipe-list');
+  if (!list) return;
+  const entries = recipeEntries(bigTable);
+  const sig = entries.map(e => e.key + e.ok + e.entries.map(x => x.have).join(',')).join('|');
+  if (list._sig !== sig) {
+    list._sig = sig;
+    list._entries = entries;
+    const icon = (id) => `<img src="${window.renderer?.biomeIconSrc?.(id) || `textures/${id}.png`}" alt="" draggable="false">`;
+    list.innerHTML = entries.length ? entries.map((e) => {
+      const name = registry.get(e.outId)?.displayName || e.outId;
+      const count = e.recipe.out.count > 1 ? ` x${e.recipe.out.count}` : '';
+      const parts = e.entries.map(x => `<span class="recipe-part ${x.have >= x.n ? '' : 'missing'}">${icon(ingredientIcon(x.id))}<span class="recipe-count">${x.n}</span></span>`).join('');
+      return `<div class="recipe-row ${e.ok ? '' : 'locked'}" data-key="${e.key.replace(/"/g, '&quot;')}" title="${e.ok ? 'Hold to craft, shift-hold to craft all' : 'Missing ingredients'}">
+        ${icon(e.outId)}<span class="recipe-name">${name}${count}</span><span class="recipe-parts">${parts}</span></div>`;
+    }).join('') : '';
+  }
+  // The sweep line on the row being held; craft when it reaches the right.
+  const now = performance.now();
+  for (const row of list.querySelectorAll('.recipe-row')) {
+    const held = recipeHold && recipeHold.overlay === overlay && row.dataset.key === recipeHold.key;
+    if (!held) row.style.setProperty('--craft', '0');
+    row.classList.toggle('holding', !!held);
+  }
+  if (recipeHold && recipeHold.overlay === overlay && now - recipeHold.start >= holdMs(recipeHold)) {
+    if (recipeHold.all) {
+      let crafted = 0;
+      while (crafted < 64 && craftWithFlight(overlay, recipeHold.entry, crafted === 0)) crafted++;
+      recipeHold = null;
+    } else if (craftWithFlight(overlay, recipeHold.entry)) {
+      recipeHold.start = now + CRAFT_PAUSE_MS;
+    } else {
+      recipeHold = null;
+    }
+  }
+}
+
 function buildContainerSlots(capacity) {
   const grid = document.getElementById('chestGrid');
   if (!grid || grid.childElementCount === capacity) return;
@@ -3639,6 +4648,7 @@ function updateHTMLUI() {
   const isChest = !!openContainer && !isCraftingTable && !isFurnace && !isForge;
   ensureFurnaceUI();
   ensureForgeUI();
+  ensureRecipeLists();
   if (htmlUIFrameCounter % 15 === 0 && inGame) coolHeatedStacks();
 
   const hotbar = document.getElementById('hotbar');
@@ -3665,17 +4675,9 @@ function updateHTMLUI() {
     overlay.classList.toggle('hidden', !visible);
     if (!visible) continue;
     if (id === 'inventory') updateCreativePanel();
-    if (id === 'furnaceUI') {
-      for (const slotEl of overlay.querySelectorAll('.container-slot')) {
-        updateSlot(slotEl, openContainer.slots[Number(slotEl.dataset.index)], false);
-      }
-      const m = openContainer.meta;
-      const recipe = SMELTING[stackId(openContainer.slots[0])];
-      const flame = m.burnMax > 0 ? m.burn / m.burnMax : 0;
-      const cook = recipe ? Math.min(1, m.cook / recipe[1]) : 0;
-      overlay.querySelector('.furnace-flame-fill').style.height = `${Math.round(flame * 100)}%`;
-      overlay.querySelector('.furnace-arrow-fill').style.width = `${Math.round(cook * 100)}%`;
-    }
+    if (id === 'inventory' || id === 'craftingTable') updateRecipeList(overlay, id === 'craftingTable');
+    if (id === 'inventory') keepCreativeHeight(overlay);
+    if (id === 'furnaceUI') updateFurnaceUI(overlay);
     if (id === 'forgeUI') updateForgeUI(overlay);
     if (id === 'chestUI') {
       const title = document.getElementById('chestTitle');
@@ -3746,22 +4748,33 @@ function preloadChunksAroundPlayer() {
   lastPreloadTime = now;
 
   const centerChunk = Math.floor((player.x + player.width / 2) / TILE_SIZE / world.chunkSize);
-  if (lastPreloadChunk === centerChunk) return;
-  lastPreloadChunk = centerChunk;
+  // A multiplayer host also keeps the chunks around each guest loaded and running.
+  const guestCenters = multiplayer.keepChunkCenters();
+  const signature = centerChunk + '|' + guestCenters.join(',');
+  if (lastPreloadChunk === signature) return;
+  lastPreloadChunk = signature;
 
   const lastChunk = Math.floor((world.width - 1) / world.chunkSize);
   const dist = Math.max(0, Math.floor(CHUNK_RENDER_DISTANCE));
   const keepMin = Math.max(0, centerChunk - dist - 1);
   const keepMax = Math.min(lastChunk, centerChunk + dist + 1);
+  const ranges = [[keepMin, keepMax]];
+  for (const gc of guestCenters) {
+    ranges.push([Math.max(0, gc - multiplayer.keepRadius()), Math.min(lastChunk, gc + multiplayer.keepRadius())]);
+  }
+  const keep = (cx) => ranges.some(([a, b]) => cx >= a && cx <= b);
+  world.maxLoadedChunks = Math.max(30, (CHUNK_RENDER_DISTANCE + 2) * 2 + 1) + guestCenters.length * (multiplayer.keepRadius() * 2 + 1);
 
   for (const key of Array.from(world.chunks.keys())) {
     const cx = parseInt(key, 10);
-    if (cx < keepMin || cx > keepMax) world.unloadChunk(cx);
+    if (!keep(cx)) world.unloadChunk(cx);
   }
 
   const chunksToLoad = [];
-  for (let cx = keepMin; cx <= keepMax; cx++) {
-    if (!world.isChunkLoaded(cx)) chunksToLoad.push(cx);
+  for (const [a, b] of ranges) {
+    for (let cx = a; cx <= b; cx++) {
+      if (!world.isChunkLoaded(cx) && !chunksToLoad.includes(cx)) chunksToLoad.push(cx);
+    }
   }
   chunksToLoad.sort((a, b) => Math.abs(a - centerChunk) - Math.abs(b - centerChunk));
   const targetWorld = world;
@@ -3779,8 +4792,63 @@ function explosionContext() {
     fx: explosionFX,
     destroyItems: destroyItemsInRadius,
     onBlockBroken: spawnExplosionDrop,
-    prime: (x, y, fuse) => primedExplosives.push(new PrimedExplosive(x, y, TILE_SIZE, fuse))
+    shakeAt: (x, y) => explosionShake(x, y),
+    prime: (x, y, fuse, vx = 0, vy = 0, blockId = 'explosive') => {
+      primedExplosives.push(Object.assign(new PrimedExplosive(x, y, TILE_SIZE, fuse), { vx, vy, blockId }));
+      multiplayer.sendPrimed(x, y, fuse, vx, vy, blockId);
+    },
+    knockPrimed: (cx, cy, radius, power, reaches) => {
+      for (const p of primedExplosives) {
+        const dx = p.x + TILE_SIZE / 2 - cx;
+        const dy = p.y + TILE_SIZE / 2 - cy;
+        const d = Math.hypot(dx, dy);
+        if (d > radius || d < 1) continue;
+        if (reaches && !reaches(p.x + TILE_SIZE / 2, p.y + TILE_SIZE / 2)) continue;
+        const k = power * (1 - d / radius) + 0.5;
+        p.vx += (dx / d) * k;
+        p.vy += (dy / d) * k - 1;
+      }
+    }
   };
+}
+
+// How hard an explosion at tile (x, y) shakes the screen: less the further away you are,
+// and much less in the air (nothing carries the shock to you). Standing on hard ground
+// (stone) feels it more than soft ground (sand, dirt).
+function explosionShake(x, y) {
+  if (!player) return 0;
+  const dist = Math.hypot((x + 0.5) * TILE_SIZE - (player.x + player.width / 2), (y + 0.5) * TILE_SIZE - (player.y + player.height)) / TILE_SIZE;
+  const near = Math.max(0, 1 - dist / 28);
+  if (near <= 0) return 0;
+  if (!player.onGround) return near * 0.3;
+  const below = world.getBlockType(Math.floor((player.x + player.width / 2) / TILE_SIZE), Math.floor((player.y + player.height + 1) / TILE_SIZE));
+  const hardness = Math.min(2, below?.hardness ?? 1);
+  return near * (0.6 + 0.2 * hardness);
+}
+
+// Another player's explosive went off: show it, and get knocked about by it here too.
+function remoteExplosion(x, y) {
+  if (!world) return;
+  const cx = (x + 0.5) * TILE_SIZE;
+  const cy = (y + 0.5) * TILE_SIZE;
+  // Their lit explosive (shown here) is gone now.
+  let best = -1;
+  let bestD = TILE_SIZE * 6;
+  primedExplosives.forEach((p, i) => {
+    const d = Math.hypot(p.x + TILE_SIZE / 2 - cx, p.y + TILE_SIZE / 2 - cy);
+    if (p.remote && d < bestD) { best = i; bestD = d; }
+  });
+  if (best >= 0) primedExplosives.splice(best, 1);
+  if (!isOnScreen(cx, cy)) return;
+  explosionFX.spawn(cx, cy, 4 * TILE_SIZE, explosionShake(x, y));
+  const explosive = registry.get('explosive');
+  if (player && explosive.playerDistance(player, x, y, TILE_SIZE) < 8) explosive.hurtPlayer(player, x, y, TILE_SIZE, world);
+}
+
+function isOnScreen(wx, wy, margin = TILE_SIZE * 4) {
+  const sx = camera.worldToScreenX(wx);
+  const sy = camera.worldToScreenY(wy);
+  return sx > -margin * camera.zoom && sy > -margin * camera.zoom && sx < canvas.width + margin * camera.zoom && sy < canvas.height + margin * camera.zoom;
 }
 
 function destroyItemsInRadius(cx, cy, inner, outer) {
@@ -3809,10 +4877,27 @@ function spawnExplosionDrop(dropId, meta, id, x, y, dx, dy) {
   if (openContainer && openContainer.tileX === x && openContainer.tileY === y) closeInventory();
 }
 
+// A few leaves flutter down when leaves are broken or placed.
+function burstLeaves(leafId, x, y, count = 3) {
+  if (!renderFallingLeaves) return;
+  for (let i = 0; i < count; i++) {
+    const px = (x + 0.2 + Math.random() * 0.6) * TILE_SIZE;
+    const py = (y + 0.2 + Math.random() * 0.6) * TILE_SIZE;
+    leafParticles.push(new LeafParticle(leafId, px, py, world.time, 0.6 + Math.random() * 0.5));
+  }
+}
+
 function handleBrokenBlock(broke) {
   const centerX = broke.x * TILE_SIZE + TILE_SIZE / 2;
   const centerY = (broke.y + 0.5) * TILE_SIZE;
   spawnItemEntity(broke.drop, centerX, centerY);
+  if (broke.id.endsWith('_leaves')) burstLeaves(broke.id, broke.x, broke.y);
+  // The leaves drawn in front of a trunk inside a tree's crown go with it.
+  const cover = isTrunkId(broke.id) && broke.meta?.axis !== 'x' ? trunkLeafCover(world, broke.x, broke.y) : null;
+  if (cover) {
+    spawnItemEntity(cover, centerX, centerY);
+    burstLeaves(cover, broke.x, broke.y);
+  }
 
   if ((isChest(broke.id) || broke.id === 'furnace' || broke.id === 'forging_table') && Array.isArray(broke.meta?.inv)) {
     for (const stack of broke.meta.inv) {
@@ -3851,12 +4936,16 @@ function tryPickupItem(item) {
 }
 
 function updateEntities() {
-  for (let i = items.length - 1; i >= 0; i--) {
+  // A multiplayer guest just shows the host's items (see Multiplayer.syncGuestItems).
+  for (let i = multiplayer.isGuest ? -1 : items.length - 1; i >= 0; i--) {
     const item = items[i];
-    const expired = item.update(world.time, world, player);
-    if (expired || (item.readyForPickup && !inventoryOpen && !openContainer && tryPickupItem(item))) {
-      items.splice(i, 1);
-    }
+    // Items drift toward, and are picked up by, whichever player is nearest.
+    const nearest = multiplayer.nearestPlayer(item, player);
+    const expired = item.update(world.time, world, nearest);
+    const taken = item.readyForPickup && (nearest === player
+      ? !inventoryOpen && !openContainer && tryPickupItem(item)
+      : multiplayer.givePickup(item, nearest));
+    if (expired || taken) items.splice(i, 1);
   }
 
   for (let i = leafParticles.length - 1; i >= 0; i--) {
@@ -3866,8 +4955,13 @@ function updateEntities() {
   for (let i = primedExplosives.length - 1; i >= 0; i--) {
     const primed = primedExplosives[i];
     if (!primed.update(world)) continue;
+    // Another player's: kept (flashing) until their 'boom' arrives, or a moment after.
+    if (primed.remote && gameClock.now() - primed.start < primed.fuse + 1500) continue;
     primedExplosives.splice(i, 1);
+    // Another player's explosive: theirs to set off (it arrives as a 'boom').
+    if (primed.remote) continue;
     const tile = primed.tile();
+    multiplayer.sendBoom(tile.x, tile.y);
     registry.get('explosive').explode(world, tile.x, tile.y, explosionContext());
   }
 
@@ -3898,22 +4992,53 @@ function updateEntities() {
   }
 }
 
+// The world runs in fixed ticks of game time; the tick speed sets how many run per real
+// second, so at any speed everything (day, entities, blocks, furnaces, water, wind, clouds)
+// moves exactly as far per tick as it does at speed 1. Very high speeds are capped per frame.
+const GAME_TICK = 1 / 60;
+const MAX_TICKS_PER_FRAME = 400;
+let tickAccum = 0;
+
+function runGameTicks(dt) {
+  tickAccum += dt * gameSpeed;
+  let n = Math.floor(tickAccum / GAME_TICK);
+  tickAccum -= n * GAME_TICK;
+  if (n > MAX_TICKS_PER_FRAME) n = MAX_TICKS_PER_FRAME;
+  for (let i = 0; i < n; i++) {
+    gameClock.ms += GAME_TICK * 1000;
+    if (!world.timeManuallySet) world.time += GAME_TICK;
+    updateEntities();
+    world.tick(GAME_TICK);
+  }
+}
+
 function initializeGameEngine() {
   const updateFunction = (dt, time) => {
     if (!world || !player) return;
+    if (gamePaused && !multiplayer.active) {
+      updateHTMLUI();
+      return;
+    }
+    // In multiplayer the world keeps going for everyone while your pause menu is open.
     if (gamePaused) {
+      player.inputLocked = true;
+      player.update(input, dt, time, noClipMode, creativeMode);
+      if (noClipMode && !player.creativeFlying) noClipMode = false;
+      breaker.cancel();
+      runGameTicks(dt);
+      multiplayer.update(dt);
+      preloadChunksAroundPlayer();
       updateHTMLUI();
       return;
     }
 
-    if (!world.timeManuallySet) world.time += dt * gameSpeed;
-
     player.inputLocked = textInputMode;
     player.autoJump = autoJump;
     player.update(input, dt, time, noClipMode, creativeMode);
+    if (noClipMode && !player.creativeFlying) noClipMode = false;
 
     if (isDropKeyHeld && !inventoryOpen && !openContainer) {
-      const now = time * 1000;
+      const now = performance.now();
       if (now - lastDropTime >= dropInterval) {
         throwSelectedBlock();
         lastDropTime = now;
@@ -3931,11 +5056,16 @@ function initializeGameEngine() {
       player.stopSwing();
     }
 
-    if (input.mouse.leftDown && !uiOpen) {
+    if (input.mouse.leftDown && !uiOpen && multiplayer.canBuild()) {
       const tileX = Math.floor(camera.screenToWorldX(input.mouse.x) / TILE_SIZE);
       const tileY = Math.floor(camera.screenToWorldY(input.mouse.y) / TILE_SIZE);
-      if (world.inBounds(tileX, tileY)) {
-        breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex));
+      if (world.inBounds(tileX, tileY) && inReach(tileX, tileY)) {
+        // Mining an empty cell digs out the natural wall behind it, but only on a fresh
+        // click there (or in background mode), so holding the button through a block you
+        // just broke doesn't keep eating the wall behind it.
+        const wallId = world.getBlockId(tileX, tileY) === 'air' && (backgroundBuild || wallPressTile === tileX + ',' + tileY)
+          ? window.renderer?.naturalWallId(tileX, tileY) : null;
+        breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), wallId);
       } else {
         breaker.cancel();
       }
@@ -3946,16 +5076,16 @@ function initializeGameEngine() {
     const broke = breaker.update(world, dt * gameSpeed);
     if (broke && broke.id) handleBrokenBlock(broke);
 
-    updateEntities();
+    runGameTicks(dt);
+    multiplayer.update(dt);
 
     if (openContainer) {
       const blockId = world.getBlockId(openContainer.tileX, openContainer.tileY);
       if (!isChest(blockId) && blockId !== 'crafting_table' && blockId !== 'furnace' && blockId !== 'forging_table') closeInventory();
       // Keep an open furnace's progress bars moving smoothly.
-      else if (openContainer.kind === 'furnace') registry.get('furnace').tick(world, openContainer.tileX, openContainer.tileY, openContainer.meta);
+      else if (openContainer.kind === 'furnace' && !multiplayer.isGuest) registry.get('furnace').tick(world, openContainer.tileX, openContainer.tileY, openContainer.meta);
     }
 
-    world.tick(dt * gameSpeed);
     preloadChunksAroundPlayer();
 
     const head = player.getHeadAnchor();

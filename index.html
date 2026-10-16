@@ -48,8 +48,12 @@
          </div>
          <div id="creativeGrid" class="creative-grid"></div>
        </div>
+       <div class="inventory-main">
        <div class="inventory-header">
-         <div class="inventory-title">Inventory</div>
+         <div class="inventory-title-stack">
+           <div class="inventory-title">Inventory</div>
+           <button type="button" id="clearInventoryButton" class="minecraft-button clear-inventory-button" title="Empty your whole inventory">Clear Inventory</button>
+         </div>
          <div class="crafting-grid">
            <div class="crafting-area small">
              <div class="crafting-slot" data-index="0"></div>
@@ -86,17 +90,7 @@
            <div class="inventory-slot" data-index="25"></div>
            <div class="inventory-slot" data-index="26"></div>
          </div>
-         <div class="inventory-row">
-           <div class="inventory-slot" data-index="27"></div>
-           <div class="inventory-slot" data-index="28"></div>
-           <div class="inventory-slot" data-index="29"></div>
-           <div class="inventory-slot" data-index="30"></div>
-           <div class="inventory-slot" data-index="31"></div>
-           <div class="inventory-slot" data-index="32"></div>
-           <div class="inventory-slot" data-index="33"></div>
-           <div class="inventory-slot" data-index="34"></div>
-           <div class="inventory-slot" data-index="35"></div>
-         </div>
+       </div>
        </div>
        <div class="inventory-hotbar">
          <div class="hotbar-slots">
@@ -160,17 +154,6 @@
            <div class="inventory-slot" data-index="25"></div>
            <div class="inventory-slot" data-index="26"></div>
          </div>
-         <div class="inventory-row">
-           <div class="inventory-slot" data-index="27"></div>
-           <div class="inventory-slot" data-index="28"></div>
-           <div class="inventory-slot" data-index="29"></div>
-           <div class="inventory-slot" data-index="30"></div>
-           <div class="inventory-slot" data-index="31"></div>
-           <div class="inventory-slot" data-index="32"></div>
-           <div class="inventory-slot" data-index="33"></div>
-           <div class="inventory-slot" data-index="34"></div>
-           <div class="inventory-slot" data-index="35"></div>
-         </div>
        </div>
        <div class="inventory-hotbar">
          <div class="hotbar-slots">
@@ -216,17 +199,6 @@
            <div class="inventory-slot" data-index="25"></div>
            <div class="inventory-slot" data-index="26"></div>
          </div>
-         <div class="inventory-row">
-           <div class="inventory-slot" data-index="27"></div>
-           <div class="inventory-slot" data-index="28"></div>
-           <div class="inventory-slot" data-index="29"></div>
-           <div class="inventory-slot" data-index="30"></div>
-           <div class="inventory-slot" data-index="31"></div>
-           <div class="inventory-slot" data-index="32"></div>
-           <div class="inventory-slot" data-index="33"></div>
-           <div class="inventory-slot" data-index="34"></div>
-           <div class="inventory-slot" data-index="35"></div>
-         </div>
        </div>
        <div class="inventory-hotbar">
          <div class="hotbar-slots">
@@ -268,10 +240,9 @@
       <h1 class="game-title">UNDERWILD</h1>
       <div class="menu-buttons">
          <button class="minecraft-button" data-action="single-player">Single Player</button>
-         <button class="minecraft-button" data-action="load-world">Load World</button>
+         <button class="minecraft-button" data-action="multiplayer">Multiplayer</button>
         <button class="minecraft-button" data-action="options">Options</button>
-        <button class="minecraft-button" data-action="mods">Mods</button>
-        <button class="minecraft-button" data-action="skins-options">Skins</button>
+        <button class="minecraft-button" data-action="skins-options">Player</button>
         <button class="minecraft-button" data-action="quit">Quit Game</button>
       </div>
       <div class="changelog-section">
@@ -304,7 +275,7 @@
       </div>
       <div class="menu-buttons">
          <button class="minecraft-button" data-action="create-world" id="createWorldButton">Create World</button>
-         <button class="minecraft-button" data-action="back-to-main" id="backToMainButton">Back</button>
+         <button class="minecraft-button" data-action="create-world-back" id="backToMainButton">Back</button>
       </div>
     </div>
   </div>
@@ -314,6 +285,8 @@
     <div class="menu-content">
       <h1 class="menu-title">Options</h1>
       <div class="menu-buttons">
+        <button class="minecraft-button" data-action="player-options">Player</button>
+        <button class="minecraft-button" data-action="app-options">App</button>
         <button class="minecraft-button" data-action="graphics-options">Graphics</button>
         <button class="minecraft-button" data-action="background-options">Background</button>
         <button class="minecraft-button" data-action="gameplay-options">Gameplay</button>
@@ -687,7 +660,31 @@
       <div class="menu-buttons">
         <button class="minecraft-button" data-action="resume-game">Resume Game</button>
         <button class="minecraft-button" data-action="pause-options">Options</button>
-        <button class="minecraft-button" data-action="pause-back-to-main">Back to Main Menu</button>
+        <button class="minecraft-button" data-action="pause-exit">Exit World</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="exitMenu" class="menu-container hidden">
+    <div class="menu-background pause-bg"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Exit World</h1>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="pause-back-to-main">Save and Exit</button>
+        <button class="minecraft-button" data-action="exit-no-save">Exit Without Saving</button>
+        <button class="minecraft-button" data-action="exit-back">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="singlePlayerMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Single Player</h1>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="sp-new-world">Create New World</button>
+        <button class="minecraft-button" data-action="load-world">Load World</button>
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
       </div>
     </div>
   </div>
@@ -703,7 +700,7 @@
         </div>
       </div>
       <div class="menu-buttons">
-        <button class="minecraft-button" data-action="back-to-main">Back</button>
+        <button class="minecraft-button" data-action="back-to-main" id="modsBackButton">Back</button>
       </div>
     </div>
   </div>
@@ -827,6 +824,152 @@
       </div>
     </div>
   </div>
+
+  <!-- Multiplayer -->
+  <div id="multiplayerMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Multiplayer</h1>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="mp-create">Create Game</button>
+        <button class="minecraft-button" data-action="mp-join">Join Game</button>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-main">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mpCreateMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content mp-wide">
+      <h1 class="menu-title">Create Game</h1>
+      <div class="form-section">
+        <label>World:</label>
+        <div class="mp-list" id="mpWorldList"></div>
+        <div class="option-group">
+          <label>Max Players:</label>
+          <div class="button-group" id="mpMaxPlayers">
+            <button class="minecraft-button small" data-action="mp-max" data-value="2">2</button>
+            <button class="minecraft-button small" data-action="mp-max" data-value="4" data-selected="true">4</button>
+            <button class="minecraft-button small" data-action="mp-max" data-value="6">6</button>
+            <button class="minecraft-button small" data-action="mp-max" data-value="8">8</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Guests Can Build:</label>
+          <div class="button-group" id="mpAllowBuild">
+            <button class="minecraft-button small" data-action="mp-build" data-value="on" data-selected="true">ON</button>
+            <button class="minecraft-button small" data-action="mp-build" data-value="off">OFF</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Show On Network:</label>
+          <div class="button-group" id="mpLan">
+            <button class="minecraft-button small" data-action="mp-lan" data-value="on" data-selected="true">ON</button>
+            <button class="minecraft-button small" data-action="mp-lan" data-value="off">OFF</button>
+          </div>
+        </div>
+      </div>
+      <p class="mp-status" id="mpCreateStatus"></p>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="mp-start-host">Start Game</button>
+        <button class="minecraft-button" data-action="multiplayer">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mpJoinMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content mp-wide">
+      <h1 class="menu-title">Join Game</h1>
+      <div class="form-section">
+        <label>Games On Your Network:</label>
+        <div class="mp-list" id="mpHostList"></div>
+        <label for="mpAddress">Or Join By Address:</label>
+        <div class="mp-address-row">
+          <input type="text" id="mpAddress" class="minecraft-input" placeholder="192.168.1.20" spellcheck="false">
+          <button class="minecraft-button small" data-action="mp-join-address">Join</button>
+        </div>
+      </div>
+      <p class="mp-status" id="mpJoinStatus"></p>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="mp-join-back">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="noticeMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title" id="noticeTitle">Notice</h1>
+      <p class="mp-hint" id="noticeText"></p>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-main">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App: window and icon -->
+  <div id="appOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content mp-wide">
+      <h1 class="menu-title">App</h1>
+      <div class="form-section">
+        <div class="option-group">
+          <label>Window Controls:</label>
+          <div class="button-group" id="appWindowControls">
+            <button class="minecraft-button small" data-action="app-controls" data-value="on">ON</button>
+            <button class="minecraft-button small" data-action="app-controls" data-value="off">OFF</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Fullscreen:</label>
+          <div class="button-group" id="appFullscreen">
+            <button class="minecraft-button small" data-action="app-fullscreen" data-value="on">ON</button>
+            <button class="minecraft-button small" data-action="app-fullscreen" data-value="off">OFF</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Graphics Acceleration (restart to apply):</label>
+          <div class="button-group" id="appGpu">
+            <button class="minecraft-button small" data-action="app-gpu" data-value="on">ON</button>
+            <button class="minecraft-button small" data-action="app-gpu" data-value="off">OFF</button>
+          </div>
+        </div>
+        <label>App Icon:</label>
+        <div class="app-icon-grid" id="appIconGrid"></div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="back-to-options">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Player: name and skin -->
+  <div id="playerOptionsMenu" class="menu-container hidden">
+    <div class="menu-background"></div>
+    <div class="menu-content">
+      <h1 class="menu-title">Player</h1>
+      <div class="form-section">
+        <label for="playerNameInput">Name:</label>
+        <input type="text" id="playerNameInput" class="minecraft-input" maxlength="20" placeholder="Player" spellcheck="false">
+        <label>Skin:</label>
+        <div class="player-skin-row">
+          <canvas id="playerSkinPreview" class="player-skin-preview" width="16" height="64"></canvas>
+          <div class="skins-grid player-skins" id="playerSkinsGrid"></div>
+        </div>
+        <input type="file" id="playerSkinFile" accept="image/png" class="hidden">
+        <p class="mp-status" id="playerSkinStatus"></p>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="player-import-skin">Import Skin (PNG)</button>
+        <button class="minecraft-button" data-action="player-done">Done</button>
+      </div>
+    </div>
+  </div>
+
+   <div id="mpToast" class="mp-toast"></div>
 
    <!-- Skin Selection UI -->
    <div id="skinMenu" class="menu-container hidden">

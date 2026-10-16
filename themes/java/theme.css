@@ -340,8 +340,8 @@
 .chat-container .suggestions-dropdown {
   top: auto;
   bottom: calc(100% + 4px);
-  right: auto;
-  width: 360px;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
 }
 
 /* ---------- Title screen ---------- */

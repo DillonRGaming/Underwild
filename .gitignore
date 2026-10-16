@@ -1,5 +1,12 @@
-node_modules/
+concepts/
+crash-dumps/
+diag.html
 dist/
-worlds/
-*.log
 .DS_Store
+*.log
+*-log.txt
+node_modules/
+preferences.json
+release/
+underwild-screen.png
+worlds/

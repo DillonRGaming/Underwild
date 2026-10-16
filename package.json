@@ -6,9 +6,57 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "postinstall": "echo No native modules to rebuild"
+    "postinstall": "echo No native modules to rebuild",
+    "dist": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always"
   },
   "devDependencies": {
-    "electron": "^28.0.0"
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.8"
+  },
+  "author": "DillonRGaming",
+  "build": {
+    "appId": "com.dillonrgaming.underwild",
+    "productName": "Underwild",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "**/*",
+      "!worlds/**",
+      "!dist/**",
+      "!release/**",
+      "!concepts/**",
+      "!crash-dumps/**",
+      "!*.log",
+      "!*-log.txt",
+      "!underwild-screen.png",
+      "!preferences.json",
+      "!diag.html",
+      "!tree_variants.png",
+      "!caveman.md",
+      "!rules.txt",
+      "!.claude/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "DillonRGaming",
+        "repo": "Underwild",
+        "releaseType": "release"
+      }
+    ]
   }
 }

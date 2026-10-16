@@ -1,3 +1,4 @@
+import { gameClock } from '../src/core/gameClock.js';
 const LOG_IDS = new Set(['oak_log', 'birch_log', 'spruce_log', 'maple_log', 'pine_log', 'birch_log_base']);
 
 // Max leaves searched per check; bigger than any tree, so this only cuts off huge
@@ -37,7 +38,9 @@ const DECAY_MAX = 5.5;
 export function createLeafDecayTick() {
   return function tick(world, x, y, meta) {
     if (meta.placed) return;
-    const now = performance.now() / 1000;
+    const now = gameClock.seconds();
+    // Timestamps from before the game clock existed are far in the future; restart them.
+    if (meta.decayAt != null && meta.decayAt > now + DECAY_MAX) meta.decayAt = null;
     if (meta.decayAt != null) {
       if (now < meta.decayAt) return;
       if (isConnectedToLog(world, x, y)) {

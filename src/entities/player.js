@@ -22,14 +22,14 @@ export class Player {
     this.registry = registry;
     this.x = x;
     this.y = y;
-    this.width = 14;
+    this.width = 12; // narrow enough to drop through an open trapdoor (13px gap)
     this.height = 32;
     this.vx = 0;
     this.vy = 0;
     this.maxSpeed = 120;
     this.jumpVelocity = 300;
     this.gravity = 800;
-    this.maxFallSpeed = 600;
+    this.maxFallSpeed = 500;
     this.onGround = false;
     
     this.swingAnimation = {
@@ -195,6 +195,8 @@ export class Player {
     const scaled = amount * (DIFFICULTY_DAMAGE[this.world?.difficulty] ?? 1);
     if (scaled <= 0) return;
     this.health = Math.max(0, this.health - Math.max(1, Math.round(scaled)));
+    this.hurtAt = performance.now();
+    this.onHurt?.();
     if (this.health <= 0) this.die();
   }
 

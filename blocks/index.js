@@ -15,6 +15,7 @@ import pinePlanks from './pine_planks.js';
 import sand from './sand.js';
 import water from './water.js';
 import mud from './mud.js';
+import clay from './clay.js';
 import coarseDirt from './coarse_dirt.js';
 import birchLog from './birch_log.js';
 import birchLeaves from './birch_leaves.js';
@@ -62,8 +63,8 @@ import furnace from './furnace.js';
 import forgingTable from './forging_table.js';
 import stoneSlab from './stone_slab.js';
 import stoneStairs from './stone_stairs.js';
-import trapdoor from './trapdoor.js';
-import explosive from './explosive.js';
+import { oakTrapdoor, birchTrapdoor, spruceTrapdoor, pineTrapdoor, mapleTrapdoor } from './trapdoor.js';
+import explosive, { explosive1, explosive2, explosive3 } from './explosive.js';
 import ladder from './ladder.js';
 import redTorch from './red_torch.js';
 import greenTorch from './green_torch.js';
@@ -92,6 +93,7 @@ export function registerAllBlocks(registry) {
     sand,
     water,
     mud,
+    clay,
     coarseDirt,
     birchLog,
     birchLeaves,
@@ -139,8 +141,15 @@ export function registerAllBlocks(registry) {
     forgingTable,
     stoneSlab,
     stoneStairs,
-    trapdoor,
+    oakTrapdoor,
+    birchTrapdoor,
+    spruceTrapdoor,
+    pineTrapdoor,
+    mapleTrapdoor,
     explosive,
+    explosive1,
+    explosive2,
+    explosive3,
     ladder,
     redTorch,
     greenTorch,

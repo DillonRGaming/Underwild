@@ -17,10 +17,11 @@ export class ExplosionFX {
     this.shake = 0;
   }
 
-  spawn(x, y, radiusPx) {
+  // shakeScale (0..1): how much of the blast reaches the viewer (distance, footing).
+  spawn(x, y, radiusPx, shakeScale = 1) {
     const room = MAX_PARTICLES - this.particles.length;
     const scale = Math.max(0, Math.min(1, room / 80));
-    this.shake = Math.min(26, this.shake + 14);
+    this.shake = Math.min(26, this.shake + 14 * shakeScale);
 
     for (let i = 0; i < 25 * scale; i++) {
       const a = Math.random() * Math.PI * 2;

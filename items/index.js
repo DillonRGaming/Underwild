@@ -3,7 +3,6 @@ import wooden_shovel from './wooden_shovel.js';
 import wooden_pickaxe from './wooden_pickaxe.js';
 import wooden_axe from './wooden_axe.js';
 import wooden_sword from './wooden_sword.js';
-import trowel from './trowel.js';
 import copper_pickaxe from './copper_pickaxe.js';
 import copper_axe from './copper_axe.js';
 import copper_shovel from './copper_shovel.js';
@@ -17,6 +16,7 @@ import gold_axe from './gold_axe.js';
 import gold_shovel from './gold_shovel.js';
 import gold_sword from './gold_sword.js';
 import coal from './coal.js';
+import gunpowder from './gunpowder.js';
 import raw_copper from './raw_copper.js';
 import copper_ingot from './copper_ingot.js';
 import copper_rod from './copper_rod.js';
@@ -65,7 +65,6 @@ export function registerAllItems(registry) {
     wooden_pickaxe,
     wooden_axe,
     wooden_sword,
-    trowel,
     copper_pickaxe,
     copper_axe,
     copper_shovel,
@@ -79,6 +78,7 @@ export function registerAllItems(registry) {
     gold_shovel,
     gold_sword,
     coal,
+    gunpowder,
     raw_copper,
     copper_ingot,
     copper_rod,

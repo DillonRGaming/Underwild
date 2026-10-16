@@ -1,3 +1,4 @@
+import { gameClock } from '../src/core/gameClock.js';
 // Loose blocks (sand, gravel) fall when there's air or water underneath. They start slowly
 // and pick up speed, sink slowly through water, and swap places with the water they enter.
 const FALL_WAIT_START = 5;   // pace of the first drops; it speeds up from there
@@ -22,7 +23,7 @@ export function fallTick(world, x, y, id, meta) {
   // The whole stack of loose blocks resting on this one drops with it.
   let top = y;
   while (top > 0 && world.getBlockType(x, top - 1)?.falls) top--;
-  const fell = { fellAt: performance.now(), slideMs: waitFor(streak + 1) * FALL_TICK_MS, fallStreak: streak + 1, fallWait: 0 };
+  const fell = { fellAt: gameClock.now(), slideMs: waitFor(streak + 1) * FALL_TICK_MS, fallStreak: streak + 1, fallWait: 0 };
   const waterMeta = below === 'water' ? { ...(belowCell.meta || {}) } : null;
   for (let ty = y; ty >= top; ty--) {
     const tid = ty === y ? id : world.getBlockId(x, ty);

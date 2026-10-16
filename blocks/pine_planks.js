@@ -5,5 +5,5 @@ export default {
   shape: 'full',
   solid: true,
   transparent: false,
-  maxStack: 64
+  maxStack: 24
 };

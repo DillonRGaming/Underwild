@@ -8,5 +8,5 @@ export default {
   needsSupport: true,
   color: '#a0763f',
   hardness: 0.4,
-  maxStack: 64
+  maxStack: 24
 };

@@ -6,6 +6,6 @@ export default {
   solid: true,
   transparent: false,
   hardness: 6,
-  maxStack: 64,
+  maxStack: 24,
   effectiveAgainst: ['pickaxe']
 };

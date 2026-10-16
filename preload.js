@@ -15,6 +15,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     load: (name) => ipcRenderer.invoke('worlds:load', name),
     delete: (name) => ipcRenderer.invoke('worlds:delete', name)
   },
+  app: {
+    ready: (info) => ipcRenderer.send('app:ready', info),
+    diagOk: (test) => ipcRenderer.send('app:diagOk', test),
+    setIcon: (dataUrl) => ipcRenderer.send('app:setIcon', dataUrl),
+    setFullscreen: (on) => ipcRenderer.send('app:setFullscreen', on)
+  },
+  mp: {
+    host: (port) => ipcRenderer.invoke('mp:host', port),
+    stopHost: () => ipcRenderer.send('mp:stopHost'),
+    announce: (info) => ipcRenderer.send('mp:announce', info),
+    hostSend: (target, data) => ipcRenderer.send('mp:hostSend', target, data),
+    kick: (id) => ipcRenderer.send('mp:kick', id),
+    browse: (on) => ipcRenderer.send('mp:browse', on),
+    join: (address, port) => ipcRenderer.invoke('mp:join', address, port),
+    leave: () => ipcRenderer.send('mp:leave'),
+    clientSend: (data) => ipcRenderer.send('mp:clientSend', data),
+    addresses: () => ipcRenderer.invoke('mp:addresses'),
+    onEvent: (cb) => {
+      const listener = (e, payload) => cb(payload);
+      ipcRenderer.on('mp:event', listener);
+      return () => ipcRenderer.removeListener('mp:event', listener);
+    }
+  },
   prefs: {
     getAll: () => ipcRenderer.invoke('prefs:getAll'),
     get: (key) => ipcRenderer.invoke('prefs:get', key),

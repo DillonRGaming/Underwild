@@ -52,6 +52,11 @@ export class World {
     this._chunkGeneration = 0;
     this._ghostCells = new Map();
     this._lightDirtyRanges = [];
+    // Multiplayer: cells changed by another player in chunks we haven't loaded yet,
+    // applied on top when the chunk loads. (chunkX -> Map(cell index -> cell))
+    this._remoteEdits = new Map();
+    // A multiplayer guest doesn't simulate (water, falling, furnaces...); the host does.
+    this.remote = false;
 
     try {
       this._chunkWorker = new Worker('src/logic/chunkWorker.js', { type: 'module' });
@@ -193,6 +198,13 @@ export class World {
       this._savedChunks.delete(chunkX);
     }
 
+    const edits = this._remoteEdits.get(chunkX);
+    if (edits) {
+      for (const [idx, cell] of edits) chunk.cells[idx] = cell;
+      chunk.dirty = true;
+      this._remoteEdits.delete(chunkX);
+    }
+
     const pendingBlocks = this._crossChunkPending.get(chunkX);
     if (pendingBlocks) {
       for (const p of pendingBlocks) {
@@ -248,6 +260,7 @@ export class World {
     this._ghostCells.clear();
     this._savedEntities.clear();
     this._crossChunkPending.clear();
+    this._remoteEdits.clear();
     this._pendingChunkLoads.clear();
     this._lightDirtyRanges.length = 0;
     this.lightMap.fill(0);
@@ -359,6 +372,16 @@ export class World {
         id = 'water';
         meta = { mass: old.meta.water };
       }
+      // A block in front of a background block keeps it (meta.bgId); clearing the front
+      // block puts the background block back. A mined-out natural wall stays gone.
+      const keepBg = old?.meta?.bgId;
+      const keepNoWall = old?.meta?.noWall;
+      if (keepBg && meta?.layer !== 'bg') {
+        if (id === 'air') { id = keepBg; meta = { layer: 'bg' }; }
+        else if (!meta?.bgId) meta = { ...(meta || {}), bgId: keepBg };
+      } else if (keepNoWall && !meta?.noWall) {
+        meta = { ...(meta || {}), noWall: true };
+      }
       chunk.cells[y * this.chunkSize + rx] = { id, meta };
       chunk.dirty = true;
       this.blockVersion = (this.blockVersion || 0) + 1;
@@ -370,6 +393,40 @@ export class World {
         this._crossChunkPending.set(cx, []);
       }
       this._crossChunkPending.get(cx).push({ x, y, id, meta });
+    }
+  }
+
+  // Multiplayer: set a cell to what another player has, wherever its chunk is (loaded,
+  // unloaded but saved, or not generated yet). If it's the same block, its meta is updated
+  // in place so open chests and furnaces keep showing the live contents.
+  applyRemoteCell(x, y, id, meta) {
+    if (!this.inBounds(x, y)) return;
+    const cx = this.chunkXFor(x);
+    const idx = y * this.chunkSize + (x - cx * this.chunkSize);
+    const chunk = this.chunks.get(this.chunkKey(cx));
+    const cells = chunk?.cells || this._savedChunks.get(cx);
+    if (!cells) {
+      if (!this._remoteEdits.has(cx)) this._remoteEdits.set(cx, new Map());
+      this._remoteEdits.get(cx).set(idx, { id, meta });
+      this._ghostCells.delete(cx);
+      return;
+    }
+    const old = cells[idx];
+    if (old && old.id === id && old.meta && meta && typeof old.meta === 'object') {
+      for (const k of Object.keys(old.meta)) if (!(k in meta)) delete old.meta[k];
+      for (const [k, v] of Object.entries(meta)) {
+        if (Array.isArray(old.meta[k]) && Array.isArray(v)) old.meta[k].splice(0, old.meta[k].length, ...v);
+        else old.meta[k] = v;
+      }
+    } else {
+      cells[idx] = { id, meta };
+    }
+    if (!chunk) return;
+    chunk.dirty = true;
+    this.blockVersion = (this.blockVersion || 0) + 1;
+    if (!old || old.id !== id) {
+      this.updateLighting(x, y);
+      this.water?.wakeAround(x, y);
     }
   }
 
@@ -409,9 +466,14 @@ export class World {
     this._lightDirtyRanges.push(x - LIGHT_RADIUS, x + LIGHT_RADIUS);
   }
 
-  flushLighting() {
+  flushLighting(force = false) {
     const ranges = this._lightDirtyRanges;
     if (ranges.length === 0) return;
+    // Relighting is costly: bursts of edits (an explosion's rings, falling sand) are
+    // gathered up and relit together a few times a second rather than every frame.
+    const now = performance.now();
+    if (!force && now - (this._lastLightFlush || 0) < 70) return;
+    this._lastLightFlush = now;
     const pairs = [];
     for (let i = 0; i < ranges.length; i += 2) pairs.push([ranges[i], ranges[i + 1]]);
     ranges.length = 0;
@@ -660,6 +722,10 @@ export class World {
   }
 
   tick(dt) {
+    if (this.remote) {
+      this.flushLighting();
+      return;
+    }
     // Falling blocks tick on a fixed clock so they drop at a steady pace;
     // everything else keeps the old random ~10%-of-frames cadence.
     this._waterAccum = (this._waterAccum || 0) + dt;

@@ -5,7 +5,8 @@ const ITEM_CONFIG = {
   attractionForce: 0.8,
   pickupDelay: 30,
   
-  gravity: 0.3,
+  gravity: 0.15,
+  maxFallSpeed: 5,
   width: 6,
   height: 6,
   mass: 1,
@@ -116,6 +117,34 @@ export class ItemEntity {
     const maxVel = ITEM_CONFIG.maxVelocity;
     if (Math.abs(this.vx) > maxVel) this.vx = Math.sign(this.vx) * maxVel;
     if (Math.abs(this.vy) > maxVel) this.vy = Math.sign(this.vy) * maxVel;
+    if (this.vy > ITEM_CONFIG.maxFallSpeed) this.vy = ITEM_CONFIG.maxFallSpeed;
+
+    // Stuck inside a block (placed on top of it, or pushed in): squeeze out to the nearest
+    // open side instead of sitting there.
+    const solidAt = (tx, ty) => {
+      if (!world.inBounds(tx, ty)) return false;
+      const t = world.getBlockType(tx, ty);
+      return !!t && !!t.solid && world.getCell(tx, ty).meta?.layer !== 'bg';
+    };
+    const inX = Math.floor((this.x + this.width / 2) / 16);
+    const inY = Math.floor((this.y + this.height / 2) / 16);
+    if (solidAt(inX, inY)) {
+      const lx = (this.x + this.width / 2) - inX * 16;
+      const ly = (this.y + this.height / 2) - inY * 16;
+      const options = [
+        [0, -1, ly + 4],
+        [-1, 0, lx],
+        [1, 0, 16 - lx],
+        [0, 1, 16 - ly + 8]
+      ].filter(([dx, dy]) => !solidAt(inX + dx, inY + dy)).sort((a, b) => a[2] - b[2]);
+      const [dx, dy] = options[0] || [0, -1];
+      this.x += dx * 1.5;
+      this.y += dy * 1.5;
+      this.vx = dx * 0.5;
+      this.vy = dy * 0.5;
+      this.onGround = false;
+      return ITEM_CONFIG.maxLife > 0 && this.life > ITEM_CONFIG.maxLife;
+    }
     
     this.x += this.vx;
     this.y += this.vy;
@@ -136,8 +165,7 @@ export class ItemEntity {
     
     for (let tileX = leftTileX; tileX <= rightTileX; tileX++) {
       if (world.inBounds(tileX, feetTileY)) {
-        const blockType = world.getBlockType(tileX, feetTileY);
-        if (blockType && blockType.solid) {
+        if (solidAt(tileX, feetTileY)) {
           this.y = feetTileY * 16 - this.height;
           this.vy = 0;
           this.onGround = true;
@@ -153,8 +181,7 @@ export class ItemEntity {
     const centerTileY = Math.floor(centerY / 16);
 
     if (world.inBounds(centerTileX, centerTileY)) {
-      const blockType = world.getBlockType(centerTileX, centerTileY);
-      if (blockType && blockType.solid) {
+      if (solidAt(centerTileX, centerTileY)) {
         const tileTop = centerTileY * 16;
         const tileBottom = tileTop + 16;
         

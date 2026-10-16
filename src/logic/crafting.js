@@ -119,10 +119,22 @@ const recipes = [
   { type: 'shapeless', in: { torch: 1, raw_steel: 1 }, out: { blockId: 'blue_torch', count: 1 } },
   { type: 'shapeless', in: { torch: 1, copper_ingot: 1 }, out: { blockId: 'cyan_torch', count: 1 } },
   { type: 'shapeless', in: { torch: 1, gold_ingot: 1 }, out: { blockId: 'purple_torch', count: 1 } },
-  { type: 'shaped', shape: ['sss', 's s', 'sss'], ingredients: { s: 'stone' }, out: { blockId: 'furnace', count: 1 } },
+  { type: 'shaped', shape: ['scs', 'c c', 'sss'], ingredients: { s: 'stone', c: 'clay' }, out: { blockId: 'furnace', count: 1 } },
   { type: 'shapeless', in: { sand: 1, coal: 1 }, out: { blockId: 'glass', count: 1 } },
-  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'planks' }, out: { blockId: 'trapdoor', count: 2 } },
+  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'oak_planks' }, out: { blockId: 'oak_trapdoor', count: 2 } },
+  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'birch_planks' }, out: { blockId: 'birch_trapdoor', count: 2 } },
+  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'spruce_planks' }, out: { blockId: 'spruce_trapdoor', count: 2 } },
+  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'pine_planks' }, out: { blockId: 'pine_trapdoor', count: 2 } },
+  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'maple_planks' }, out: { blockId: 'maple_trapdoor', count: 2 } },
   { type: 'shaped', shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'gravel' }, out: { blockId: 'explosive', count: 1 } },
+  // Gunpowder (sand + clay); each piece added to an explosive gives it a second more fuse.
+  { type: 'shapeless', in: { sand: 1, clay: 1 }, out: { itemId: 'gunpowder', count: 2 } },
+  { type: 'shapeless', in: { explosive: 1, gunpowder: 1 }, out: { blockId: 'explosive_1', count: 1 } },
+  { type: 'shapeless', in: { explosive_1: 1, gunpowder: 1 }, out: { blockId: 'explosive_2', count: 1 } },
+  { type: 'shapeless', in: { explosive_2: 1, gunpowder: 1 }, out: { blockId: 'explosive_3', count: 1 } },
+  { type: 'shapeless', in: { explosive: 1, gunpowder: 2 }, out: { blockId: 'explosive_2', count: 1 } },
+  { type: 'shapeless', in: { explosive: 1, gunpowder: 3 }, out: { blockId: 'explosive_3', count: 1 } },
+  { type: 'shapeless', in: { explosive_1: 1, gunpowder: 2 }, out: { blockId: 'explosive_3', count: 1 } },
   { type: 'shapeless', in: { dirt: 1, gravel: 1 }, out: { blockId: 'coarse_dirt', count: 2 } },
   { type: 'shaped', shape: ['iii', 'iii', ' s '], ingredients: { i: 'steel_ingot', s: 'stick' }, out: { itemId: 'blacksmith_hammer', count: 1 } },
   { type: 'shaped', shape: ['iii', ' s ', 'sss'], ingredients: { i: 'copper_ingot', s: 'stone' }, out: { blockId: 'forging_table', count: 1 } },
@@ -240,12 +252,6 @@ const recipes = [
     out: { itemId: 'wooden_sword', count: 1 } 
   },
   
-  { 
-    type: 'shaped', 
-    shape: ['p ', ' s'], 
-    ingredients: { p: 'planks', s: 'stick' }, 
-    out: { itemId: 'trowel', count: 1 } 
-  },
   
 
   { type: 'shapeless', in: { raw_copper: 1 }, out: { itemId: 'copper_ingot', count: 1 } },
@@ -327,7 +333,7 @@ export function createRecipeOutput(recipe, registry) {
       blockId: recipe.out.blockId, 
       displayName, 
       count: recipe.out.count, 
-      maxStack: blockType?.maxStack || 64 
+      maxStack: blockType?.maxStack || 24 
     };
   } else if (recipe.out.itemId) {
     const itemType = registry.get(recipe.out.itemId);
@@ -337,7 +343,7 @@ export function createRecipeOutput(recipe, registry) {
       itemId: recipe.out.itemId, 
       displayName, 
       count: recipe.out.count, 
-      maxStack: itemType?.maxStack || 64 
+      maxStack: itemType?.maxStack || 24 
     };
   }
   return null;
@@ -357,4 +363,29 @@ export function removeRecipe(index) {
     return true;
   }
   return false;
+}
+
+// What a recipe uses in total, as { ingredient: count } (ingredients can be groups such
+// as 'planks'), for crafting straight from the inventory.
+export function recipeNeeds(recipe) {
+  if (recipe.type === 'shapeless') return { ...recipe.in };
+  const needs = {};
+  for (const row of recipe.shape) {
+    for (const key of row) {
+      if (key === ' ') continue;
+      const id = recipe.ingredients[key];
+      needs[id] = (needs[id] || 0) + 1;
+    }
+  }
+  return needs;
+}
+
+// Whether a recipe fits the small 2x2 grid you have without a crafting table.
+export function fitsSmallGrid(recipe) {
+  if (recipe.type === 'shapeless') return Object.values(recipe.in).reduce((a, b) => a + b, 0) <= 4;
+  return recipe.shape.length <= 2 && recipe.shape.every(row => row.length <= 2);
+}
+
+export function itemMatchesIngredient(itemId, ingredient) {
+  return ingredientsMatch(itemId, ingredient);
 }

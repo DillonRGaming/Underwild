@@ -7,6 +7,6 @@ export default {
   transparent: true,
   lightLevel: 15,
   hardness: 0.1,
-  maxStack: 64,
+  maxStack: 24,
   needsSupport: true
 };

@@ -6,7 +6,7 @@ export default {
   solid: true,
   transparent: false,
   hardness: 3,
-  maxStack: 64,
+  maxStack: 24,
   effectiveAgainst: ['pickaxe'],
   drop: 'raw_copper'
 };

@@ -1,3 +1,4 @@
+import { gameClock } from './gameClock.js';
 import { migrateLegacyId } from './legacyIds.js';
 
 export class WorldSerializer {
@@ -79,6 +80,7 @@ export class WorldSerializer {
         allowCommands: !!world.allowCommands,
         difficulty: world.difficulty || 'normal',
         time: world.time || 0,
+        clock: gameClock.now(),
         timeManuallySet: !!world.timeManuallySet,
         currentSeed: worldMeta?.currentSeed ?? world.seed ?? 0,
         chunkSize: world.chunkSize,
@@ -92,7 +94,9 @@ export class WorldSerializer {
       },
       player: playerData,
       inventory: inventory ? inventory.serialize() : null,
-      itemEntities
+      itemEntities,
+      // Multiplayer guests' inventories and positions, by player name.
+      mpPlayers: world.mpPlayers || {}
     };
   }
 
@@ -135,7 +139,8 @@ export class WorldSerializer {
       chunkData,
       playerData: data.player || {},
       inventoryData: data.inventory || null,
-      itemEntities: data.itemEntities || []
+      itemEntities: data.itemEntities || [],
+      mpPlayers: data.mpPlayers || {}
     };
   }
 }

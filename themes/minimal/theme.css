@@ -105,10 +105,10 @@
   --hotbar-bg: var(--fill);
   --hotbar-border: 2px solid var(--line);
   --hotbar-shadow: var(--edge);
-  --hotbar-padding: 2px;
-  --hotbar-gap: 0px;
-  --hotbar-slot-bg: transparent;
-  --hotbar-slot-border: 2px solid transparent;
+  --hotbar-padding: 4px;
+  --hotbar-gap: 4px;
+  --hotbar-slot-bg: var(--slot-bg);
+  --hotbar-slot-border: var(--slot-border);
   --hotbar-slot-shadow: none;
   --hotbar-selected-bg: var(--corners);
   --hotbar-selected-border: 2px solid transparent;
@@ -254,7 +254,8 @@
   box-shadow: none;
 }
 
-.chat-input {
+.chat-input,
+.chat-container .suggestions-dropdown {
   border: 2px solid var(--line);
   box-shadow: var(--edge);
 }
@@ -271,7 +272,10 @@
   font-size: 18px;
 }
 
+:root {
+  --creative-search-height: 32px;
+}
+
 .creative-search {
-  height: 32px;
   font-size: 15px;
 }

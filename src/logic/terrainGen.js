@@ -107,8 +107,14 @@ function artTreeBlock(shape, centerX, x, y, top, logType, leavesType, lift = 0) 
   const crownBottom = top - shape.visible - 1 - lift;
   const crownTop = crownBottom - art.length + 1;
   if (crownTop < 2) return null;
-  // The trunk only reaches a couple of rows into the crown, so leaves hide its top.
-  const trunkTop = crownBottom - 1;
+  // The trunk runs up to the lowest leaf directly above it and stops there, so it never
+  // pokes out in front of the crown.
+  let trunkTop = crownBottom + 1;
+  for (let r = art.length - 1; r >= 0; r--) {
+    const c = art[r].length >> 1;
+    if (art[r][c] === '#') break;
+    trunkTop = crownTop + r;
+  }
   if (x === centerX && y < top && y >= trunkTop) return { id: logType, meta: { noCollision: true } };
   const row = y - crownTop;
   if (row < 0 || row >= art.length) return null;
@@ -649,7 +655,11 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   } else if (y === h) {
     return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : 'grass', meta: null };
   } else if (sandy && y <= h + sandLayersAt(x, seed)) {
-    return { id: 'sand', meta: null };
+    // Clay lumps mixed into the sand.
+    return { id: perlinNoise(x * 0.35, y * 0.35, seed + 900) > 0.45 ? 'clay' : 'sand', meta: null };
+  } else if (sandy && y <= h + sandLayersAt(x, seed) + 2 && perlinNoise(x * 0.25, y * 0.5, seed + 901) > -0.1) {
+    // A patchy clay bed under the beaches and lakebeds.
+    return { id: 'clay', meta: null };
   } else if (y <= h + (worldType === 'mountains' ? 8 + Math.floor(rand01From(x, seed) * 4) : 4 + Math.floor(rand01From(x, seed) * 2))) {
     const dirtType = rand01From(x * y + seed, seed + y);
     return { id: dirtType < 0.25 ? 'coarse_dirt' : 'dirt', meta: null };

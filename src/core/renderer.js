@@ -1,4 +1,7 @@
+import { gameClock } from './gameClock.js';
 import { TILE_SIZE, darkenHex } from './utils.js';
+import { Clouds } from './clouds.js';
+import { trunkLeafCover } from '../logic/trunkLeaves.js';
 import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
 import { waterLevel, waterMass, WATER_LEVELS } from '../logic/water.js';
 import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
@@ -58,7 +61,7 @@ const TOOL_GRIP_ANGLE = 45 * Math.PI / 180;
 const MINE_BOB_SPEED = 0.018;
 const MINE_BOB_AMOUNT = 0.25;
 // How far each held tool sits out along its handle, as a fraction of its size.
-const TOOL_GRIP_OFFSETS = { sword: 0.36, pickaxe: 0.26, axe: 0.26, shovel: 0.26, hoe: 0.26, stick: 0.3, trowel: 0.18 };
+const TOOL_GRIP_OFFSETS = { sword: 0.36, pickaxe: 0.26, axe: 0.26, shovel: 0.26, hoe: 0.26, stick: 0.3 };
 const ARM_ACTIONS = {
   // duration in ms; curve(t) returns the arm angle offset for t in [0, 1]
   attack: { duration: 260, curve: t => t < 0.3 ? -1.4 * (t / 0.3) : -1.4 + 2.0 * Math.sin(((t - 0.3) / 0.7) * Math.PI / 2) * (1 - (t - 0.3) / 0.7 * 0.3) },
@@ -149,6 +152,9 @@ export class Renderer {
     this.updateDaylight();
     this.updateHeldLight(ui);
     this.drawSky();
+    // Clouds drift across the sky behind everything else; dimmer at night.
+    if (!this.clouds) this.clouds = new Clouds();
+    this.clouds.draw(ctx, this.camera, canvas, world.seed ?? 0, this.daylight?.base ?? 1);
 
     const shake = ui?.explosionFX ? ui.explosionFX.getShakeOffset() : null;
     if (shake && (shake.x || shake.y)) {
@@ -182,15 +188,20 @@ export class Renderer {
         const cell = world.getCell(x, y);
         const t = this.registry.get(cell.id);
         if (!t) continue;
-        if (!t.solid || cell.id === 'air') {
+        // Anything that doesn't fill its cell (plants, slabs, stairs, trapdoors) shows the wall behind it.
+        if (!t.solid || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
+          // A background block placed behind this one (a torch on a planks wall...).
+          const bgType = cell.meta?.bgId ? this.registry.get(cell.meta.bgId) : null;
+          if (bgType) this.drawBlock(x, y, bgType, { layer: 'bg' });
           // Lakes have a fixed sand backdrop where their water was generated; it stays put
           // whatever the water in front of it does.
-          if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
+          else if (cell.meta?.noWall) { /* the natural wall here was mined out */ }
+          else if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
           else if (!this.isOpenSky(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
           if (cell.id === 'air') continue;
         }
         // A block still sliding into its cell leaves the cell's bottom uncovered: fill it.
-        if (cell.meta?.fellAt && performance.now() - cell.meta.fellAt < (cell.meta.slideMs || FALL_SLIDE_MS)) {
+        if (cell.meta?.fellAt && gameClock.now() - cell.meta.fellAt < (cell.meta.slideMs || FALL_SLIDE_MS) && gameClock.now() >= cell.meta.fellAt) {
           if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
           else if (y >= this.naturalSurfaceAt(x)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
         }
@@ -221,10 +232,13 @@ export class Renderer {
     const mainCtx = this.ctx;
     this.ctx = layer.getContext('2d');
     this.ctx.setTransform(mainCtx.getTransform());
+    const others = this.drawRemotePlayers();
     this.drawPlayer();
+    this.drawHurtTint(this.player);
     this.drawItems();
     const p = this.player;
     const rects = [[p.x - 8, p.y - 8, p.width + 16, p.height + 8]];
+    for (const rp of others) rects.push([rp.x - 8, rp.y - 8, rp.width + 16, rp.height + 8]);
     for (const item of world.items || []) rects.push([item.x - 8, item.y - 8, 16, 16]);
     this.ctx.globalCompositeOperation = 'source-atop';
     this.drawWaterOver(rects);
@@ -232,10 +246,11 @@ export class Renderer {
     this.ctx = mainCtx;
     mainCtx.save();
     mainCtx.setTransform(1, 0, 0, 1, 0, 0);
-    mainCtx.drawImage(layer, 0, 0);
+    if (layer.width && layer.height) mainCtx.drawImage(layer, 0, 0);
     mainCtx.restore();
     this.drawLeafParticles();
     this.drawPrimedExplosives(ui?.primedExplosives);
+    this.drawHurtVignette();
     if (ui?.explosionFX) ui.explosionFX.draw(ctx, camera);
     this.drawHoveredBlockOutline();
     this.drawPositionOutlines();
@@ -249,13 +264,18 @@ export class Renderer {
     const sunVisible = sunPhase <= 0.5;
     const travelT = sunVisible ? sunPhase / 0.5 : (sunPhase - 0.5) / 0.5;
     const s = Math.sin(Math.PI * travelT);
-    this.daylight = { sunVisible, travelT, base: sunVisible ? 0.5 + 0.5 * s : 0.5 - (0.5 - NIGHT_LIGHT) * Math.min(1, s * 3) };
+    // One smooth curve on the sun's height (negative below the horizon) so light eases
+    // through dusk and dawn instead of jumping when the sun sets.
+    const elevation = sunVisible ? s : -s;
+    const smooth = (a, b, v) => { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const ambient = NIGHT_LIGHT + (1 - NIGHT_LIGHT) * smooth(-0.45, 0.45, elevation);
+    const base = NIGHT_LIGHT + (1 - NIGHT_LIGHT) * smooth(-0.3, 1, elevation);
+    this.daylight = { sunVisible, travelT, base, ambient };
   }
 
   lightFactorAt(tileX, tileY, dayBoost) {
     const world = this.world;
-    const { base, sunVisible } = this.daylight;
-    const ambient = sunVisible ? Math.min(1, base * 1.8) : base;
+    const { ambient } = this.daylight;
     const sky = (world.getDisplaySkyLight(tileX, tileY) / 15) * ambient;
     return Math.min(1, Math.max(MIN_BRIGHTNESS, sky, this.blockLightFactor(tileX, tileY)));
   }
@@ -272,15 +292,18 @@ export class Renderer {
     this.heldLightColor = null;
     const player = this.player;
     if (!player) return;
-    const slot = this.getHeldSlot(ui);
-    const type = this.registry.get(slot?.blockId || slot?.itemId);
-    if (type?.shape !== 'torch') return;
-    this.heldLightColor = type.lightColor || null;
-    this.heldLight = this.floodHeldLight(
-      (player.x + player.width / 2) / TILE_SIZE,
-      (player.y + player.height * 0.4) / TILE_SIZE,
-      HELD_LIGHT_RANGE
-    );
+    // Torches held by other players in multiplayer light the world too.
+    const holders = [[player, this.getHeldSlot(ui)]];
+    const mp = typeof window !== 'undefined' ? window.multiplayer : null;
+    if (mp?.active) for (const rp of mp.remotePlayers.values()) holders.push([rp, rp.held]);
+    for (const [p, slot] of holders) {
+      const type = this.registry.get(slot?.blockId || slot?.itemId);
+      if (type?.shape !== 'torch') continue;
+      if (!this.heldLightColor) this.heldLightColor = type.lightColor || null;
+      const levels = this.floodHeldLight((p.x + p.width / 2) / TILE_SIZE, (p.y + p.height * 0.4) / TILE_SIZE, HELD_LIGHT_RANGE);
+      if (!this.heldLight) { this.heldLight = levels; continue; }
+      for (const [k, v] of levels) if ((this.heldLight.get(k) ?? 0) < v) this.heldLight.set(k, v);
+    }
   }
 
   heldLightCost(tileX, tileY, wallCost = HELD_LIGHT_WALL_COST) {
@@ -382,8 +405,7 @@ export class Renderer {
     out[0] = out[1] = out[2] = 255;
     out[3] = out[4] = out[5] = 0;
     if (w <= 0) return;
-    const { base, sunVisible } = this.daylight;
-    const ambient = sunVisible ? Math.min(1, base * 1.8) : base;
+    const { ambient } = this.daylight;
     const dark = 1 - Math.min(1, (this.world.getDisplaySkyLight(tileX, tileY) / 15) * ambient);
     if (dark <= 0) return;
     const cr = r / w, cg = g / w, cb = b / w;
@@ -462,7 +484,9 @@ export class Renderer {
 
   isOpenSky(tileX, tileY) {
     const world = this.world;
-    if (!world.inBounds(tileX, tileY) || world.getBlockType(tileX, tileY)?.solid) return false;
+    // Blocks that don't fill their cell (slabs, trapdoors) don't hide the sky behind them.
+    const type = world.inBounds(tileX, tileY) ? world.getBlockType(tileX, tileY) : null;
+    if (!type || (type.solid && (!type.shape || type.shape === 'full'))) return false;
     return tileY < this.naturalSurfaceAt(tileX);
   }
 
@@ -494,7 +518,20 @@ export class Renderer {
     return top !== null && tileY >= top && tileY < this.naturalSurfaceAt(tileX);
   }
 
+  // The natural wall block behind an empty cell (what mining it gives), or null.
+  naturalWallId(tileX, tileY) {
+    const cell = this.world.getCell(tileX, tileY);
+    if (cell.meta?.noWall || cell.meta?.bgId) return null;
+    if (this.isLakeBackdrop(tileX, tileY)) return 'sand';
+    if (this.isOpenSky(tileX, tileY)) return null;
+    return this.backgroundWallId(tileX, tileY);
+  }
+
   backgroundWallTexture(tileX, tileY) {
+    return this.textures[this.backgroundWallId(tileX, tileY)] || null;
+  }
+
+  backgroundWallId(tileX, tileY) {
     const world = this.world;
     // Dug-out beaches keep a sand wall behind them rather than dirt.
     if (this._wallWorld !== world) {
@@ -508,10 +545,10 @@ export class Renderer {
       if (this._wallCache.size > 50000) this._wallCache.clear();
       this._wallCache.set(key, generated);
     }
-    if (generated === 'sand' || generated === 'wet_sand') return this.textures[generated] || this.textures.sand || null;
+    if (generated === 'sand' || generated === 'wet_sand') return this.textures[generated] ? generated : 'sand';
     const depth = tileY - this.naturalSurfaceAt(tileX);
     const dirtDepth = naturalDirtDepthAt(tileX, world.seed ?? 0, world.worldType);
-    return this.textures[depth <= dirtDepth ? 'dirt' : 'stone'] || null;
+    return depth <= dirtDepth ? 'dirt' : 'stone';
   }
 
   // fill (0..1) draws only the bottom part of the wall, e.g. behind a partly filled water cell.
@@ -717,7 +754,7 @@ export class Renderer {
     
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
+
     if (!sunVisible) {
       this.drawStars();
     }
@@ -937,7 +974,7 @@ drawStars() {
   drawFog(startX, endX) {
     const { ctx, camera, world } = this;
     const seed = world.seed ?? 0;
-    const t = performance.now() / 1000;
+    const t = gameClock.seconds();
     const size = TILE_SIZE * camera.zoom;
     const dl = this.daylight || { base: 1, sunVisible: true, travelT: 0.5 };
     // Thickest around dawn and through the night, thinnest at midday.
@@ -1020,7 +1057,7 @@ drawStars() {
     const quant = Math.max(MIN_BRIGHTNESS, Math.min(1, Math.round(lightFactor * 50) / 50));
     const image = quant >= 1 ? texture : this.getTintedTexture(texture, quant);
     const ctx = this.ctx;
-    const t = performance.now() / 1000;
+    const t = gameClock.seconds();
     const px = size / 16;
     const shift = Math.floor(((t * 1.5 + tileY * 3) % 16 + 16) % 16);
     ctx.imageSmoothingEnabled = false;
@@ -1258,7 +1295,7 @@ drawStars() {
       // Water that has only just appeared (poured or flowed in) grows in from nothing
       // instead of popping in as a full block.
       const cell = this.world.getCell(x, y);
-      const fresh = cell.meta?.newAt && Date.now() - cell.meta.newAt < 500;
+      const fresh = cell.meta?.newAt && gameClock.now() - cell.meta.newAt < 500 && gameClock.now() >= cell.meta.newAt;
       e = { v: fresh ? 0 : actual, f: this._waterFrame };
       this._shownWater.set(key, e);
       if (!fresh) return actual;
@@ -1275,7 +1312,7 @@ drawStars() {
   // bubbles rising back up through the pool beneath.
   drawSplashes() {
     const ctx = this.ctx;
-    const t = performance.now() / 1000;
+    const t = gameClock.seconds();
     const hash = n => (((n * 2654435761) >>> 0) % 1000) / 1000;
     for (const sp of this._splashes || []) {
       const { cx, surfaceY, half, px, size, quant, tileX, minX, maxX } = sp;
@@ -1327,7 +1364,7 @@ drawStars() {
   // Gusts roll across the land at WIND_SPEED, plants lean with the wind and flutter
   // around that lean, each with its own speed and phase so nothing moves in lockstep.
   windSwayAt(tileX) {
-    const t = performance.now() / 1000;
+    const t = gameClock.seconds();
     const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
     const strength = this.windStrength(t - tileX / WIND_SPEED);
     const h = ((tileX * 2654435761) >>> 0) / 4294967296;
@@ -1340,7 +1377,7 @@ drawStars() {
   // the plants but varies smoothly across the canopy, so neighbouring leaves move almost
   // together (no gaps) and a whole crown ripples as a gust passes.
   leafSwayOffset(tileX, tileY, size) {
-    const t = performance.now() / 1000;
+    const t = gameClock.seconds();
     const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
     const strength = this.windStrength(t - tileX / WIND_SPEED);
     const ripple = 0.65 + 0.35 * Math.sin(t * 1.9 - tileX * 0.35 + tileY * 0.45);
@@ -1350,7 +1387,7 @@ drawStars() {
   // How far (texels) a trunk in column tileX leans at TRUNK_REF_HEIGHT: slow and stiff,
   // following the same travelling gusts as the leaves above it.
   trunkSwayAt(tileX) {
-    const t = performance.now() / 1000;
+    const t = gameClock.seconds();
     const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
     const strength = this.windStrength(t - tileX / WIND_SPEED);
     const sway = 0.55 + 0.45 * Math.sin(t * 1.3 + tileX * 0.9);
@@ -1626,8 +1663,8 @@ drawStars() {
   drawPrimedExplosives(primed) {
     if (!primed || primed.length === 0) return;
     const { ctx, camera } = this;
-    const texture = this.textures['explosive'];
     for (const p of primed) {
+      const texture = this.textures[p.blockId || 'explosive'] || this.textures['explosive'];
       const t = p.progress();
       const grow = 1 + t * t * 0.1;
       const size = Math.round(TILE_SIZE * camera.zoom * grow);
@@ -1656,6 +1693,46 @@ drawStars() {
     return this.textures['no_texture'] || null;
   }
 
+  // Pixel fire in a lit furnace's mouth (texels 4-11 across, rows 5-11), plus glowing
+  // embers in the ash slot below. Flickers at about 6 frames a second, like the textures.
+  drawFurnaceFire(tileX, sx, sy, size) {
+    const { ctx } = this;
+    const px = size / 16;
+    const frame = Math.floor(performance.now() / 170);
+    const hash = n => { n = Math.imul(n ^ (n >>> 13), 0x5bd1e995); return ((n ^ (n >>> 15)) >>> 0) / 4294967296; };
+    const RAMP = ['#7a1d0e', '#c2381a', '#f06a1c', '#ffa62b', '#ffd85a', '#fff6c4'];
+    ctx.save();
+    for (let x = 4; x <= 11; x++) {
+      // Taller in the middle, each column flickering on its own.
+      const centre = 1 - Math.abs(x - 7.5) / 4.5;
+      const flick = hash(frame * 31 + x * 7 + tileX * 131);
+      const height = 2.5 + centre * 3.5 + flick * 2;
+      const top = x >= 6 && x <= 9 ? 5 : 6; // the arched mouth
+      for (let y = 11; y >= top; y--) {
+        const up = 11 - y;
+        if (up >= height) break;
+        const heat = 1 - up / height + (hash(frame * 17 + x * 3 + y * 11 + tileX) - 0.5) * 0.35;
+        const i = Math.max(0, Math.min(RAMP.length - 1, Math.floor(heat * centre * 1.2 * RAMP.length + 0.5)));
+        ctx.globalAlpha = up >= height - 1 ? 0.75 : 1;
+        ctx.fillStyle = RAMP[i];
+        ctx.fillRect(Math.floor(sx + x * px), Math.floor(sy + y * px), Math.ceil(px), Math.ceil(px));
+      }
+    }
+    // Embers in the ash slot.
+    for (let x = 5; x <= 10; x++) {
+      const e = hash(frame * 5 + x * 13 + tileX * 7);
+      if (e < 0.35) continue;
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = e > 0.85 ? '#ffa62b' : e > 0.6 ? '#f06a1c' : '#9a2a12';
+      ctx.fillRect(Math.floor(sx + x * px), Math.floor(sy + 14 * px), Math.ceil(px), Math.ceil(px));
+    }
+    // Warm glow over the face.
+    ctx.globalAlpha = 0.08 + hash(frame + tileX) * 0.05;
+    ctx.fillStyle = '#ff8a2a';
+    ctx.fillRect(sx, sy, size, size);
+    ctx.restore();
+  }
+
   drawBlock(tileX, tileY, type, meta) {
     const { ctx, camera, world } = this;
     ctx.imageSmoothingEnabled = false;
@@ -1664,7 +1741,7 @@ drawStars() {
     const size = Math.round(TILE_SIZE * camera.zoom);
     // Falling blocks slide down from the cell above rather than jumping a whole block.
     if (meta?.fellAt) {
-      const t = (performance.now() - meta.fellAt) / (meta.slideMs || FALL_SLIDE_MS);
+      const t = Math.max(0, (gameClock.now() - meta.fellAt) / (meta.slideMs || FALL_SLIDE_MS));
       if (t < 1) sy -= Math.round((1 - t) * size);
     }
     
@@ -1695,6 +1772,10 @@ drawStars() {
     }
     if (texture && meta?.axis !== 'x' && meta?.layer !== 'bg' && isTrunk(type.id)) {
       this.drawTrunk(texture, tileX, tileY, sx, sy, size, finalLightFactor);
+      // Inside the crown: leaves in front of the trunk.
+      const leafId = trunkLeafCover(world, tileX, tileY);
+      const leafTexture = leafId && this.biomeTexture(leafId, this.textures[leafId], tileX);
+      if (leafTexture) this.drawBlockTexture(leafTexture, sx + this.leafSwayOffset(tileX, tileY, size), sy, size, finalLightFactor);
       return;
     }
     if (meta?.axis === 'x' && texture) {
@@ -1735,27 +1816,45 @@ drawStars() {
       chestTexture = this.textures[`${type.id}_${meta.chestType}`];
     }
 
-    if (texture || chestTexture) {
-      const drawTexture = chestTexture || texture;
-      const flip = type.shape === 'stairs' && meta?.orient === 'left';
-      const shiftUp = type.shape === 'slab' && meta?.slabPos === 'top' ? Math.floor(size / 2) : 0;
-      const isBg = meta?.layer === 'bg';
-
+    // An open trapdoor stands on end against one side of its cell.
+    if (type.id.endsWith('_trapdoor') && meta?.open && texture) {
+      const half = Math.floor(size * (type.thickness ?? 8) / 16);
       ctx.save();
-      if (isBg) ctx.globalAlpha = 0.7;
-      ctx.translate(flip ? sx + size : sx, sy - shiftUp);
-      if (flip) ctx.scale(-1, 1);
-      this.drawBlockTexture(drawTexture, 0, 0, size, isBg ? finalLightFactor * 0.6 : finalLightFactor);
+      // Rotate the hatch (drawn along the bottom of its texture) a quarter turn.
+      if (meta.hinge === 'left') {
+        ctx.translate(sx + half, sy);
+        ctx.rotate(Math.PI / 2);
+        ctx.translate(0, -size + half);
+      } else {
+        ctx.translate(sx + size - half, sy + size);
+        ctx.rotate(-Math.PI / 2);
+        ctx.translate(0, -size + half);
+      }
+      this.drawBlockTexture(texture, 0, 0, size, finalLightFactor);
       ctx.restore();
       return;
     }
 
+    if (texture || chestTexture) {
+      const drawTexture = chestTexture || texture;
+      const flip = type.shape === 'stairs' && meta?.orient === 'left';
+      const shiftUp = type.shape === 'slab' && meta?.slabPos === 'top' ? Math.floor(size * (16 - (type.thickness ?? 8)) / 16) : 0;
+      const isBg = meta?.layer === 'bg';
+
+      ctx.save();
+      ctx.translate(flip ? sx + size : sx, sy - shiftUp);
+      if (flip) ctx.scale(-1, 1);
+      this.drawBlockTexture(drawTexture, 0, 0, size, isBg ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor);
+      ctx.restore();
+      if (type.id === 'furnace' && meta?.burn > 0 && !isBg) this.drawFurnaceFire(tileX, sx, sy, size);
+      return;
+    }
+
     const isBackground = meta?.layer === 'bg' && !isLightSource;
-    const c = darkenHex(type.color || '#999999', isBackground ? finalLightFactor * 0.6 : finalLightFactor);
+    const c = darkenHex(type.color || '#999999', isBackground ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor);
 
     ctx.save();
     ctx.translate(sx, sy);
-    if (isBackground) ctx.globalAlpha = 0.7;
 
     if (type.id === 'water') {
       ctx.fillStyle = c + '80';
@@ -1818,6 +1917,78 @@ drawStars() {
     ctx.restore();
   }
 
+  // Other multiplayer players: drawn exactly like the local player, by briefly pointing the
+  // player drawing at them (their aim stands in for the mouse, their held item for the
+  // hotbar), then a name tag above their head. Returns who was drawn.
+  drawRemotePlayers() {
+    const mp = typeof window !== 'undefined' ? window.multiplayer : null;
+    if (!mp?.active || !mp.remotePlayers.size) return [];
+    const saved = { player: this.player, input: this.input, inventory: this.inventory, getUI: this.getUI, breaker: this.breaker };
+    const drawn = [];
+    const { camera, ctx } = this;
+    for (const rp of mp.remotePlayers.values()) {
+      const sx = camera.worldToScreenX(rp.x);
+      if (sx < -200 || sx > this.canvas.width + 200) continue;
+      this.player = rp;
+      this.input = { mouse: { x: camera.worldToScreenX(rp.aimX), y: camera.worldToScreenY(rp.aimY), leftDown: rp.mining, rightDown: false } };
+      this.inventory = { getSlot: () => rp.held };
+      this.getUI = () => ({ selectedIndex: 0, inventoryOpen: false });
+      this.breaker = { state: { active: rp.mining }, getState: () => null };
+      try {
+        this.drawPlayer();
+        this.drawHurtTint(rp);
+      } finally {
+        Object.assign(this, saved);
+      }
+      drawn.push(rp);
+      // Name tag
+      const tx = Math.round(camera.worldToScreenX(rp.x + rp.width / 2));
+      const ty = Math.round(camera.worldToScreenY(rp.y)) - 34;
+      ctx.save();
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const w = ctx.measureText(rp.name).width + 10;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.fillRect(tx - w / 2, ty - 10, w, 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(rp.name, tx, ty + 1);
+      ctx.restore();
+    }
+    return drawn;
+  }
+
+  // Red edges on the screen for a moment after you're hurt.
+  drawHurtVignette() {
+    const since = this.player?.hurtAt ? performance.now() - this.player.hurtAt : Infinity;
+    if (since > 500) return;
+    const { ctx, canvas } = this;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const r = Math.hypot(canvas.width, canvas.height) / 2;
+    const g = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, r * 0.45, canvas.width / 2, canvas.height / 2, r);
+    g.addColorStop(0, 'rgba(255, 0, 0, 0)');
+    g.addColorStop(1, `rgba(200, 0, 0, ${0.5 * (1 - since / 500)})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
+
+  // A player who just took damage flashes red.
+  drawHurtTint(p) {
+    const since = p?.hurtAt ? performance.now() - p.hurtAt : Infinity;
+    if (since > 350) return;
+    const { ctx, camera } = this;
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.55 * (1 - since / 350);
+    ctx.fillStyle = '#ff2020';
+    const x = camera.worldToScreenX(p.x - 10);
+    const y = camera.worldToScreenY(p.y - 10);
+    ctx.fillRect(x, y, (p.width + 20) * camera.zoom, (p.height + 14) * camera.zoom);
+    ctx.restore();
+  }
+
   drawPlayer() {
     const { ctx, camera, player, world } = this;
     const centerX = Math.round(camera.worldToScreenX(player.x + player.width / 2));
@@ -1829,7 +2000,8 @@ drawStars() {
     ctx.save();
     if (combinedLightFactor < 1) ctx.filter = `brightness(${combinedLightFactor.toFixed(2)})`;
     
-    const steveSkin = this.textures['steve'];
+    // The player's chosen skin: an imported PNG, a built-in texture, or Steve.
+    const steveSkin = player.skinImage || this.textures[player.skin] || this.textures['steve'];
     
     const headSize = 8;
     const torsoWidth = 4;
@@ -2064,7 +2236,7 @@ drawHeldItem(pose = null) {
         textureId = selectedSlot.itemId;
       }
       
-      const isTool = /(_(pickaxe|axe|shovel|sword|hoe)|^stick|^trowel)$/.test(textureId || '');
+      const isTool = /(_(pickaxe|axe|shovel|sword|hoe)|^stick)$/.test(textureId || '');
       const baseSize = Math.round(8 * camera.zoom);
       const itemSize = isTool ? Math.round(baseSize * 1.75) : baseSize;
       
@@ -2136,7 +2308,7 @@ drawHeldItem(pose = null) {
     const { camera, ctx, world, registry } = this;
     const sx = Math.round(camera.worldToScreenX(state.x * TILE_SIZE));
     const sy = Math.round(camera.worldToScreenY(state.y * TILE_SIZE));
-    const type = registry.get(world.getBlockId(state.x, state.y)) || registry.get(state.id);
+    const type = registry.get(state.wall || world.getBlockId(state.x, state.y)) || registry.get(state.id);
     
     if (!type) return;
     
@@ -2179,14 +2351,19 @@ drawHeldItem(pose = null) {
     const tileX = Math.floor(worldX / TILE_SIZE);
     const tileY = Math.floor(worldY / TILE_SIZE);
     
-    if (world.inBounds(tileX, tileY) && world.getBlockId(tileX, tileY) !== 'air') {
+    if (!world.inBounds(tileX, tileY)) return;
+    // An empty cell gets a fainter outline when the held block can go there.
+    const empty = world.getBlockId(tileX, tileY) === 'air';
+    const placeable = empty && ui.canPlaceAt?.(tileX, tileY);
+    if (!empty || placeable) {
       const playerCenterX = player.x + player.width / 2;
       const playerCenterY = player.y + player.height / 2;
       const dx = (tileX * TILE_SIZE + TILE_SIZE / 2) - playerCenterX;
       const dy = (tileY * TILE_SIZE + TILE_SIZE / 2) - playerCenterY;
       const distance = Math.sqrt(dx * dx + dy * dy);
       
-      if (distance <= 5 * TILE_SIZE) {
+      if (distance <= (ui.reach ?? 5) * TILE_SIZE) {
+        if (placeable) ctx.globalAlpha = 0.55;
         const sx = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
         const sy = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
         const size = Math.round(TILE_SIZE * camera.zoom);
@@ -2194,6 +2371,7 @@ drawHeldItem(pose = null) {
         ctx.strokeStyle = '#888888';
         ctx.lineWidth = 2;
         ctx.strokeRect(sx, sy, size, size);
+        ctx.globalAlpha = 1;
       }
     }
   }

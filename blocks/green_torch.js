@@ -8,6 +8,6 @@ export default {
   lightLevel: 15,
   lightColor: [0.24, 1.00, 0.31],
   hardness: 0.1,
-  maxStack: 64,
+  maxStack: 24,
   needsSupport: true
 };

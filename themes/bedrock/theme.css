@@ -319,6 +319,10 @@
 .chat-input {
   height: 44px;
   padding: 12px 12px 10px;
+}
+
+.chat-input,
+.chat-container .suggestions-dropdown {
   border: 2px solid #8c8d91;
 }
 

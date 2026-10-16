@@ -57,6 +57,8 @@
   --inventory-padding: 16px;
   --inventory-section-gap: 16px;
   --inventory-title-size: 18px;
+  --creative-search-height: 28px;
+  --recipe-row-height: 34px;
   --inventory-title-align: left;
   --crafting-gap: 16px;
   --creative-tab-width: calc(var(--slot-size) + 8px);
@@ -297,7 +299,9 @@ body.game-paused .menu-background,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 20px;
+  /* Same width as the menu buttons, so it lines up under them. */
+  width: var(--menu-buttons-width);
+  margin: 20px auto 0;
 }
 
 .version-number {
@@ -1166,6 +1170,31 @@ body.game-paused .menu-background,
   align-self: flex-start;
 }
 
+.inventory-title-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  align-self: stretch;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.minecraft-button.clear-inventory-button {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  padding: 4px 10px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* Images and slots never get dragged like on a web page (the game handles dragging). */
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  user-select: none;
+}
+
 .inventory-grid {
   display: flex;
   flex-direction: column;
@@ -1322,10 +1351,18 @@ body.game-paused .menu-background,
   margin: 0;
 }
 
+/* Fixed height, so an empty or wrapped title can't make the panel a fraction taller. */
+.creative-header {
+  height: var(--creative-search-height);
+}
+
 .creative-search {
-  display: none;
+  /* Always takes its space (just hidden off the search tab), so the header, title and
+     grid sit in the same place on every tab. */
+  display: block;
+  visibility: hidden;
   width: 50%;
-  height: 28px;
+  height: var(--creative-search-height);
   padding: 4px 8px 2px;
   font-size: 15px;
   outline: none;
@@ -1340,7 +1377,15 @@ body.game-paused .menu-background,
 }
 
 #inventory[data-creative-tab="search"] .creative-search {
-  display: block;
+  visibility: visible;
+}
+
+/* On the creative Inventory tab the title sits in a row as tall as the search bar, centred
+   like the other tabs' titles, so it doesn't jump when switching tabs. */
+#inventory.creative-mode .inventory-header .inventory-title {
+  display: flex;
+  align-items: center;
+  min-height: var(--creative-search-height);
 }
 
 #inventory.creative-mode:not([data-creative-tab="inventory"]) .inventory-header,
@@ -1349,7 +1394,7 @@ body.game-paused .menu-background,
 }
 
 #inventory.creative-mode .inventory-content {
-  width: calc(9 * var(--slot-size) + 8 * var(--slot-gap) + 2 * var(--inventory-padding) + var(--creative-scroll-room) + 4px);
+  width: calc(9 * var(--slot-size) + 8 * var(--slot-gap) + 2 * var(--inventory-padding) + 2 * var(--creative-scroll-room) + 4px);
 }
 
 .creative-grid {
@@ -1359,7 +1404,7 @@ body.game-paused .menu-background,
   align-content: start;
   justify-content: start;
   gap: var(--slot-gap);
-  height: calc(5 * var(--slot-size) + 4 * var(--slot-gap));
+  height: calc(4 * var(--slot-size) + 3 * var(--slot-gap));
   max-height: none;
   padding-right: var(--creative-scroll-gap);
   overflow-y: scroll;
@@ -1594,4 +1639,555 @@ body.game-paused .menu-background,
 .heat-bar > div {
   height: 100%;
   background: linear-gradient(to right, #ff4a1c, #ffc23f);
+}
+
+/* "Can make" recipe list (replaces the crafting grids). */
+.recipe-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 340px;
+  max-width: 100%;
+  flex-shrink: 0;
+  text-align: left;
+}
+
+.recipe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Exactly 3 rows tall (the rest scroll), so the window doesn't change shape as recipes come and go. */
+  height: calc(3 * var(--recipe-row-height) + 2 * 2px);
+  overflow-y: auto;
+  /* No scrollbar (it still scrolls), so the rows end flush with the inventory grid's right edge. */
+  scrollbar-width: none;
+}
+
+.recipe-list::-webkit-scrollbar {
+  display: none;
+}
+
+.recipe-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: var(--recipe-row-height);
+  padding: 4px 8px;
+  cursor: pointer;
+  background: var(--slot-bg);
+  border: var(--slot-border);
+  user-select: none;
+}
+
+.recipe-row:hover {
+  background: var(--slot-bg-hover);
+  border: var(--slot-border-hover);
+}
+
+.recipe-row.selected {
+  background: var(--slot-selected-bg);
+  border: var(--slot-selected-border);
+  box-shadow: var(--slot-selected-shadow);
+}
+
+.recipe-row.locked {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.recipe-row > img {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: block;
+  image-rendering: pixelated;
+}
+
+/* Hold-to-craft: a line sweeps left to right along the bottom of the row. */
+.recipe-row::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: calc(var(--craft, 0) * 100%);
+  background: #ffffff;
+  pointer-events: none;
+}
+
+.recipe-row.holding {
+  background: var(--slot-bg-hover);
+}
+
+/* The crafted item zipping into its slot. */
+.craft-flyer {
+  position: fixed;
+  z-index: 1000000;
+  pointer-events: none;
+  image-rendering: pixelated;
+  transform-origin: top left;
+  transition: transform 0.25s cubic-bezier(0.5, 0, 0.9, 0.6);
+}
+
+.craft-landed {
+  animation: craft-landed 0.3s ease-out;
+}
+
+@keyframes craft-landed {
+  0% { transform: scale(1.18); box-shadow: inset 0 0 0 2px #ffffff; }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .craft-flyer { transition: none; }
+  .craft-landed { animation: none; }
+}
+
+.recipe-name {
+  flex: 1;
+  min-width: 0;
+  line-height: 1;
+  font-size: var(--small-font-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Ingredients sit in fixed-width cells from the right edge, so icons and counts line up
+   in columns from row to row. */
+.recipe-parts {
+  display: flex;
+  flex-direction: row-reverse;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.recipe-part {
+  display: grid;
+  grid-template-columns: 16px 2.4ch;
+  align-items: center;
+  column-gap: 3px;
+  width: calc(16px + 3px + 2.4ch);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.recipe-part img {
+  width: 16px;
+  height: 16px;
+  display: block;
+  image-rendering: pixelated;
+}
+
+.recipe-count {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.recipe-part.missing {
+  color: #ff7a6a;
+}
+
+
+
+#craftingTable .recipe-panel {
+  width: 100%;
+  margin-bottom: var(--inventory-section-gap);
+}
+
+
+/* Furnace: fuel on the left, then crucibles in a row with their outputs underneath. A thin
+   bar shows fuel left or cooking progress. */
+.furnace-layout {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: calc(var(--slot-size) * 0.8);
+  margin-bottom: var(--inventory-section-gap);
+}
+
+.furnace-grid {
+  display: grid;
+  grid-template-columns: repeat(4, var(--slot-size));
+  gap: var(--slot-gap);
+  row-gap: 8px;
+}
+
+.furnace-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.furnace-bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.furnace-bar.none {
+  visibility: hidden;
+}
+
+.furnace-bar > div {
+  height: 100%;
+  width: 0;
+  background: #ffaa3c;
+}
+
+.furnace-cell.crucible[data-state="idle"] .furnace-bar > div { background: #9a9a9a; }
+.furnace-cell.crucible[data-state="full"] .furnace-bar > div { background: #ffffff; }
+
+/* Creative: the item grid's scrollbar sits in its own room on the right, and the same room
+   is padded on the left, so the slots stay centred exactly where the inventory tab's slots
+   are. Switching tabs no longer shifts anything. */
+#inventory.creative-mode .creative-grid {
+  padding-left: var(--creative-scroll-room);
+  justify-content: center;
+}
+
+#inventory.creative-mode .inventory-hotbar {
+  justify-content: center;
+}
+
+/* The Inventory tab's content is a fraction of a pixel taller than the box, which popped up
+   a scrollbar and squeezed every slot 2px left. Creative content always fits, so no scrollbar. */
+#inventory.creative-mode .inventory-content {
+  overflow: hidden;
+}
+
+/* The creative item panel and the inventory (header + rows) share one grid cell. The panel
+   keeps its space on the Inventory tab (just invisible), so the box is always the same size
+   and the hotbar never moves, not even by a fraction of a pixel. */
+#inventory.creative-mode .inventory-content {
+  display: grid;
+}
+
+#inventory.creative-mode .creative-panel,
+#inventory.creative-mode .inventory-main {
+  grid-area: 1 / 1;
+}
+
+/* Same height as the item panel, header at the top and rows at the bottom, so the two
+   inventory rows sit exactly where the creative grid's bottom two rows are. */
+#inventory.creative-mode .inventory-main {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  margin-bottom: var(--inventory-section-gap);
+  /* Its own content never sizes the cell (it was 0.4px taller than the panel), so the box,
+     hotbar and selected slot stay put to the pixel. */
+  contain: size;
+}
+
+#inventory.creative-mode .inventory-main .inventory-header {
+  margin-bottom: 0;
+}
+
+#inventory.creative-mode[data-creative-tab="inventory"] .creative-panel.hidden {
+  display: block !important;
+  visibility: hidden;
+}
+
+#inventory.creative-mode:not([data-creative-tab="inventory"]) .inventory-main {
+  display: none;
+}
+
+/* Outputs use the theme's output-slot outline so they read as a separate group. */
+.furnace-cell.out .inventory-slot {
+  border: var(--output-slot-border);
+}
+
+/* Command signatures: one pill per argument, choices split by bars */
+.suggestion-head {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px;
+  color: var(--panel-text);
+  border-bottom: 2px solid var(--slot-bg);
+  margin-bottom: 2px;
+}
+
+.suggestion-text .cmd-arg {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  background: var(--slot-bg);
+  color: var(--panel-text);
+}
+
+.suggestion-text .cmd-arg.optional {
+  color: var(--panel-text-muted);
+}
+
+.suggestion-text .cmd-arg.active {
+  background: var(--slot-bg-hover);
+  color: var(--panel-text);
+  outline: var(--slot-border-hover);
+}
+
+.suggestion-text .cmd-sep {
+  margin: 0 4px;
+  opacity: 0.4;
+}
+
+.suggestion-item .suggestion-text:has(.cmd-arg),
+.suggestion-head .suggestion-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 2px;
+  white-space: normal;
+  overflow: visible;
+}
+
+.suggestion-text .cmd-arg {
+  white-space: nowrap;
+}
+
+/* The chat dropdown is a second box styled exactly like the chat text bar, just below it */
+.chat-container .suggestions-dropdown {
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  padding: 4px;
+  color: var(--input-text);
+  background: var(--input-bg);
+  border: var(--input-border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: 16px;
+}
+
+.chat-container .suggestion-item,
+.chat-container .suggestion-head {
+  color: var(--input-text);
+  padding: 4px 6px;
+}
+
+.chat-container .suggestion-item:hover,
+.chat-container .suggestion-item.selected {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: transparent;
+}
+
+.chat-container .suggestion-head {
+  border-bottom: var(--input-border);
+}
+
+.chat-container .suggestion-text .cmd-arg {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--input-text);
+}
+
+.chat-container .suggestion-text .cmd-arg.optional {
+  color: var(--panel-text-muted);
+}
+
+.chat-container .suggestion-text .cmd-arg.active {
+  background: rgba(255, 255, 255, 0.16);
+  outline: none;
+}
+
+/* Creative's box is wider than the slot grid (room for the item scrollbar), so pull the
+   recipe list in to end where the inventory grid's right edge is. */
+#inventory.creative-mode .recipe-panel {
+  margin-right: calc(var(--creative-scroll-room) + 2px);
+}
+
+/* --- Multiplayer and Player menus --- */
+.mp-hint {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+  text-shadow: var(--text-shadow);
+  font-size: var(--small-font-size);
+}
+
+.menu-content.mp-wide {
+  width: min(560px, 92vw);
+}
+
+.mp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 210px;
+  overflow-y: auto;
+  margin-bottom: 4px;
+}
+
+.mp-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  background: var(--card-bg);
+  border: var(--card-border);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+}
+
+.mp-list-item:hover {
+  background: var(--card-bg-hover);
+  border: var(--card-border-hover);
+}
+
+.mp-list-item.selected {
+  background: var(--card-bg-selected);
+  border: var(--card-border-selected);
+  box-shadow: var(--card-shadow-selected);
+}
+
+.mp-list-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  image-rendering: pixelated;
+  background: var(--slot-bg);
+}
+
+.mp-list-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.mp-list-name,
+.mp-list-sub {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-shadow: var(--text-shadow);
+}
+
+.mp-list-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mp-list-side {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-shadow: var(--text-shadow);
+}
+
+.mp-empty {
+  padding: 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-shadow: var(--text-shadow);
+}
+
+.mp-status {
+  min-height: 1.2em;
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-shadow: var(--text-shadow);
+}
+
+.mp-status.error {
+  color: #ff7070;
+}
+
+.mp-address-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.mp-address-row .minecraft-input {
+  flex: 1;
+  margin: 0;
+}
+
+.player-skin-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.player-skin-preview {
+  width: 40px;
+  height: 160px;
+  padding: 4px 16px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  background: var(--slot-bg);
+  border: var(--thumb-border);
+}
+
+.player-skins {
+  flex: 1;
+}
+
+/* Join/leave messages in the corner during a game. */
+.mp-toast {
+  position: fixed;
+  left: 12px;
+  bottom: 90px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.mp-toast-line {
+  padding: 4px 10px;
+  font-size: 14px;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+  background: rgba(0, 0, 0, 0.5);
+  transition: opacity 0.6s;
+}
+
+.mp-toast-line.fading {
+  opacity: 0;
+}
+
+/* App icon picker: every full block's texture. */
+.app-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 40px);
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  justify-content: center;
+}
+
+.app-icon-grid img {
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+  image-rendering: pixelated;
+  border: 2px solid transparent;
+}
+
+.app-icon-grid img:hover {
+  border-color: var(--text-muted);
+}
+
+.app-icon-grid img.selected {
+  border-color: var(--text);
+}
+
+body.hide-window-controls #window-controls {
+  display: none;
+}
+
+body.hide-window-controls #drag-zone {
+  right: 0;
 }
