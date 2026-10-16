@@ -2297,3 +2297,11 @@ body.touch-mode .menu-content { zoom: 0.8; }
   width: clamp(36px, 11vh, 52px);
   height: clamp(36px, 11vh, 52px);
 }
+
+.touch-chat {
+  position: absolute;
+  top: clamp(8px, 3vh, 20px);
+  right: calc(2 * clamp(8px, 3vh, 20px) + clamp(36px, 11vh, 52px));
+  width: clamp(36px, 11vh, 52px);
+  height: clamp(36px, 11vh, 52px);
+}
