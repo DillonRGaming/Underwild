@@ -2262,7 +2262,9 @@ setupTouchControls({
   input,
   keybinds,
   inGame: () => !!(world && player && !isLoading && !gamePaused && !inventoryOpen && !openContainer && !textInputMode),
-  onInventory: () => window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.inventory, key: 'e', bubbles: true }))
+  onInventory: () => window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.inventory, key: 'e', bubbles: true })),
+  uiOpen: () => !!(world && (inventoryOpen || openContainer)),
+  closeUI: () => closeInventory()
 });
 
 camera = new Camera();
@@ -3719,12 +3721,6 @@ window.addEventListener('mouseup', (e) => {
 
 // Stop the browser's own image dragging (the ghost picture you get on Windows).
 window.addEventListener('dragstart', (e) => e.preventDefault());
-
-document.getElementById('clearInventoryButton')?.addEventListener('click', (e) => {
-  e.stopPropagation();
-  applyPlayerAction({ k: 'clear' });
-});
-document.getElementById('clearInventoryButton')?.addEventListener('mousedown', (e) => e.stopPropagation());
 
 window.addEventListener('contextmenu', (e) => {
   if (e.target.closest?.('.inventory-overlay, #hotbar')) e.preventDefault();

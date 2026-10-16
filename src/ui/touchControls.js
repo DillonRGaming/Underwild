@@ -20,7 +20,7 @@ export function isTouchDevice() {
     && window.matchMedia?.('(pointer: coarse)').matches;
 }
 
-export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory }) {
+export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, uiOpen, closeUI }) {
   if (!isTouchDevice() || document.getElementById('touchControls')) return null;
   document.body.classList.add('touch-mode');
 
@@ -161,10 +161,20 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     window.dispatchEvent(new KeyboardEvent('keyup', { code: `Digit${n}`, key: String(n), bubbles: true }));
   }, { passive: false });
 
+  // An X to close the inventory and other screens (there's no Escape key on a phone).
+  const close = document.createElement('button');
+  close.className = 'touch-btn touch-close hidden';
+  close.innerHTML = '&#10005;';
+  close.addEventListener('click', (e) => { e.stopPropagation(); closeUI(); });
+  close.addEventListener('mousedown', (e) => e.stopPropagation());
+  close.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+  document.body.appendChild(close);
+
   // Show the controls only while playing, and keep the crosshair on the aim point.
   const tick = () => {
     const playing = inGame();
     root.classList.toggle('hidden', !playing);
+    close.classList.toggle('hidden', !uiOpen());
     if (playing) {
       const { clientX, clientY } = aimClient();
       crosshair.style.transform = `translate(${clientX}px, ${clientY}px)`;

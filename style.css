@@ -1170,23 +1170,6 @@ body.game-paused .menu-background,
   align-self: flex-start;
 }
 
-.inventory-title-stack {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  align-self: stretch;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.minecraft-button.clear-inventory-button {
-  width: auto;
-  min-width: 0;
-  height: auto;
-  padding: 4px 10px;
-  font-size: 14px;
-  white-space: nowrap;
-}
 
 /* Images and slots never get dragged like on a web page (the game handles dragging). */
 img {
@@ -2290,3 +2273,22 @@ body.touch-mode {
 body.touch-mode .desktop-only,
 body.touch-mode #window-controls,
 body.touch-mode #drag-zone { display: none !important; }
+
+/* Phones: a smaller inventory and menus, so they fit a landscape screen. */
+body.touch-mode {
+  --slot-size: clamp(30px, 9.5vh, 48px);
+  --item-size: calc(var(--slot-size) * 0.66);
+  --chest-slot-size: clamp(28px, 8.5vh, 40px);
+  --chest-item-size: calc(var(--chest-slot-size) * 0.66);
+}
+body.touch-mode .menu-content { zoom: 0.8; }
+
+/* Phones have no Escape key: an X closes the inventory, chests, furnaces... */
+.touch-close {
+  position: fixed;
+  top: clamp(8px, 3vh, 20px);
+  right: clamp(8px, 3vh, 20px);
+  z-index: 50;
+  font-size: 22px;
+}
+.touch-close.hidden { display: none; }
