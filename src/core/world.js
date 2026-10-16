@@ -523,7 +523,9 @@ export class World {
       for (let y = 0; y < height; y++) {
         const cell = chunk.cells[y * chunkSize + rx];
         const type = cell ? this.registry.get(cell.id) : null;
-        if (sky > 0 && y > surface && !(type && type.solid)) sky = Math.max(0, sky - 1);
+        // Underground air dims the daylight coming down, unless its wall was dug out:
+        // then it's open to the sky, like outdoors.
+        if (sky > 0 && y > surface && !(type && type.solid) && !cell?.meta?.noWall) sky = Math.max(0, sky - 1);
         lightMap[y * width + x] = sky;
         blockLightMap[y * width + x] = 0;
         if (sky > 0 && type && type.solid) {

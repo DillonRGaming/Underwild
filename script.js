@@ -3821,7 +3821,11 @@ window.addEventListener('contextmenu', (e) => {
   if (e.target.closest?.('.inventory-overlay, #hotbar')) e.preventDefault();
 });
 
-let wallPressTile = null;
+// True while a press that started on an empty cell (a wall) is held: dragging then keeps
+// digging out walls. A press that started on a block doesn't, so the wall behind a block
+// you just broke stays.
+let wallPress = false;
+window.addEventListener('mouseup', (e) => { if (e.button === 0) wallPress = false; });
 let lastHitTime = 0;
 const HIT_REACH = 4;          // blocks
 const HIT_COOLDOWN_MS = 400;
@@ -3861,8 +3865,8 @@ canvas.addEventListener('mousedown', (e) => {
     const { screenX, screenY } = getScreenCoordsFromEvent(e);
     const { tileX, tileY } = getMouseTileFromRaw(screenX, screenY);
     const targetId = world.getBlockId(tileX, tileY);
-    wallPressTile = targetId === 'air' ? tileX + ',' + tileY : null;
-    if (tryHitPlayer(screenX, screenY)) wallPressTile = null;
+    wallPress = targetId === 'air';
+    if (tryHitPlayer(screenX, screenY)) wallPress = false;
     if (targetId === 'air' || NATURE_BLOCKS.has(targetId)) player.playArmAction('attack');
   }
   if (!world || !player || gamePaused || isLoading || inventoryOpen || openContainer || e.button !== 2) return;
@@ -5220,7 +5224,7 @@ function initializeGameEngine() {
         // Mining an empty cell digs out the natural wall behind it, but only on a fresh
         // click there (or in background mode), so holding the button through a block you
         // just broke doesn't keep eating the wall behind it.
-        const wallId = world.getBlockId(tileX, tileY) === 'air' && (backgroundBuild || wallPressTile === tileX + ',' + tileY)
+        const wallId = world.getBlockId(tileX, tileY) === 'air' && (backgroundBuild || wallPress)
           ? window.renderer?.naturalWallId(tileX, tileY) : null;
         breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), wallId);
       } else {
