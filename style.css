@@ -977,6 +977,10 @@ body.game-paused .menu-background,
 
 .ui-health,
 .ui-hunger {
+  /* Worked out here (not on :root) so a smaller hotbar on phones moves them too. They line
+     up with the first and last slot, just inside the hotbar's frame. */
+  --stats-bottom: calc(var(--hotbar-bottom) + var(--hotbar-slot-size) + 2 * var(--hotbar-padding) + 4px + var(--stats-gap-above));
+  --stats-half-width: calc((9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 - 2px);
   position: absolute;
   bottom: var(--stats-bottom);
   z-index: 5;
@@ -2295,3 +2299,11 @@ body.touch-mode .menu-content { zoom: 0.8; }
   font-size: 18px;
 }
 .touch-close.hidden { display: none; }
+
+.touch-pause {
+  position: absolute;
+  top: clamp(8px, 3vh, 20px);
+  right: clamp(8px, 3vh, 20px);
+  width: clamp(36px, 11vh, 52px);
+  height: clamp(36px, 11vh, 52px);
+}

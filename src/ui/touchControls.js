@@ -10,6 +10,7 @@ const ICONS = {
   down: '<path d="M8 13 L13 7 H10 V3 H6 V7 H3 Z"/>',
   sprint: '<path d="M2 3 L7 8 L2 13 Z M8 3 L13 8 L8 13 Z"/>',
   sword: '<path d="M13 2 H15 V4 L7 12 L5 10 Z M4 9 L7 12 L6 13 L5 12 L3 14 L2 13 L4 11 L3 10 Z"/>',
+  pause: '<path d="M4 3 H7 V13 H4 Z M9 3 H12 V13 H9 Z"/>',
   hand: '<path d="M6 2 H8 V7 H9 V5 H11 V7 H12 V6 H14 V11 L12 14 H6 L3 10 L4 9 L6 10 Z"/>'
 };
 
@@ -36,7 +37,8 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       <button class="touch-btn touch-break" data-act="break">${svg('sword')}</button>
       <button class="touch-btn touch-use" data-act="use">${svg('hand')}</button>
     </div>
-    <button class="touch-btn touch-more" data-act="inventory">&middot;&middot;&middot;</button>`;
+    <button class="touch-btn touch-more" data-act="inventory">&middot;&middot;&middot;</button>
+    <button class="touch-btn touch-pause" data-act="pause">${svg('pause')}</button>`;
   document.body.appendChild(root);
   canvas.style.touchAction = 'none';
 
@@ -119,6 +121,7 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
       else if (act === 'break') mouse('mousedown', 0);
       else if (act === 'use') mouse('mousedown', 2);
       else if (act === 'inventory') onInventory();
+      else if (act === 'pause') window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.pause, key: 'Escape', bubbles: true }));
       else if (act === 'sprint') {
         sprinting = !sprinting;
         sprintBtn.classList.toggle('on', sprinting);
