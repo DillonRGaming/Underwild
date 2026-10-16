@@ -2285,3 +2285,8 @@ body.touch-mode {
   --hotbar-slot-size: clamp(28px, 9vh, 48px);
   --hotbar-item-size: calc(var(--hotbar-slot-size) * 0.6);
 }
+
+/* Desktop-app-only settings (window controls, graphics, app icon) are hidden on phones. */
+body.touch-mode .desktop-only,
+body.touch-mode #window-controls,
+body.touch-mode #drag-zone { display: none !important; }

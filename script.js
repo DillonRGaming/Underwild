@@ -241,6 +241,21 @@ function applyAppSettings() {
 // window/taskbar icon. One big image gets shrunk by the system to odd sizes and blurs;
 // with exact sizes it can pick one that's a whole multiple of the 16px texture.
 const APP_ICON_SIZES = [16, 32, 48, 64, 128, 256];
+// Outside the desktop app (a phone or the website) fullscreen is the browser's own.
+// Browsers only allow it from a tap, so a saved "on" is applied at the first touch.
+function setBrowserFullscreen(on) {
+  const el = document.documentElement;
+  try {
+    if (on && !document.fullscreenElement) el.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => {});
+    else if (!on && document.fullscreenElement) document.exitFullscreen?.()?.catch(() => {});
+  } catch (e) {}
+}
+if (!window.electronAPI?.app) {
+  const applySaved = () => { if (prefs.getBool('appFullscreen', false)) setBrowserFullscreen(true); };
+  window.addEventListener('touchend', applySaved, { passive: true });
+  window.addEventListener('click', applySaved);
+}
+
 function setAppIcon(img) {
   const data = APP_ICON_SIZES.map(size => {
     const canvas = document.createElement('canvas');
@@ -733,7 +748,8 @@ class MenuManager {
         break;
       case 'app-fullscreen':
         prefs.set('appFullscreen', button.dataset.value === 'on');
-        window.electronAPI?.app?.setFullscreen(button.dataset.value === 'on');
+        if (window.electronAPI?.app) window.electronAPI.app.setFullscreen(button.dataset.value === 'on');
+        else setBrowserFullscreen(button.dataset.value === 'on');
         this.showAppOptions();
         break;
       case 'multiplayer':
