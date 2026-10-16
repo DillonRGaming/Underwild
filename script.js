@@ -299,7 +299,7 @@ function showToast(text) {
 // --- Zoom and GUI scale -------------------------------------------------------------------
 // Zoom: how close the camera is (- / + keys, or the phone's on-screen buttons).
 // GUI scale: the size of the hotbar, inventory, menus and phone controls (Options > Graphics).
-const ZOOM_MIN = 1.5;
+const ZOOM_MIN = 2.5;
 const ZOOM_MAX = 6;
 const ZOOM_STEP = 0.5;
 const GUI_SCALES = [0.75, 0.9, 1, 1.15, 1.3];
@@ -2341,7 +2341,7 @@ setupTouchControls({
 });
 
 camera = new Camera();
-camera.zoom = Math.max(1.5, Math.min(6, prefs.getNumber('cameraZoom', 3)));
+camera.zoom = Math.max(2.5, Math.min(6, prefs.getNumber('cameraZoom', 3)));
 window.camera = camera;
 
 renderer = new Renderer(ctx, canvas, null, registry, camera, input, null, null, null, getRendererUI);
