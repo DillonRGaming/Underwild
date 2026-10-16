@@ -23,6 +23,7 @@ import { trunkLeafCover, isTrunkId } from './src/logic/trunkLeaves.js';
 import { ExplosionFX } from './src/entities/explosion_fx.js';
 import { PrimedExplosive } from './src/entities/primed_explosive.js';
 import { isExplosive } from './blocks/explosive.js';
+import { setupTouchControls } from './src/ui/touchControls.js';
 import { ModManager } from './mods/index.js';
 import { SaveManager } from './src/core/saveManager.js';
 import { Preferences } from './src/core/preferences.js';
@@ -2240,6 +2241,13 @@ window.addEventListener('resize', () => {
 input = new Input(canvas);
 input.mouse.x = canvas.width / 2;
 input.mouse.y = canvas.height / 2;
+setupTouchControls({
+  canvas,
+  input,
+  keybinds,
+  inGame: () => !!(world && player && !isLoading && !gamePaused && !inventoryOpen && !openContainer && !textInputMode),
+  onInventory: () => window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.inventory, key: 'e', bubbles: true }))
+});
 
 camera = new Camera();
 window.camera = camera;

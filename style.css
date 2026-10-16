@@ -2191,3 +2191,97 @@ body.hide-window-controls #window-controls {
 body.hide-window-controls #drag-zone {
   right: 0;
 }
+
+/* --- Touch controls (phones / tablets), minimal style ---
+   Sized from the screen height so they fit a landscape phone and grow on tablets. */
+#touchControls {
+  --tb: clamp(44px, 15vh, 76px);   /* button size */
+  --tg: clamp(6px, 2vh, 12px);     /* gap between buttons */
+  --te: clamp(10px, 4vh, 32px);    /* distance from the screen edge */
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#touchControls.hidden { display: none; }
+#touchControls .touch-btn, #touchControls .touch-pad { pointer-events: auto; }
+
+.touch-btn {
+  width: var(--tb);
+  height: var(--tb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--fill, rgba(0, 0, 0, 0.35));
+  border: 2px solid var(--line, #fff);
+  border-radius: var(--radius, 0);
+  color: var(--line, #fff);
+  touch-action: none;
+}
+.touch-btn svg { width: 45%; height: 45%; }
+.touch-btn.pressed { background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
+
+.touch-pad {
+  position: absolute;
+  left: var(--te);
+  bottom: var(--te);
+  width: clamp(110px, 38vh, 190px);
+  height: clamp(110px, 38vh, 190px);
+  background: var(--fill, rgba(0, 0, 0, 0.35));
+  border: 2px solid var(--line-soft, rgba(255, 255, 255, 0.35));
+  border-radius: var(--radius, 0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+.touch-pad-stick {
+  width: 44%;
+  height: 44%;
+  background: var(--fill-strong, rgba(0, 0, 0, 0.6));
+  border: 2px solid var(--line, #fff);
+  border-radius: var(--radius, 0);
+  pointer-events: none;
+}
+
+/* Right side, laid out like Minecraft's: jump, down and use in a column on the edge,
+   sprint and break half a step down in the column to their left. */
+.touch-buttons .touch-btn { position: absolute; }
+.touch-use    { right: var(--te); bottom: var(--te); }
+.touch-down   { right: var(--te); bottom: calc(var(--te) + (var(--tb) + var(--tg))); }
+.touch-jump   { right: var(--te); bottom: calc(var(--te) + 2 * (var(--tb) + var(--tg))); }
+.touch-break  { right: calc(var(--te) + var(--tb) + var(--tg)); bottom: calc(var(--te) + 0.5 * (var(--tb) + var(--tg))); }
+.touch-sprint { right: calc(var(--te) + var(--tb) + var(--tg)); bottom: calc(var(--te) + 1.5 * (var(--tb) + var(--tg))); opacity: 0.55; }
+.touch-sprint.on { opacity: 1; background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
+
+.touch-more {
+  position: absolute;
+  left: calc(50% + (9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 + var(--hotbar-padding) + 6px);
+  bottom: var(--hotbar-bottom);
+  width: calc(var(--hotbar-slot-size) + 2 * var(--hotbar-padding) + 4px);
+  height: calc(var(--hotbar-slot-size) + 2 * var(--hotbar-padding) + 4px);
+  font-size: 20px;
+  letter-spacing: 1px;
+}
+
+.touch-crosshair {
+  position: absolute;
+  left: -10px;
+  top: -10px;
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--line, #fff), var(--line, #fff)) center / 2px 20px no-repeat,
+    linear-gradient(var(--line, #fff), var(--line, #fff)) center / 20px 2px no-repeat;
+  filter: drop-shadow(0 0 1px #000);
+}
+
+/* Smaller hotbar on phones so it fits between the pad and the buttons. */
+body.touch-mode {
+  --hotbar-slot-size: clamp(28px, 9vh, 48px);
+  --hotbar-item-size: calc(var(--hotbar-slot-size) * 0.6);
+}
