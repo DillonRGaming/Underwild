@@ -4615,6 +4615,26 @@ function ensureRecipeLists() {
       recipeHold = { key: entry.key, entry, overlay, start: performance.now(), all: e.shiftKey };
     });
     list.addEventListener('mouseleave', () => { recipeHold = null; });
+    // Phones: a touch only becomes a mouse press when it ends, so holding never worked.
+    // Hold on a recipe with your finger instead; lifting it (or sliding off the row) stops.
+    list.addEventListener('touchstart', (e) => {
+      const row = e.target.closest('.recipe-row');
+      if (!row) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const entry = list._entries?.find(x => x.key === row.dataset.key);
+      if (!entry || !entry.ok) return;
+      recipeHold = { key: entry.key, entry, overlay, start: performance.now(), all: false };
+    }, { passive: false });
+    list.addEventListener('touchmove', (e) => {
+      if (!recipeHold) return;
+      const t = e.changedTouches[0];
+      const row = document.elementFromPoint(t.clientX, t.clientY)?.closest?.('.recipe-row');
+      if (!row || row.dataset.key !== recipeHold.key) recipeHold = null;
+    }, { passive: true });
+    const endTouch = () => { recipeHold = null; };
+    list.addEventListener('touchend', endTouch);
+    list.addEventListener('touchcancel', endTouch);
   }
 }
 
