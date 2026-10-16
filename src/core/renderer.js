@@ -208,6 +208,13 @@ export class Renderer {
         // Water flowing through a plant: solid water behind it (so the colour matches the
         // water around it), then a see-through layer in front so the plant sits in the water.
         const plantWater = cell.meta?.water > 0 && cell.id !== 'water';
+        // Water flowing past a background block is just water in front of a wall: drawn
+        // once, like any other water (not twice like water in a plant, which looked darker).
+        if (plantWater && cell.meta?.layer === 'bg') {
+          this.drawBlock(x, y, t, cell.meta);
+          this.drawBlock(x, y, this.registry.get('water'), { mass: cell.meta.water });
+          continue;
+        }
         if (plantWater) this.drawBlock(x, y, this.registry.get('water'), { mass: cell.meta.water });
         this.drawBlock(x, y, t, cell.meta || {});
         if (plantWater) {

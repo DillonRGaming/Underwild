@@ -6,7 +6,7 @@ import { gameClock } from '../core/gameClock.js';
 // of sloshing. Only "awake" cells are simulated, so still lakes cost nothing.
 
 export const WATER_LEVELS = 16;
-const MAX_UPDATES_PER_STEP = 5000;
+const MAX_UPDATES_PER_STEP = 20000;
 const MAX_MASS = 1;
 const MAX_COMPRESS = 0.02;
 const MIN_MASS = 0.03;     // less than this dries up
@@ -320,5 +320,20 @@ export class WaterSim {
       }
     }
     this.wakeAround(x, y);
+  }
+
+  // A chunk just loaded: wake its water and the water at the edges of its neighbours, which
+  // went to sleep against it while it wasn't loaded (it couldn't flow into it).
+  wakeChunk(chunkX) {
+    const world = this.world;
+    const size = world.chunkSize;
+    const x0 = chunkX * size - 1;
+    const x1 = (chunkX + 1) * size;
+    for (let x = x0; x <= x1; x++) {
+      if (!world.isChunkLoaded(Math.floor(x / size))) continue;
+      for (let y = 0; y < world.height; y++) {
+        if (waterMass(world.getCell(x, y)) > 0) this.active.add(this.key(x, y));
+      }
+    }
   }
 }

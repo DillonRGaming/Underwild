@@ -223,6 +223,7 @@ export class World {
 
     this.chunks.set(this.chunkKey(chunkX), chunk);
     this._ghostCells.delete(chunkX);
+    this.water?.wakeChunk(chunkX);
     this._touchChunkLRU(chunkX);
     this._enforceChunkLimit();
 
@@ -250,6 +251,7 @@ export class World {
   setChunk(chunkX, cells, dirty = true) {
     this.chunks.set(this.chunkKey(chunkX), { chunkX, cells, dirty });
     this._touchChunkLRU(chunkX);
+    this.water?.wakeChunk(chunkX);
   }
 
   resetChunks() {
