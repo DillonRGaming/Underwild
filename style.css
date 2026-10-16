@@ -2247,9 +2247,10 @@ body.hide-window-controls #drag-zone {
 .touch-more {
   position: absolute;
   left: calc(50% + (9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 + var(--hotbar-padding) + 6px);
-  bottom: var(--hotbar-bottom);
-  width: calc(var(--hotbar-slot-size) + 2 * var(--hotbar-padding) + 4px);
-  height: calc(var(--hotbar-slot-size) + 2 * var(--hotbar-padding) + 4px);
+  /* The size of one hotbar slot, level with the slots. */
+  bottom: calc(var(--hotbar-bottom) + var(--hotbar-padding) + 2px);
+  width: var(--hotbar-slot-size);
+  height: var(--hotbar-slot-size);
   font-size: 20px;
   letter-spacing: 1px;
 }
