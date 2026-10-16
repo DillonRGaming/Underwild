@@ -2215,8 +2215,8 @@ body.hide-window-controls #drag-zone {
   position: absolute;
   left: var(--te);
   bottom: var(--te);
-  width: clamp(110px, 38vh, 190px);
-  height: clamp(110px, 38vh, 190px);
+  width: clamp(90px, 31vh, 160px);
+  height: clamp(90px, 31vh, 160px);
   background: var(--fill, rgba(0, 0, 0, 0.35));
   border: 2px solid var(--line-soft, rgba(255, 255, 255, 0.35));
   border-radius: var(--radius, 0);
