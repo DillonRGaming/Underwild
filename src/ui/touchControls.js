@@ -32,6 +32,8 @@ const ICONS = {
   sprint: '<path d="M2 3 L7 8 L2 13 Z M8 3 L13 8 L8 13 Z"/>',
   pickaxe: '<path d="M3 3 H11 L14 6 V8 L11 5 H8 L13 13 L11 14 L6 6 L3 6 Z"/>',
   block: '<path d="M3 3 H13 V13 H3 Z M5 5 V11 H11 V5 Z"/>',
+  plus: '<path d="M7 3 H9 V7 H13 V9 H9 V13 H7 V9 H3 V7 H7 Z"/>',
+  minus: '<path d="M3 7 H13 V9 H3 Z"/>',
   chat: '<path d="M2 3 H14 V11 H7 L4 14 V11 H2 Z"/>',
   pause: '<path d="M4 3 H7 V13 H4 Z M9 3 H12 V13 H9 Z"/>'
 };
@@ -62,6 +64,8 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     <div class="touch-pad touch-aim"><div class="touch-pad-stick"></div></div>
     <button class="touch-btn touch-mode-btn" data-act="mode">${svg('pickaxe')}</button>
     <button class="touch-btn touch-more" data-act="inventory">&middot;&middot;&middot;</button>
+    <button class="touch-btn touch-zoom-out" data-act="zoom-out">${svg('minus')}</button>
+    <button class="touch-btn touch-zoom-in" data-act="zoom-in">${svg('plus')}</button>
     <button class="touch-btn touch-chat" data-act="chat">${svg('chat')}</button>
     <button class="touch-btn touch-pause" data-act="pause">${svg('pause')}</button>`;
   document.body.appendChild(root);
@@ -225,6 +229,8 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
         modeBtn.classList.toggle('on', stickMode === 'place');
         if (acting) { stopActing(); if (aimVec.len >= AIM_DEAD_ZONE) { acting = stickMode; mouse('mousedown', acting === 'break' ? 0 : 2); } }
       }
+      else if (act === 'zoom-in') window.changeZoom?.(1);
+      else if (act === 'zoom-out') window.changeZoom?.(-1);
       else if (act === 'chat') window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.chat, key: 't', bubbles: true }));
       else if (act === 'pause') window.dispatchEvent(new KeyboardEvent('keydown', { code: keybinds.pause, key: 'Escape', bubbles: true }));
       else if (act === 'sprint') {

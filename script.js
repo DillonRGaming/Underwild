@@ -293,7 +293,34 @@ function showToast(text) {
   loadAudioSettings();
   loadKeybinds();
   loadGameSettings();
+  applyViewSettings();
 })();
+
+// --- Zoom and GUI scale -------------------------------------------------------------------
+// Zoom: how close the camera is (- / + keys, or the phone's on-screen buttons).
+// GUI scale: the size of the hotbar, inventory, menus and phone controls (Options > Graphics).
+const ZOOM_MIN = 1.5;
+const ZOOM_MAX = 6;
+const ZOOM_STEP = 0.5;
+const GUI_SCALES = [0.75, 0.9, 1, 1.15, 1.3];
+
+function applyViewSettings() {
+  if (camera) camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prefs.getNumber('cameraZoom', 3)));
+  document.documentElement.style.setProperty('--gui-scale', String(prefs.getNumber('guiScale', 1)));
+}
+
+function changeZoom(direction) {
+  if (!camera) return;
+  camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, camera.zoom + direction * ZOOM_STEP));
+  prefs.set('cameraZoom', camera.zoom);
+  showToast(`Zoom: ${Math.round(camera.zoom / 3 * 100)}%`);
+}
+window.changeZoom = changeZoom;
+
+function setGuiScale(scale) {
+  prefs.set('guiScale', scale);
+  applyViewSettings();
+}
 
 const registry = new BlockRegistry();
 registerAllBlocks(registry);
@@ -805,6 +832,11 @@ class MenuManager {
         break;
       case 'graphics-options':
         this.showMenu('graphicsOptionsMenu');
+        this.markGuiScale();
+        break;
+      case 'gui-scale':
+        setGuiScale(Number(button.dataset.value));
+        this.markGuiScale();
         break;
       case 'background-options':
         this.showMenu('backgroundOptionsMenu');
@@ -1697,6 +1729,14 @@ class MenuManager {
     }
   }
 
+  markGuiScale() {
+    const scale = prefs.getNumber('guiScale', 1);
+    document.querySelectorAll('#guiScale .minecraft-button').forEach(b => {
+      if (Number(b.dataset.value) === scale) b.setAttribute('data-selected', 'true');
+      else b.removeAttribute('data-selected');
+    });
+  }
+
   // Phones: "Tap" (tap to place, hold to break) or "Joystick" (an aim stick).
   markTouchAimMode() {
     const mode = prefs.get('touchAimMode') || 'tap';
@@ -2300,6 +2340,7 @@ setupTouchControls({
 });
 
 camera = new Camera();
+camera.zoom = Math.max(1.5, Math.min(6, prefs.getNumber('cameraZoom', 3)));
 window.camera = camera;
 
 renderer = new Renderer(ctx, canvas, null, registry, camera, input, null, null, null, getRendererUI);
@@ -4106,6 +4147,13 @@ window.addEventListener('keydown', (e) => {
   if (!world || !player || isLoading || isEditableTarget(e.target)) return;
 
   const uiOpen = inventoryOpen || !!openContainer;
+
+  // - and + zoom the camera out and in.
+  if (!uiOpen && !gamePaused && (e.code === 'Minus' || e.code === 'NumpadSubtract' || e.code === 'Equal' || e.code === 'NumpadAdd')) {
+    changeZoom(e.code === 'Minus' || e.code === 'NumpadSubtract' ? -1 : 1);
+    e.preventDefault();
+    return;
+  }
 
   if (e.code === keybinds.pause) {
     if (uiOpen) closeInventory();

@@ -979,8 +979,8 @@ body.game-paused .menu-background,
 .ui-hunger {
   /* Worked out here (not on :root) so a smaller hotbar on phones moves them too. They line
      up with the first and last slot, just inside the hotbar's frame. */
-  --stats-bottom: calc(var(--hotbar-bottom) + var(--hotbar-slot-size) + 2 * var(--hotbar-padding) + 4px + var(--stats-gap-above));
-  --stats-half-width: calc((9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 - 2px);
+  --stats-bottom: calc(var(--hotbar-bottom) + (var(--hotbar-slot-size) + 2 * var(--hotbar-padding) + 4px + var(--stats-gap-above)) * var(--gui-scale, 1));
+  --stats-half-width: calc(((9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 - 2px) * var(--gui-scale, 1));
   position: absolute;
   bottom: var(--stats-bottom);
   z-index: 5;
@@ -2371,3 +2371,41 @@ body.touch-mode .touch-only { display: block; }
   z-index: 20;
 }
 .touch-magnifier.hidden { display: none; }
+
+/* --- GUI scale (Options > Graphics) ---
+   Each piece is scaled about the point it's anchored to, so the hotbar stays centred on the
+   bottom, the stats stay on its corners, and so on. Clicks still land on the right slots. */
+#hotbar { scale: var(--gui-scale, 1); transform-origin: left bottom; }
+.ui-health { scale: var(--gui-scale, 1); transform-origin: left bottom; }
+.ui-hunger { scale: var(--gui-scale, 1); transform-origin: right bottom; }
+.chat-container { scale: var(--gui-scale, 1); transform-origin: left top; }
+.inventory-overlay > .inventory-frame,
+.inventory-overlay > .inventory-content,
+.menu-content { scale: var(--gui-scale, 1); }
+.dragging-item { scale: var(--gui-scale, 1); transform-origin: left top; }
+.touch-more {
+  left: calc(50% + var(--hotbar-shift, 0px) + ((9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 + var(--hotbar-padding) + 6px) * var(--gui-scale, 1)) !important;
+  margin-left: 0 !important;
+  bottom: calc(var(--hotbar-bottom) + (var(--hotbar-padding) + 2px) * var(--gui-scale, 1)) !important;
+  scale: var(--gui-scale, 1);
+  transform-origin: left bottom;
+}
+#touchControls {
+  --tb: calc(clamp(44px, 15vh, 76px) * var(--gui-scale, 1));
+  --tg: calc(clamp(6px, 2vh, 12px) * var(--gui-scale, 1));
+}
+.touch-pad { scale: var(--gui-scale, 1); transform-origin: left bottom; }
+.touch-aim { transform-origin: right bottom; }
+#touchControls {
+  --tp: calc(clamp(90px, 31vh, 160px) * var(--gui-scale, 1));   /* joystick size */
+  --ts: calc(clamp(36px, 11vh, 52px) * var(--gui-scale, 1));    /* top-right buttons */
+  --tt: clamp(8px, 3vh, 20px);                                  /* their edge gap */
+}
+.touch-mode-btn {
+  right: calc(var(--te) + var(--tb) + var(--tg) + var(--tp) / 2 - var(--tb) * 0.35);
+  bottom: calc(var(--te) + var(--tp) + var(--tg));
+}
+.touch-pause { top: var(--tt); right: var(--tt); width: var(--ts); height: var(--ts); }
+.touch-chat  { top: var(--tt); right: calc(var(--tt) * 2 + var(--ts)); width: var(--ts); height: var(--ts); }
+.touch-zoom-in  { position: absolute; top: var(--tt); right: calc(var(--tt) * 3 + var(--ts) * 2); width: var(--ts); height: var(--ts); }
+.touch-zoom-out { position: absolute; top: var(--tt); right: calc(var(--tt) * 4 + var(--ts) * 3); width: var(--ts); height: var(--ts); }
