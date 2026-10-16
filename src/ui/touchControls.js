@@ -4,7 +4,7 @@
 //   - right stick: moves the aim around the player (like a mouse: push right and it glides
 //     right, faster the further you push) and acts while it's held: it breaks, or places
 //     the held block, as set by the small break/place button above it.
-//   - with the right stick let go, the left stick steers the aim too, without acting.
+//   - with the right stick let go, the left stick points the aim where it's pushed, without acting.
 //   - the aim stays put relative to the player, so it travels with you.
 //   - tap the world: use what's there (open a chest, light an explosive, place a block)
 //   - drag on the world: move the aim without doing anything
@@ -298,7 +298,8 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     lastTick = now;
     if (playing) {
       if (aimTouch !== null && aimVec.len >= AIM_DEAD_ZONE) steer(aimVec, dt);
-      else if (aimTouch === null && padVec.len >= PAD_DEAD_ZONE) steer(padVec, dt);
+      // The left stick points the aim straight where it's pushed (not gliding).
+      else if (aimTouch === null && padVec.len >= PAD_DEAD_ZONE) { offset.x = padVec.x * AIM_MAX; offset.y = padVec.y * AIM_MAX; }
       if (!worldTouch) applyAim();
     }
     if (playing) {
