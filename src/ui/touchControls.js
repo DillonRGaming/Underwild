@@ -1,15 +1,19 @@
 // On-screen controls for phones and tablets, driving the same keys and mouse state the
 // keyboard and mouse do:
 //   - left pad: walk (up/down climb and fly)
-//   - right stick: aim around the player, and act while it's held: it breaks, or places
-//     the held block, as set by the small break/place button above it. Let go and the aim
-//     stays where it was.
+//   - right stick: moves the aim around the player (like a mouse: push right and it glides
+//     right, faster the further you push) and acts while it's held: it breaks, or places
+//     the held block, as set by the small break/place button above it.
+//   - with the right stick let go, the left stick steers the aim too, without acting.
+//   - the aim stays put relative to the player, so it travels with you.
 //   - tap the world: use what's there (open a chest, light an explosive, place a block)
 //   - drag on the world: move the aim without doing anything
 //   - jump, down and sprint buttons; "..." for the inventory; chat and pause at the top.
 
 const PAD_DEAD_ZONE = 0.3; // share of the pad's radius before the stick counts as pushed
 const AIM_DEAD_ZONE = 0.2; // the aim stick acts once pushed further than this
+const AIM_SPEED = 1.8;     // reach-widths per second the aim moves at full push
+const AIM_MAX = 1;         // how far (in reaches) the sticks can take the aim
 const TAP_MS = 250;        // a touch on the world shorter than this (and barely moved) is a tap
 const TAP_MOVE_PX = 12;
 
@@ -72,6 +76,9 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     aim.y = (clientY - rect.top) * (canvas.height / rect.height);
     input.mouse.x = aim.x;
     input.mouse.y = aim.y;
+    // Keep it where it was touched, relative to the player, from now on.
+    const p = playerScreen?.();
+    if (p && reach()) { offset.x = (aim.x - p.x) / reach(); offset.y = (aim.y - p.y) / reach(); }
   };
   const aimClient = () => {
     const rect = canvas.getBoundingClientRect();
@@ -87,6 +94,7 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   const pad = root.querySelector('.touch-pad:not(.touch-aim)');
   const stick = pad.querySelector('.touch-pad-stick');
   let padTouch = null;
+  const padVec = { x: 0, y: 0, len: 0 };
   const movePad = (t) => {
     const rect = pad.getBoundingClientRect();
     const r = rect.width / 2;
@@ -95,6 +103,9 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     const len = Math.hypot(dx, dy);
     if (len > 1) { dx /= len; dy /= len; }
     stick.style.transform = `translate(${dx * r * 0.45}px, ${dy * r * 0.45}px)`;
+    padVec.x = dx;
+    padVec.y = dy;
+    padVec.len = Math.min(1, len);
     (dx > PAD_DEAD_ZONE ? keyDown : keyUp)(keybinds.right);
     (dx < -PAD_DEAD_ZONE ? keyDown : keyUp)(keybinds.left);
     // Up on the pad climbs ladders / flies up; down goes down.
@@ -103,6 +114,7 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   };
   const releasePad = () => {
     padTouch = null;
+    padVec.len = 0;
     stick.style.transform = '';
     for (const k of [keybinds.right, keybinds.left, keybinds.forward, keybinds.backward]) keyUp(k);
   };
@@ -132,14 +144,23 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     if (acting === 'place') mouse('mouseup', 2);
     acting = null;
   };
-  // Point the aim from the player along the stick, further the further it's pushed.
+  // The aim is kept as an offset from the player, in reaches, so it moves with them.
+  const offset = { x: 0.6, y: 0 };
   const applyAim = () => {
     const p = playerScreen();
     if (!p) return;
-    aim.x = p.x + aimVec.x * reach();
-    aim.y = p.y + aimVec.y * reach();
+    aim.x = p.x + offset.x * reach();
+    aim.y = p.y + offset.y * reach();
     input.mouse.x = aim.x;
     input.mouse.y = aim.y;
+  };
+  // Glide the offset along a stick's push; it can't go past the reach.
+  const steer = (vec, dt) => {
+    const k = vec.len * AIM_SPEED * dt / (Math.hypot(vec.x, vec.y) || 1);
+    offset.x += vec.x * k;
+    offset.y += vec.y * k;
+    const len = Math.hypot(offset.x, offset.y);
+    if (len > AIM_MAX) { offset.x *= AIM_MAX / len; offset.y *= AIM_MAX / len; }
   };
   const moveAim = (t) => {
     const rect = aimPad.getBoundingClientRect();
@@ -150,10 +171,9 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     if (len > 1) { dx /= len; dy /= len; }
     aimStick.style.transform = `translate(${dx * r * 0.45}px, ${dy * r * 0.45}px)`;
     aimVec.len = Math.min(1, len);
-    if (aimVec.len < AIM_DEAD_ZONE) return;
     aimVec.x = dx;
     aimVec.y = dy;
-    applyAim();
+    if (aimVec.len < AIM_DEAD_ZONE) return;
     if (!acting) {
       acting = stickMode;
       mouse('mousedown', acting === 'break' ? 0 : 2);
@@ -268,12 +288,19 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   });
 
   // Show the controls only while playing, and keep the crosshair on the aim point.
+  let lastTick = 0;
   const tick = () => {
     const playing = inGame();
     root.classList.toggle('hidden', !playing);
     if (!playing && acting) releaseAim();
-    // While the aim stick is held the aim follows the player as they move.
-    if (playing && aimTouch !== null && aimVec.len >= AIM_DEAD_ZONE) applyAim();
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - (lastTick || now)) / 1000);
+    lastTick = now;
+    if (playing) {
+      if (aimTouch !== null && aimVec.len >= AIM_DEAD_ZONE) steer(aimVec, dt);
+      else if (aimTouch === null && padVec.len >= PAD_DEAD_ZONE) steer(padVec, dt);
+      if (!worldTouch) applyAim();
+    }
     if (playing) {
       const { clientX, clientY } = aimClient();
       crosshair.style.transform = `translate(${clientX}px, ${clientY}px)`;
