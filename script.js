@@ -822,6 +822,11 @@ class MenuManager {
       case 'controls-options':
         this.showMenu('controlsOptionsMenu');
         this.initializeKeybindButtons();
+        this.markTouchAimMode();
+        break;
+      case 'touch-aim':
+        prefs.set('touchAimMode', button.dataset.value);
+        this.markTouchAimMode();
         break;
       case 'back-to-options':
         this.showMenu('optionsMenu');
@@ -1692,6 +1697,15 @@ class MenuManager {
     }
   }
 
+  // Phones: "Tap" (tap to place, hold to break) or "Joystick" (an aim stick).
+  markTouchAimMode() {
+    const mode = prefs.get('touchAimMode') || 'tap';
+    document.querySelectorAll('#touchAimMode .minecraft-button').forEach(b => {
+      if (b.dataset.value === mode) b.setAttribute('data-selected', 'true');
+      else b.removeAttribute('data-selected');
+    });
+  }
+
   // --- App settings --------------------------------------------------------------------
 
   showAppOptions() {
@@ -2274,7 +2288,14 @@ setupTouchControls({
     x: camera.worldToScreenX(player.x + player.width / 2),
     y: camera.worldToScreenY(player.y + player.height * 0.4)
   } : null,
-  reach: () => (creativeMode ? 8 : 5) * TILE_SIZE * camera.zoom
+  reach: () => (creativeMode ? 8 : 5) * TILE_SIZE * camera.zoom,
+  aimMode: () => prefs.get('touchAimMode') || 'tap',
+  // The tile under a point on the canvas, and where that tile is (canvas pixels).
+  tileAt: (sx, sy) => {
+    const tx = Math.floor(camera.screenToWorldX(sx) / TILE_SIZE);
+    const ty = Math.floor(camera.screenToWorldY(sy) / TILE_SIZE);
+    return { tx, ty, x: camera.worldToScreenX(tx * TILE_SIZE), y: camera.worldToScreenY(ty * TILE_SIZE), size: TILE_SIZE * camera.zoom };
+  }
 });
 
 camera = new Camera();
@@ -3240,7 +3261,8 @@ function getRendererUI() {
     primedExplosives,
     backgroundBlocks,
     keybinds,
-    showOutline,
+    // Tap mode on phones has no cursor, so no outline under it either.
+    showOutline: showOutline && !document.body.classList.contains('touch-tap-mode'),
     canPlaceAt,
     reach: creativeMode ? 64 : SURVIVAL_REACH,
     setPosition1,

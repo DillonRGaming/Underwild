@@ -1,5 +1,12 @@
 // On-screen controls for phones and tablets, driving the same keys and mouse state the
-// keyboard and mouse do:
+// keyboard and mouse do. Two ways to aim (Options > Controls > Touch Aiming):
+//
+// Tap (the default): no cursor. The left stick walks and turns your head. Tap the screen
+// to place (or use a chest, furnace...); hold it and a magnifier comes up showing the
+// block under your finger, then it breaks (drag to move along). Breaking only starts once
+// the magnifier is showing, so a tap never breaks anything.
+//
+// Joystick:
 //   - left pad: walk (up/down climb and fly)
 //   - right stick: moves the aim around the player (like a mouse: push right and it glides
 //     right, faster the further you push) and acts while it's held: it breaks, or places
@@ -16,6 +23,8 @@ const AIM_SPEED = 1.8;     // reach-widths per second the aim moves at full push
 const AIM_MAX = 1;         // how far (in reaches) the sticks can take the aim
 const TAP_MS = 250;        // a touch on the world shorter than this (and barely moved) is a tap
 const TAP_MOVE_PX = 12;
+const HOLD_MS = 350;       // tap mode: holding this long brings up the magnifier and breaks
+const MAGNIFY_TILES = 9;   // blocks across the magnifier
 
 const ICONS = {
   up: '<path d="M8 3 L13 9 H10 V13 H6 V9 H3 Z"/>',
@@ -35,7 +44,7 @@ export function isTouchDevice() {
 }
 
 // playerScreen() -> { x, y }: the player's middle in canvas pixels. reach() -> canvas pixels.
-export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, playerScreen, reach }) {
+export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, playerScreen, reach, aimMode, tileAt }) {
   if (!isTouchDevice() || document.getElementById('touchControls')) return null;
   document.body.classList.add('touch-mode');
 
@@ -44,6 +53,7 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   root.innerHTML = `
     <div class="touch-pad"><div class="touch-pad-stick"></div></div>
     <div class="touch-crosshair"></div>
+    <canvas class="touch-magnifier hidden"></canvas>
     <div class="touch-buttons">
       <button class="touch-btn touch-sprint" data-act="sprint">${svg('sprint')}</button>
       <button class="touch-btn touch-jump" data-act="jump">${svg('up')}</button>
@@ -235,6 +245,19 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
 
   // --- Aiming: touch (and drag on) the world ---
   let worldTouch = null;
+  const tapMode = () => aimMode() === 'tap';
+  const magnifier = root.querySelector('.touch-magnifier');
+  let holdTimer = null;
+  let breaking = false;
+  const finger = { x: 0, y: 0 }; // client pixels
+  const stopBreaking = () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (breaking) mouse('mouseup', 0);
+    breaking = false;
+    magnifier.classList.add('hidden');
+  };
+
   canvas.addEventListener('touchstart', (e) => {
     // Tapping the world while the chat is open closes it.
     if (!document.getElementById('chat')?.classList.contains('hidden')) {
@@ -245,8 +268,22 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     if (!inGame()) return;
     e.preventDefault();
     const t = e.changedTouches[0];
+    if (worldTouch) return; // one finger on the world at a time
     worldTouch = { id: t.identifier, x: t.clientX, y: t.clientY, start: performance.now() };
+    finger.x = t.clientX;
+    finger.y = t.clientY;
     setAim(t.clientX, t.clientY);
+    if (tapMode()) {
+      // Held long enough: show the magnifier, then start breaking under the finger.
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        if (!worldTouch || !inGame()) return;
+        magnifier.classList.remove('hidden');
+        setAim(finger.x, finger.y);
+        breaking = true;
+        mouse('mousedown', 0);
+      }, HOLD_MS);
+    }
   }, { passive: false });
   canvas.addEventListener('touchmove', (e) => {
     if (!inGame()) return;
@@ -254,21 +291,67 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
     for (const t of e.changedTouches) {
       if (worldTouch?.id !== t.identifier) continue;
       if (Math.hypot(t.clientX - worldTouch.x, t.clientY - worldTouch.y) > TAP_MOVE_PX) worldTouch.moved = true;
+      finger.x = t.clientX;
+      finger.y = t.clientY;
       setAim(t.clientX, t.clientY);
     }
   }, { passive: false });
-  // A quick tap uses what's there, like a right click.
-  canvas.addEventListener('touchend', (e) => {
+  // A quick tap uses what's there, like a right click (in tap mode that's placing too).
+  const endWorldTouch = (e) => {
     for (const t of e.changedTouches) {
       if (worldTouch?.id !== t.identifier) continue;
       const tap = !worldTouch.moved && performance.now() - worldTouch.start < TAP_MS;
       worldTouch = null;
-      if (tap && inGame()) {
+      const wasBreaking = breaking;
+      stopBreaking();
+      if (tap && !wasBreaking && inGame()) {
         mouse('mousedown', 2);
         mouse('mouseup', 2);
       }
     }
-  });
+  };
+  canvas.addEventListener('touchend', endWorldTouch);
+  canvas.addEventListener('touchcancel', endWorldTouch);
+
+  // The magnifier: the 9x9 blocks around the finger, drawn from the game's own frame, with
+  // a grid and the targeted block outlined. It sits above the finger so it isn't covered.
+  const drawMagnifier = () => {
+    const rect = canvas.getBoundingClientRect();
+    const sx = (finger.x - rect.left) * (canvas.width / rect.width);
+    const sy = (finger.y - rect.top) * (canvas.height / rect.height);
+    const tile = tileAt(sx, sy);
+    const cssSize = magnifier.getBoundingClientRect().width || 180;
+    const px = Math.round(cssSize * (window.devicePixelRatio || 1));
+    if (magnifier.width !== px) { magnifier.width = px; magnifier.height = px; }
+    const ctx = magnifier.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const half = Math.floor(MAGNIFY_TILES / 2);
+    const src = MAGNIFY_TILES * tile.size;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, px, px);
+    ctx.drawImage(canvas, tile.x - half * tile.size, tile.y - half * tile.size, src, src, 0, 0, px, px);
+    const cell = px / MAGNIFY_TILES;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 1; i < MAGNIFY_TILES; i++) {
+      const p = Math.round(i * cell) + 0.5;
+      ctx.moveTo(p, 0); ctx.lineTo(p, px);
+      ctx.moveTo(0, p); ctx.lineTo(px, p);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = Math.max(2, cell / 10);
+    ctx.strokeRect(half * cell, half * cell, cell, cell);
+    // Above the finger, kept on screen; below it if there's no room above.
+    const gap = 28;
+    let left = finger.x - cssSize / 2;
+    let top = finger.y - cssSize - gap;
+    if (top < 8) top = finger.y + gap;
+    left = Math.max(8, Math.min(window.innerWidth - cssSize - 8, left));
+    top = Math.max(8, Math.min(window.innerHeight - cssSize - 8, top));
+    magnifier.style.transform = `translate(${left}px, ${top}px)`;
+  };
 
   // Tap a hotbar slot to select it.
   document.getElementById('hotbar')?.addEventListener('touchstart', (e) => {
@@ -292,7 +375,12 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   const tick = () => {
     const playing = inGame();
     root.classList.toggle('hidden', !playing);
+    const tap = tapMode();
+    root.classList.toggle('tap-mode', tap);
+    document.body.classList.toggle('touch-tap-mode', tap);
     if (!playing && acting) releaseAim();
+    if (!playing && breaking) stopBreaking();
+    if (breaking) drawMagnifier();
     const now = performance.now();
     const dt = Math.min(0.05, (now - (lastTick || now)) / 1000);
     lastTick = now;

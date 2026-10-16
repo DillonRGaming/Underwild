@@ -2346,3 +2346,28 @@ body.touch-mode .touch-more { margin-left: var(--hotbar-shift); }
   bottom: calc(var(--te) + clamp(90px, 31vh, 160px) + var(--tg));
 }
 .touch-mode-btn.on { background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
+
+/* Settings only shown on phones. */
+.touch-only { display: none; }
+body.touch-mode .touch-only { display: block; }
+
+/* Tap aiming (the default on phones): no aim stick, break/place switch or crosshair. */
+#touchControls.tap-mode .touch-aim,
+#touchControls.tap-mode .touch-mode-btn,
+#touchControls.tap-mode .touch-crosshair { display: none; }
+
+/* Magnifier shown while holding to break: 9 blocks across, follows the finger. */
+.touch-magnifier {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: clamp(140px, 45vh, 220px);
+  height: clamp(140px, 45vh, 220px);
+  border: 2px solid var(--line, #fff);
+  border-radius: var(--radius, 0);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6);
+  image-rendering: pixelated;
+  pointer-events: none !important;
+  z-index: 20;
+}
+.touch-magnifier.hidden { display: none; }
