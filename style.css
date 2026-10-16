@@ -2284,11 +2284,14 @@ body.touch-mode {
 body.touch-mode .menu-content { zoom: 0.8; }
 
 /* Phones have no Escape key: an X closes the inventory, chests, furnaces... */
+:where(.inventory-frame, .inventory-content) { position: relative; }
 .touch-close {
-  position: fixed;
-  top: clamp(8px, 3vh, 20px);
-  right: clamp(8px, 3vh, 20px);
+  position: absolute;
+  top: 6px;
+  right: 6px;
   z-index: 50;
-  font-size: 22px;
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
 }
 .touch-close.hidden { display: none; }

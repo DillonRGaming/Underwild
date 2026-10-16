@@ -4729,7 +4729,8 @@ function updateHTMLUI() {
     coordText.textContent = `X: ${px} Y: ${py}`;
   }
 
-  const showStats = inGame && !creativeMode;
+  // Hidden behind the inventory and other screens.
+  const showStats = inGame && !creativeMode && !inventoryOpen && !openContainer;
   const healthDisplay = document.getElementById('healthDisplay');
   if (healthDisplay) healthDisplay.classList.toggle('hidden', !showStats);
   const hungerDisplay = document.getElementById('hungerDisplay');

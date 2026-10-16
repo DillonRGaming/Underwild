@@ -174,7 +174,11 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   const tick = () => {
     const playing = inGame();
     root.classList.toggle('hidden', !playing);
-    close.classList.toggle('hidden', !uiOpen());
+    // The X sits in the corner of whichever screen is open.
+    const open = uiOpen() && [...document.querySelectorAll('.inventory-overlay')].find(o => !o.classList.contains('hidden'));
+    close.classList.toggle('hidden', !open);
+    const frame = open && (open.querySelector('.inventory-frame') || open.querySelector('.inventory-content'));
+    if (frame && close.parentElement !== frame) frame.appendChild(close);
     if (playing) {
       const { clientX, clientY } = aimClient();
       crosshair.style.transform = `translate(${clientX}px, ${clientY}px)`;
