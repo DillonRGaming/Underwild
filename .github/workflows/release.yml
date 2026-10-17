@@ -50,10 +50,11 @@ jobs:
           distribution: temurin
           java-version: 17
       - run: npm ci
-      - run: node scripts/build-web.mjs
+      - run: node build/scripts/build-web.mjs
       - run: npx cap sync android
+        working-directory: platforms
       - name: Build the signed APK
-        working-directory: android
+        working-directory: platforms/android
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/underwild.p12"
           chmod +x gradlew
@@ -66,7 +67,7 @@ jobs:
       - name: Add the APK to the release
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          cp android/app/build/outputs/apk/release/app-release.apk "Underwild-$VERSION.apk"
+          cp platforms/android/app/build/outputs/apk/release/app-release.apk "Underwild-$VERSION.apk"
           gh release upload "$GITHUB_REF_NAME" "Underwild-$VERSION.apk" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

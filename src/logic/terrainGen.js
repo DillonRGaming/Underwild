@@ -641,7 +641,20 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   const underwater = h > waterLevel && !!lakeAt(x, seed, worldHeight, worldType);
   const sandy = underwater || onLakeShore(x, seed);
   const onTrail = !sandy && (y === h || y === h - 1) && isTrailAt(x, seed, worldHeight, worldType);
-  const vegetation = onTrail || sandy ? null : generateVegetationAt(x, y, h, seed);
+  // Grass slabs smooth the ground out: one at the foot of a one-block step where the ground
+  // carries on flat (the bottom of a slope included), and one half-filling a one-wide dip.
+  // Partway down a steady slope (lower again on the other side) there's none.
+  const hl = heightAtLocal(x - 1), hr = heightAtLocal(x + 1);
+  const isGrassStep = !sandy && !onTrail && !underwater && (
+    (hl === h - 1 && (hr === h || hr === h - 1)) ||
+    (hr === h - 1 && hl === h)
+  );
+
+  if (isGrassStep && y === h - 1) {
+    return { id: 'grass_slab', meta: { slabPos: 'bottom' } };
+  }
+
+  const vegetation = onTrail || sandy || isGrassStep ? null : generateVegetationAt(x, y, h, seed);
   if (vegetation) return vegetation;
   if (sandy && y === h - 1) {
     const deco = lakeDecorAt(x, seed, underwater);
@@ -653,7 +666,7 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   } else if (y < h) {
     return underwater && y >= waterLevel ? { id: 'water', meta: { still: true } } : { id: 'air', meta: null };
   } else if (y === h) {
-    return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : 'grass', meta: null };
+    return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : (isGrassStep ? 'dirt' : 'grass'), meta: null };
   } else if (sandy && y <= h + sandLayersAt(x, seed)) {
     // Clay lumps mixed into the sand.
     return { id: perlinNoise(x * 0.35, y * 0.35, seed + 900) > 0.45 ? 'clay' : 'sand', meta: null };
@@ -664,8 +677,11 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
     const dirtType = rand01From(x * y + seed, seed + y);
     return { id: dirtType < 0.25 ? 'coarse_dirt' : 'dirt', meta: null };
   } else {
+    let vein;
     if (generateCaves(x, y, h, seed)) {
       return { id: 'air', meta: null };
+    } else if ((vein = coalVeinAt(x, y, h, HEIGHT, seed, heightAtLocal))) {
+      return { id: vein, meta: null };
     } else if (generateGravelLocal(x, y, h, HEIGHT, BASE)) {
       return { id: 'gravel', meta: null };
     } else if (generateOre(x, y, h, 'gold', 3, 15, HEIGHT - 15, seed)) {
@@ -698,6 +714,50 @@ function generateVegetationAt(x, y, h, seed) {
   if (id === 'rock' || id === 'pebble') return { id, meta: rockMeta(rand01From(x * 1021, seed), rand01From(x * 1031, seed), rand01From(x * 1033, seed)) };
   if (id === 'bush') return { id, meta: { size: 1 + Math.floor(rand01From(x * 1019, seed) * BUSH_SIZES) } };
   return id ? { id, meta: null } : null;
+}
+
+// Coal veins: thin wavy seams that run through the stone in patches. The seam follows where
+// a noise field crosses zero. Layers go solid coal in the middle, rich ore around it, plain
+// ore outside, and the seam thins out to nothing at its ends instead of stopping dead.
+const VEIN_IDS = [null, 'coal_ore', 'coal_ore_rich', 'coal_block'];
+// Two layers of noise: plain Perlin is zero all along its grid lines, which would make
+// dead-straight seams; the second layer (off the grid) breaks those up.
+function seamNoise(x, y, seed) {
+  return perlinNoise(x * 0.025, y * 0.04, seed + 4200)
+    + 0.5 * perlinNoise(x * 0.053 + 17.3, y * 0.081 + 5.7, seed + 4250);
+}
+function coalVeinLevel(x, y, h, HEIGHT, seed) {
+  if (y < h + 8 || y > HEIGHT - 6) return 0;
+  // Only some stretches of stone have a seam, so veins stay short; it tapers off toward the
+  // edge of a stretch.
+  const reach = Math.min(1, (perlinNoise(x * 0.025, y * 0.025, seed + 4100) - 0.25) / 0.2);
+  if (reach <= 0) return 0;
+  // Distance (in blocks) to where the seam noise crosses zero: its value over how steeply it
+  // changes, so the seam keeps an even thickness instead of ballooning where the noise is flat.
+  const n = (px, py) => seamNoise(px, py, seed);
+  const v = n(x, y);
+  const gx = (n(x + 1, y) - n(x - 1, y)) / 2, gy = (n(x, y + 1) - n(x, y - 1)) / 2;
+  const dist = Math.abs(v) / Math.max(Math.hypot(gx, gy), 1e-4);
+  const t = dist + (rand01From(x * 7919 + y * 104729, seed + 4300) - 0.5) * 0.5;
+  if (t < 0.8 * reach) return 3;
+  if (t < 1.7 * reach) return 2;
+  if (t < 2.6 * reach) return 1;
+  return 0;
+}
+
+// A layer only shows where the next one out wraps all round it (caves included): solid coal is always inside
+// rich ore, and rich ore inside the vein.
+function coalVeinAt(x, y, h, HEIGHT, seed, heightAt) {
+  let level = coalVeinLevel(x, y, h, HEIGHT, seed);
+  if (level < 2) return VEIN_IDS[level];
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const nh = heightAt(x + dx);
+    // Open cave counts as outside the vein too.
+    const n = generateCaves(x + dx, y + dy, nh, seed) ? 0 : coalVeinLevel(x + dx, y + dy, nh, HEIGHT, seed);
+    if (n < level - 1) level = n + 1;
+    if (level < 2) break;
+  }
+  return VEIN_IDS[level];
 }
 
 function generateOre(x, y, h, oreType, rarity, minHeight, maxHeight, seed) {

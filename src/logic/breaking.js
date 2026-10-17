@@ -12,7 +12,6 @@ function makeShards() {
   return shards;
 }
 
-const SUPPORTED_PLANTS = new Set(['poppy', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble', 'seagrass', 'shell']);
 
 export class Breaker {
   constructor(registry) {
@@ -69,7 +68,9 @@ export class Breaker {
         if (itemType.miningSpeed && itemType.miningSpeed[blockId]) {
           speedMultiplier = itemType.miningSpeed[blockId];
         }
-        else if (itemType.toolType !== 'sword' && itemType.effectiveAgainst && itemType.effectiveAgainst.includes(blockId)) {
+        // A block names the tool that mines it fastest (tool: 'pickaxe'); a tool can also
+        // list extra block ids in effectiveAgainst.
+        else if (itemType.toolType !== 'sword' && (this.registry.get(blockId)?.tool === itemType.toolType || itemType.effectiveAgainst?.includes(blockId))) {
           speedMultiplier = (itemType.baseSpeedMultiplier || 1) * (itemType.materialMultiplier || 1);
         }
       }
@@ -101,12 +102,20 @@ export class Breaker {
       if (brokenType && brokenType.onBreak) {
         brokenType.onBreak(world, x, y, cell.meta);
       }
-      const result = { id: cell.id, drop: brokenType?.drop ?? cell.id, meta: cell.meta, x, y, extraDrops: [] };
+      const result = { id: cell.id, drop: brokenType?.drop ?? cell.id, dropCount: brokenType?.dropCount ?? 1, meta: cell.meta, x, y, extraDrops: [] };
+      // A double slab comes apart into its two slabs.
+      if (cell.id === 'double_slab' && cell.meta?.bottom) {
+        // Grass grown over a dirt double slab comes off on its top half.
+        const grown = this.registry.get(cell.meta.top)?.growsGrass;
+        const top = cell.meta.grassy && grown ? grown : cell.meta.top;
+        result.drop = cell.meta.bottom;
+        if (top) result.extraDrops.push({ id: top, x, y });
+      }
       if (world.inBounds(x, y - 1)) {
         const aboveId = world.getBlockId(x, y - 1);
         const aboveType = this.registry.get(aboveId);
         const aboveMeta = world.getCell(x, y - 1).meta;
-        if (aboveType && ((aboveType.needsSupport && !aboveMeta?.wall) || SUPPORTED_PLANTS.has(aboveId))) {
+        if (aboveType && ((aboveType.needsSupport && !aboveMeta?.wall) || aboveType.plant)) {
           result.extraDrops.push({ id: aboveType.drop ?? aboveId, x, y: y - 1 });
           world.setBlock(x, y - 1, 'air', null);
         }
@@ -114,7 +123,7 @@ export class Breaker {
       for (const [sx, side] of [[x - 1, 'right'], [x + 1, 'left']]) {
         if (!world.inBounds(sx, y)) continue;
         const sideCell = world.getCell(sx, y);
-        if ((this.registry.get(sideCell.id)?.shape === 'torch' || sideCell.id === 'ladder') && sideCell.meta?.wall === side) {
+        if ((this.registry.get(sideCell.id)?.shape === 'torch' || this.registry.get(sideCell.id)?.climbable) && sideCell.meta?.wall === side) {
           result.extraDrops.push({ id: sideCell.id, x: sx, y });
           world.setBlock(sx, y, 'air', null);
         }

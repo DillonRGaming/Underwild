@@ -42,7 +42,7 @@ function sweepX(world, player, nextX, canStep) {
   if (dirX === 0) return nextX;
   const top = Math.floor(player.y / TILE_SIZE);
   const bottom = Math.floor((player.y + player.height - 1) / TILE_SIZE);
-  const feet = player.y + player.height;
+  let feet = player.y + player.height;
   const from = Math.floor(Math.min(player.x, nextX) / TILE_SIZE);
   const to = Math.floor((Math.max(player.x, nextX) + player.width - EDGE_EPS) / TILE_SIZE);
   for (let tx = dirX > 0 ? from : to; dirX > 0 ? tx <= to : tx >= from; tx += dirX) {
@@ -59,8 +59,10 @@ function sweepX(world, player, nextX, canStep) {
         continue;
       }
       // A low ledge (a bottom slab or trapdoor) is stepped up onto if there's room.
-      if (canStep && player.onGround && feet - box.top <= TILE_SIZE / 2 && !boxBlocked(world, nextX, box.top - player.height - 0.01, player)) {
+      if (canStep && (player.onGround || feet - box.top <= TILE_SIZE / 2) && feet - box.top > 0 && feet - box.top <= TILE_SIZE / 2 && !boxBlocked(world, nextX, box.top - player.height - 0.01, player)) {
         player.y = box.top - player.height - 0.01;
+        player.onGround = true;
+        feet = player.y + player.height;
         continue;
       }
       player.vx = 0;
@@ -396,8 +398,8 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
     }
   }
 
-  // Auto-jump: hop up a one-block step at the feet when there's room above it, but not
-  // into a wall that's taller than that.
+  // Auto-jump: hop up a full-block step at the feet when there's room above it, but not
+  // into a wall that's taller than that, and NOT for low half-block ledges/slabs (which sweepX steps up seamlessly).
   if (player.onGround && player.autoJump !== false) {
     const direction = Math.sign(player.vx);
     if (direction !== 0) {
@@ -408,7 +410,10 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
       const headRow = Math.floor(player.y / TILE_SIZE);
       const solidFull = (x, y) => world.inBounds(x, y) && isBlockSolid(world, x, y) && world.getBlockType(x, y)?.shape !== 'slab';
       const free = (x, y) => !world.inBounds(x, y) || !isBlockSolid(world, x, y);
-      if (solidFull(aheadX, feetRow) && free(aheadX, headRow) && free(aheadX, headRow - 1) && free(tileX, headRow - 1)) {
+      const aheadBox = solidBox(world, aheadX, feetRow);
+      const stepDiff = aheadBox ? (player.y + player.height) - aheadBox.top : 0;
+      // If the step is <= half a block (e.g. stepping onto a slab, or from a slab onto a block), do not jump!
+      if (stepDiff > TILE_SIZE / 2 && solidFull(aheadX, feetRow) && free(aheadX, headRow) && free(aheadX, headRow - 1) && free(tileX, headRow - 1)) {
         player.vy = -jumpVelocity * 0.6;
         player.onGround = false;
       }
@@ -451,7 +456,9 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
       const newBottom = nextY + player.height;
       const footTilesX = [
         Math.floor(feetLeftX / TILE_SIZE),
-        Math.floor(feetRightX / TILE_SIZE)
+        Math.floor(feetRightX / TILE_SIZE),
+        Math.floor((player.x + EDGE_EPS) / TILE_SIZE),
+        Math.floor((player.x + player.width - EDGE_EPS) / TILE_SIZE)
       ];
       // Check every row the feet pass through this frame, so a fast fall can't skip a
       // thin trapdoor. Rows passed over only count surfaces we were above.

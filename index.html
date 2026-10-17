@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>Underwild</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <link rel="icon" type="image/png" href="textures/grass.png">
+  <link rel="icon" type="image/png" href="assets/textures/grass.png">
   <link rel="stylesheet" href="style.css">
   <link id="themeStylesheet" rel="stylesheet" href="themes/minimal/theme.css">
 </head>
@@ -45,6 +45,10 @@
          <div class="creative-header">
            <div id="creativeTitle" class="inventory-title"></div>
            <input type="text" id="creativeSearch" class="creative-search" maxlength="40" autocomplete="off" spellcheck="false">
+           <div id="creativeSort" class="creative-sort" title="Sort by">
+             <button type="button" data-sort="type">Type</button>
+             <button type="button" data-sort="material">Material</button>
+           </div>
          </div>
          <div id="creativeGrid" class="creative-grid"></div>
        </div>
@@ -1029,6 +1033,6 @@
        document.getElementById('btn-close').addEventListener('click', () => window.electronAPI.window.close());
      })();
    </script>
-   <script type="module" src="script.js"></script>
+   <script type="module" src="src/script.js"></script>
 </body>
 </html>

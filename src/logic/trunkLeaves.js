@@ -5,7 +5,7 @@ export function trunkLeafCover(world, x, y) {
   const leafAt = (tx, ty) => {
     if (!world.inBounds(tx, ty)) return null;
     const cell = world.getCell(tx, ty);
-    return cell.id.endsWith('_leaves') && cell.meta?.layer !== 'bg' ? cell.id : null;
+    return world.getBlockType(tx, ty)?.leaves && cell.meta?.layer !== 'bg' ? cell.id : null;
   };
   const left = leafAt(x - 1, y);
   const right = leafAt(x + 1, y);
@@ -29,6 +29,4 @@ export function keptLeafCover(world, x, y) {
   return cover;
 }
 
-export function isTrunkId(id) {
-  return id.endsWith('_log') || id === 'birch_log_base';
-}
+

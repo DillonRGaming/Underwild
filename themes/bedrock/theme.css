@@ -784,7 +784,7 @@
   border-top: 2px solid #3d3e40;
   border-radius: 0;
   box-shadow: none;
-  background: url("../../textures/crafting_table.png") 24px center / 36px 36px no-repeat, var(--panel);
+  background: url("../../assets/textures/crafting_table.png") 24px center / 36px 36px no-repeat, var(--panel);
   image-rendering: pixelated;
 }
 
@@ -797,7 +797,7 @@
 
 #createWorldMenu .form-section > .menu-buttons .minecraft-button {
   top: calc(var(--tabs-top) + var(--tab-h));
-  background: url("../../textures/chest.png") 24px center / 36px 36px no-repeat, var(--charcoal);
+  background: url("../../assets/textures/chest.png") 24px center / 36px 36px no-repeat, var(--charcoal);
   font-size: 0;
 }
 
@@ -807,7 +807,7 @@
 }
 
 #createWorldMenu .form-section > .menu-buttons .minecraft-button:hover {
-  background: url("../../textures/chest.png") 24px center / 36px 36px no-repeat, #3d3e40;
+  background: url("../../assets/textures/chest.png") 24px center / 36px 36px no-repeat, #3d3e40;
 }
 
 #createWorldMenu .form-section > .menu-buttons {

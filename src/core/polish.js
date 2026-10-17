@@ -81,12 +81,12 @@ export function drawHills(ctx, camera, canvas, seed, sky, light) {
   }
 }
 
-// Solid, full, foreground blocks get outlines; leaves and glass keep their own look.
+// Solid, full, foreground blocks get outlines; slabs get half-block outlines; leaves and glass keep their own look.
 export function isOutlined(type, meta) {
-  if (!type || !type.solid || (type.shape && type.shape !== 'full')) return false;
+  if (!type || !type.solid) return false;
+  if (type.shape && type.shape !== 'full' && type.shape !== 'slab') return false;
   if (meta?.layer === 'bg') return false;
-  const id = type.id;
-  return id !== 'glass' && !id.endsWith('_chest');
+  return type.outline !== false;
 }
 
 // After the solid blocks are drawn onto `layer`: dark edges where they meet open space,
@@ -99,6 +99,19 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     const cell = world.getCell(x, y);
     return isOutlined(registry.get(cell.id), cell.meta);
   };
+  const getShape = (x, y) => {
+    if (!world.inBounds(x, y)) return 'full';
+    if (!world.isChunkLoaded(world.chunkXFor(x))) return 'full';
+    const cell = world.getCell(x, y);
+    const type = registry.get(cell.id);
+    if (!isOutlined(type, cell.meta)) return null;
+    return type?.shape || 'full';
+  };
+  const getSlabPos = (x, y) => {
+    if (!world.inBounds(x, y)) return 'bottom';
+    return world.getCell(x, y)?.meta?.slabPos || 'bottom';
+  };
+
   const u = Math.max(1, Math.round(camera.zoom));
   const sh = u * 2;
   const outlines = polishOn('outlines'), rounding = polishOn('rounding');
@@ -107,18 +120,85 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
     for (let y = startY; y <= endY; y++) {
       const cell = world.getCell(x, y);
-      if (!isOutlined(registry.get(cell.id), cell.meta)) continue;
+      const type = registry.get(cell.id);
+      if (!isOutlined(type, cell.meta)) continue;
       if (cell.meta?.fellAt) continue;
-      const up = !solidAt(x, y - 1), down = !solidAt(x, y + 1);
-      const left = !solidAt(x - 1, y), right = !solidAt(x + 1, y);
+
       const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
       const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
       const ex = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE));
       const ey = Math.round(camera.worldToScreenY((y + 1) * TILE_SIZE));
       const w = ex - sx, h = ey - sy;
+
+      const isSlab = type?.shape === 'slab';
+      const slabPos = cell.meta?.slabPos || 'bottom';
+
+      if (isSlab) {
+        // Slab occupies half the block
+        const slabY = slabPos === 'top' ? sy : sy + Math.floor(h * 0.5);
+        const slabH = slabPos === 'top' ? Math.floor(h * 0.5) : ey - slabY;
+
+        const leftShape = getShape(x - 1, y);
+        const rightShape = getShape(x + 1, y);
+        const upShape = getShape(x, y - 1);
+        const downShape = getShape(x, y + 1);
+
+        const leftOpen = !leftShape || (leftShape === 'slab' && getSlabPos(x - 1, y) !== slabPos);
+        const rightOpen = !rightShape || (rightShape === 'slab' && getSlabPos(x + 1, y) !== slabPos);
+        const topOpen = slabPos === 'top' ? !upShape : true;
+        const bottomOpen = slabPos === 'bottom' ? !downShape : true;
+
+        if (seams && !registry.get(cell.id)?.leaves) {
+          layerCtx.fillStyle = SEAM;
+          layerCtx.fillRect(sx, slabY, w, u);
+          layerCtx.fillRect(sx, slabY + slabH - u, w, u);
+          layerCtx.fillRect(sx, slabY + u, u, slabH - 2 * u);
+          layerCtx.fillRect(ex - u, slabY + u, u, slabH - 2 * u);
+        }
+
+        if (outlines) {
+          layerCtx.fillStyle = OUTLINE;
+          if (topOpen) layerCtx.fillRect(sx, slabY, w, u);
+          if (bottomOpen) layerCtx.fillRect(sx, slabY + slabH - u, w, u);
+          if (leftOpen) layerCtx.fillRect(sx, slabY, u, slabH);
+          if (rightOpen) layerCtx.fillRect(ex - u, slabY, u, slabH);
+        }
+
+        // Round slab's open corners:
+        if (rounding) {
+          const slabCorners = [
+            [topOpen && leftOpen, sx, slabY, 1, 1],
+            [topOpen && rightOpen, ex - u, slabY, -1, 1],
+            [bottomOpen && leftOpen, sx, slabY + slabH - u, 1, -1],
+            [bottomOpen && rightOpen, ex - u, slabY + slabH - u, -1, -1]
+          ];
+          for (let i = 0; i < 4; i++) {
+            const [openC, cx, cy, dx, dy] = slabCorners[i];
+            if (!openC) continue;
+            layerCtx.clearRect(cx, cy, u, u);
+            if (outlines) {
+              layerCtx.fillStyle = OUTLINE;
+              layerCtx.fillRect(cx + dx * u, cy + dy * u, u, u);
+            }
+          }
+        }
+        continue;
+      }
+
+      // Full blocks:
+      const leftShape = getShape(x - 1, y);
+      const rightShape = getShape(x + 1, y);
+      const upShape = getShape(x, y - 1);
+      const downShape = getShape(x, y + 1);
+
+      const up = !upShape;
+      const down = !downShape;
+      const left = !leftShape;
+      const right = !rightShape;
+
       // Every block: a faint shadow around its edge and darker corner pixels, so blocks
       // read as separate pieces with softened corners.
-      if (seams && !cell.id.endsWith('_leaves')) {
+      if (seams && !registry.get(cell.id)?.leaves) {
         layerCtx.fillStyle = SEAM;
         layerCtx.fillRect(sx, sy, w, u);
         layerCtx.fillRect(sx, ey - u, w, u);
@@ -130,20 +210,39 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         layerCtx.fillRect(sx, ey - u, u, u);
         layerCtx.fillRect(ex - u, ey - u, u, u);
       }
-      if (!up && !down && !left && !right) continue;
-      if (cell.id.endsWith('_leaves')) continue; // leaves keep their own ragged edge
+      if (!up && !down && !left && !right && leftShape !== 'slab' && rightShape !== 'slab') continue;
+      if (registry.get(cell.id)?.leaves) continue; // leaves keep their own ragged edge
       layerCtx.fillStyle = OUTLINE;
       if (outlines) {
         if (up) layerCtx.fillRect(sx, sy, w, u);
         if (down) layerCtx.fillRect(sx, ey - u, w, u);
-        if (left) layerCtx.fillRect(sx, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
-        if (right) layerCtx.fillRect(ex - u, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
+
+        const midH = Math.floor(h * 0.5);
+        if (left) {
+          layerCtx.fillRect(sx, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
+        } else if (leftShape === 'slab') {
+          // If neighbour is a bottom slab, upper half is open to air!
+          if (getSlabPos(x - 1, y) === 'bottom') {
+            layerCtx.fillRect(sx, sy + (up ? u : 0), u, midH - (up ? u : 0));
+          } else {
+            layerCtx.fillRect(sx, sy + midH, u, h - midH - (down ? u : 0));
+          }
+        }
+
+        if (right) {
+          layerCtx.fillRect(ex - u, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
+        } else if (rightShape === 'slab') {
+          if (getSlabPos(x + 1, y) === 'bottom') {
+            layerCtx.fillRect(ex - u, sy + (up ? u : 0), u, midH - (up ? u : 0));
+          } else {
+            layerCtx.fillRect(ex - u, sy + midH, u, h - midH - (down ? u : 0));
+          }
+        }
       }
       // Round the open corners: cut the corner pixel, darken the one inside it.
-      const corners = [[up && left, sx, sy, 1, 1], [up && right, ex - u, sy, -1, 1], [down && left, sx, ey - u, 1, -1], [down && right, ex - u, ey - u, -1, -1]];
-      // A cut corner shows what's behind the block: sky where the corner opens onto sky,
-      // otherwise the wall, which is drawn behind the block for it (nothing is drawn behind
-      // solid blocks normally). Worked out every frame, so it follows mining and building.
+      const leftTopOpen = left || (leftShape === 'slab' && getSlabPos(x - 1, y) === 'bottom');
+      const rightTopOpen = right || (rightShape === 'slab' && getSlabPos(x + 1, y) === 'bottom');
+      const corners = [[up && leftTopOpen, sx, sy, 1, 1], [up && rightTopOpen, ex - u, sy, -1, 1], [down && left, sx, ey - u, 1, -1], [down && right, ex - u, ey - u, -1, -1]];
       const skyAt = (ox, oy) => !r.hasBackdrop(x + ox, y + oy);
       const cornerSky = [skyAt(-1, -1) && skyAt(0, -1) && skyAt(-1, 0), skyAt(1, -1) && skyAt(0, -1) && skyAt(1, 0),
         skyAt(-1, 1) && skyAt(0, 1) && skyAt(-1, 0), skyAt(1, 1) && skyAt(0, 1) && skyAt(1, 0)];

@@ -1,14 +1,20 @@
+// Recipes can ask for any block of a group instead of one id; the groups come from the
+// blocks' own properties, so a new wood type works in every recipe straight away.
+let registry = null;
+export function useCraftingRegistry(r) { registry = r; gatherRecipes(); }
+const isWooden = (def) => !!registry?.get(`${def.material}_planks`);
 const ingredientGroups = {
-  wood: ['oak_log', 'birch_log', 'spruce_log', 'maple_log', 'pine_log'],
-  planks: ['oak_planks', 'birch_planks', 'spruce_planks', 'maple_planks', 'pine_planks'],
-  leaves: ['oak_leaves', 'birch_leaves', 'spruce_leaves', 'pine_leaves', 'maple_green_leaves', 'maple_orange_leaves', 'maple_red_leaves'],
-  stairs: ['oak_stairs', 'birch_stairs', 'spruce_stairs', 'maple_stairs', 'pine_stairs']
+  wood: (def) => def.trunk && !def.drop,       // any log (not the birch base, which drops a log)
+  planks: (def) => def.kind === 'planks',
+  leaves: (def) => !!def.leaves,
+  stairs: (def) => def.kind === 'stairs' && isWooden(def)
 };
 
 function ingredientsMatch(itemId, required) {
   if (itemId === required) return true;
   const group = ingredientGroups[required];
-  return !!group && group.includes(itemId);
+  const def = registry?.get(itemId);
+  return !!group && !!def && group(def);
 }
 
 function slotId(slot) {
@@ -87,222 +93,23 @@ function consumeShapedInputs(grid, gridWidth, shape, ingredients) {
   return null;
 }
 
-const recipes = [
-  { type: 'shaped', shape: ['ss', 'ss'], ingredients: { s: 'sand' }, out: { blockId: 'sandstone', count: 1 } },
-  { type: 'shaped', shape: ['ss', 'ss'], ingredients: { s: 'sandstone' }, out: { blockId: 'cut_sandstone', count: 4 } },
-  { type: 'shaped', shape: ['s', 's'], ingredients: { s: 'cut_sandstone' }, out: { blockId: 'chiseled_sandstone', count: 1 } },
-  { type: 'shaped', shape: ['ss', 'ss'], ingredients: { s: 'red_sand' }, out: { blockId: 'red_sandstone', count: 1 } },
-  { type: 'shaped', shape: ['ss', 'ss'], ingredients: { s: 'red_sandstone' }, out: { blockId: 'red_cut_sandstone', count: 4 } },
-  { type: 'shaped', shape: ['s', 's'], ingredients: { s: 'red_cut_sandstone' }, out: { blockId: 'red_chiseled_sandstone', count: 1 } },
-  { type: 'shaped', shape: ['ss'], ingredients: { s: 'sandstone' }, out: { blockId: 'smooth_sandstone', count: 2 } },
-  { type: 'shaped', shape: ['ss'], ingredients: { s: 'red_sandstone' }, out: { blockId: 'red_smooth_sandstone', count: 2 } },
-  { type: 'shapeless', in: { rippled_sand: 1 }, out: { blockId: 'sand', count: 1 } },
-  { type: 'shapeless', in: { cracked_sand: 1 }, out: { blockId: 'sand', count: 1 } },
-  { type: 'shapeless', in: { red_rippled_sand: 1 }, out: { blockId: 'red_sand', count: 1 } },
-  // Metal tools are forged: heat an ingot, hammer it into a head at the crafting table,
-  // quench it, then fit it to a stick here.
-  { type: 'shapeless', in: { copper_pickaxe_head: 1, stick: 1 }, out: { itemId: 'copper_pickaxe', count: 1 } },
-  { type: 'shapeless', in: { copper_axe_head: 1, stick: 1 }, out: { itemId: 'copper_axe', count: 1 } },
-  { type: 'shapeless', in: { copper_shovel_head: 1, stick: 1 }, out: { itemId: 'copper_shovel', count: 1 } },
-  { type: 'shapeless', in: { copper_sword_head: 1, stick: 1 }, out: { itemId: 'copper_sword', count: 1 } },
-  { type: 'shapeless', in: { steel_pickaxe_head: 1, stick: 1 }, out: { itemId: 'steel_pickaxe', count: 1 } },
-  { type: 'shapeless', in: { steel_axe_head: 1, stick: 1 }, out: { itemId: 'steel_axe', count: 1 } },
-  { type: 'shapeless', in: { steel_shovel_head: 1, stick: 1 }, out: { itemId: 'steel_shovel', count: 1 } },
-  { type: 'shapeless', in: { steel_sword_head: 1, stick: 1 }, out: { itemId: 'steel_sword', count: 1 } },
-  { type: 'shapeless', in: { gold_pickaxe_head: 1, stick: 1 }, out: { itemId: 'gold_pickaxe', count: 1 } },
-  { type: 'shapeless', in: { gold_axe_head: 1, stick: 1 }, out: { itemId: 'gold_axe', count: 1 } },
-  { type: 'shapeless', in: { gold_shovel_head: 1, stick: 1 }, out: { itemId: 'gold_shovel', count: 1 } },
-  { type: 'shapeless', in: { gold_sword_head: 1, stick: 1 }, out: { itemId: 'gold_sword', count: 1 } },
-  { type: 'shaped', shape: ['c', 's'], ingredients: { c: 'coal', s: 'stick' }, out: { blockId: 'torch', count: 4 } },
-  { type: 'shapeless', in: { torch: 1, raw_copper: 1 }, out: { blockId: 'green_torch', count: 1 } },
-  { type: 'shapeless', in: { torch: 1, raw_gold: 1 }, out: { blockId: 'red_torch', count: 1 } },
-  { type: 'shapeless', in: { torch: 1, raw_steel: 1 }, out: { blockId: 'blue_torch', count: 1 } },
-  { type: 'shapeless', in: { torch: 1, copper_ingot: 1 }, out: { blockId: 'cyan_torch', count: 1 } },
-  { type: 'shapeless', in: { torch: 1, gold_ingot: 1 }, out: { blockId: 'purple_torch', count: 1 } },
-  { type: 'shaped', shape: ['scs', 'c c', 'sss'], ingredients: { s: 'stone', c: 'clay' }, out: { blockId: 'furnace', count: 1 } },
-  { type: 'shapeless', in: { sand: 1, coal: 1 }, out: { blockId: 'glass', count: 1 } },
-  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'oak_planks' }, out: { blockId: 'oak_trapdoor', count: 2 } },
-  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'birch_planks' }, out: { blockId: 'birch_trapdoor', count: 2 } },
-  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'spruce_planks' }, out: { blockId: 'spruce_trapdoor', count: 2 } },
-  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'pine_planks' }, out: { blockId: 'pine_trapdoor', count: 2 } },
-  { type: 'shaped', shape: ['ppp', 'ppp'], ingredients: { p: 'maple_planks' }, out: { blockId: 'maple_trapdoor', count: 2 } },
-  { type: 'shaped', shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'gravel' }, out: { blockId: 'explosive', count: 1 } },
-  // Gunpowder (sand + clay); each piece added to an explosive gives it a second more fuse.
-  { type: 'shapeless', in: { sand: 1, clay: 1 }, out: { itemId: 'gunpowder', count: 2 } },
-  { type: 'shapeless', in: { explosive: 1, gunpowder: 1 }, out: { blockId: 'explosive_1', count: 1 } },
-  { type: 'shapeless', in: { explosive_1: 1, gunpowder: 1 }, out: { blockId: 'explosive_2', count: 1 } },
-  { type: 'shapeless', in: { explosive_2: 1, gunpowder: 1 }, out: { blockId: 'explosive_3', count: 1 } },
-  { type: 'shapeless', in: { explosive: 1, gunpowder: 2 }, out: { blockId: 'explosive_2', count: 1 } },
-  { type: 'shapeless', in: { explosive: 1, gunpowder: 3 }, out: { blockId: 'explosive_3', count: 1 } },
-  { type: 'shapeless', in: { explosive_1: 1, gunpowder: 2 }, out: { blockId: 'explosive_3', count: 1 } },
-  { type: 'shapeless', in: { dirt: 1, gravel: 1 }, out: { blockId: 'coarse_dirt', count: 2 } },
-  { type: 'shaped', shape: ['iii', 'iii', ' s '], ingredients: { i: 'steel_ingot', s: 'stick' }, out: { itemId: 'blacksmith_hammer', count: 1 } },
-  { type: 'shaped', shape: ['iii', ' s ', 'sss'], ingredients: { i: 'copper_ingot', s: 'stone' }, out: { blockId: 'forging_table', count: 1 } },
-  { type: 'shaped', shape: ['i i', ' i '], ingredients: { i: 'steel_ingot' }, out: { itemId: 'bucket', count: 1 } },
-  { type: 'shapeless', in: { oak_log: 1 }, out: { blockId: 'oak_planks', count: 4 } },
-  { type: 'shapeless', in: { birch_log: 1 }, out: { blockId: 'birch_planks', count: 4 } },
-  { type: 'shapeless', in: { spruce_log: 1 }, out: { blockId: 'spruce_planks', count: 4 } },
-  { type: 'shapeless', in: { pine_log: 1 }, out: { blockId: 'pine_planks', count: 4 } },
-  { type: 'shapeless', in: { maple_log: 1 }, out: { blockId: 'maple_planks', count: 4 } },
-  
-  { 
-    type: 'shaped', 
-    shape: ['pp', 'pp'], 
-    ingredients: { p: 'planks' }, 
-    out: { blockId: 'crafting_table', count: 1 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: ['p', 'p'], 
-    ingredients: { p: 'planks' }, 
-    out: { itemId: 'stick', count: 4 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: ['s s', 'sss', 's s'], 
-    ingredients: { s: 'stick' }, 
-    out: { blockId: 'ladder', count: 3 } 
-  },
-  
-  {
-    type: 'shaped',
-    shape: ['ppp', 'p p', 'ppp'],
-    ingredients: { p: 'oak_planks' },
-    out: { blockId: 'oak_chest', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['ppp', 'p p', 'ppp'],
-    ingredients: { p: 'birch_planks' },
-    out: { blockId: 'birch_chest', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['ppp', 'p p', 'ppp'],
-    ingredients: { p: 'spruce_planks' },
-    out: { blockId: 'spruce_chest', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['ppp', 'p p', 'ppp'],
-    ingredients: { p: 'maple_planks' },
-    out: { blockId: 'maple_chest', count: 1 }
-  },
-  {
-    type: 'shaped',
-    shape: ['ppp', 'p p', 'ppp'],
-    ingredients: { p: 'pine_planks' },
-    out: { blockId: 'pine_chest', count: 1 }
-  },
-  
-  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'oak_planks' }, out: { blockId: 'oak_stairs', count: 4 } },
-  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'birch_planks' }, out: { blockId: 'birch_stairs', count: 4 } },
-  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'spruce_planks' }, out: { blockId: 'spruce_stairs', count: 4 } },
-  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'maple_planks' }, out: { blockId: 'maple_stairs', count: 4 } },
-  { type: 'shaped', shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'pine_planks' }, out: { blockId: 'pine_stairs', count: 4 } },
-  
-  { 
-    type: 'shaped', 
-    shape: ['pp', 'pp'], 
-    ingredients: { p: 'stone' }, 
-    out: { blockId: 'stone_slab', count: 6 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: ['p  ', 'pp ', 'ppp'], 
-    ingredients: { p: 'stone' }, 
-    out: { blockId: 'stone_stairs', count: 4 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: ['ppp', 'ppp', 'ppp'], 
-    ingredients: { p: 'stone' }, 
-    out: { blockId: 'stone', count: 9 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: ['ppp', ' s ', ' s '], 
-    ingredients: { p: 'planks', s: 'stick' }, 
-    out: { itemId: 'wooden_pickaxe', count: 1 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: ['pp ', 'ps ', ' s '], 
-    ingredients: { p: 'planks', s: 'stick' }, 
-    out: { itemId: 'wooden_axe', count: 1 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: [' p ', ' s ', ' s '], 
-    ingredients: { p: 'planks', s: 'stick' }, 
-    out: { itemId: 'wooden_shovel', count: 1 } 
-  },
-  
-  { 
-    type: 'shaped', 
-    shape: [' p ', ' p ', ' s '], 
-    ingredients: { p: 'planks', s: 'stick' }, 
-    out: { itemId: 'wooden_sword', count: 1 } 
-  },
-  
-  
+// Every recipe lives in the file of the block or item it makes, as
+//   recipes: [{ shape: ['pp', 'pp'], ingredients: { p: 'oak_planks' }, count: 4 }]
+// or, for any arrangement, { shapeless: { stick: 1, coal: 1 }, count: 4 }.
+// They're gathered from the registry once everything is registered (useCraftingRegistry).
+const recipes = [];
 
-  { type: 'shapeless', in: { raw_copper: 1 }, out: { itemId: 'copper_ingot', count: 1 } },
-  { type: 'shapeless', in: { raw_gold: 1 }, out: { itemId: 'gold_ingot', count: 1 } },
-  { type: 'shapeless', in: { raw_steel: 1, coal: 1 }, out: { itemId: 'steel_ingot', count: 1 } },
-  { type: 'shapeless', in: { steel_block: 1 }, out: { itemId: 'steel_ingot', count: 9 } },
-  { type: 'shapeless', in: { gold_block: 1 }, out: { itemId: 'gold_ingot', count: 9 } },
-  { type: 'shapeless', in: { copper: 1 }, out: { itemId: 'copper_ingot', count: 9 } },
-
-  {
-    type: 'shaped',
-    shape: ['i', 'i'],
-    ingredients: { i: 'steel_ingot' },
-    out: { itemId: 'steel_rod', count: 4 }
-  },
-
-  {
-    type: 'shaped',
-    shape: ['i', 'i'],
-    ingredients: { i: 'gold_ingot' },
-    out: { itemId: 'gold_rod', count: 4 }
-  },
-
-  {
-    type: 'shaped',
-    shape: ['i', 'i'],
-    ingredients: { i: 'copper_ingot' },
-    out: { itemId: 'copper_rod', count: 4 }
-  },
-
-  {
-    type: 'shaped',
-    shape: ['iii', 'iii', 'iii'],
-    ingredients: { i: 'steel_ingot' },
-    out: { blockId: 'steel_block', count: 1 }
-  },
-
-  {
-    type: 'shaped',
-    shape: ['iii', 'iii', 'iii'],
-    ingredients: { i: 'copper_ingot' },
-    out: { blockId: 'copper', count: 1 }
-  },
-
-  {
-    type: 'shaped',
-    shape: ['iii', 'iii', 'iii'],
-    ingredients: { i: 'gold_ingot' },
-    out: { blockId: 'gold_block', count: 1 }
-  },
-];
+function gatherRecipes() {
+  recipes.length = 0;
+  for (const [id, def] of registry.entries()) {
+    for (const r of def.recipes || []) {
+      const out = { [def.isItem ? 'itemId' : 'blockId']: id, count: r.count ?? 1 };
+      recipes.push(r.shapeless
+        ? { type: 'shapeless', in: r.shapeless, out }
+        : { type: 'shaped', shape: r.shape, ingredients: r.ingredients, out });
+    }
+  }
+}
 
 export function findMatchingRecipe(grid, is3x3 = false) {
   if (!grid.some(slot => slotId(slot))) return null;

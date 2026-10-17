@@ -1,3 +1,4 @@
+import { isGrassyCell, bareIdOf } from '../../assets/blocks/grassSpread.js';
 import { gameClock } from './gameClock.js';
 import { TILE_SIZE, darkenHex } from './utils.js';
 import { Clouds } from './clouds.js';
@@ -42,13 +43,16 @@ const LIGHT_EDGE_FADE = 5;
 const HELD_ARM_ANGLE = -0.7;
 const HELD_ARM_LOOK = 0.2;
 const HELD_ARM_WALK = 0.25;
-// Blocks whose green pixels take on the local biome's grass colour.
-const BIOME_TINTED = new Set(['grass', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'bush_1', 'bush_2', 'bush_3', 'bush_4', 'grass_c0', 'grass_c1', 'grass_c2', 'grass_c3', 'grass_c4', 'grass_c5', 'grass_c6', 'grass_c7', 'grass_c8', 'grass_c9', 'grass_c10', 'grass_c11', 'grass_c12', 'grass_c13', 'grass_c14', 'grass_c15', 'grass_corner']);
+const GRASS_SIDES = ['top', 'right', 'bottom', 'left'];
+// Textures (not blocks) whose green pixels take on the local biome's grass colour. Blocks
+// say so themselves with `biomeTint: true`.
+const BIOME_TINTED = new Set([
+  'grass_corner',
+  'grass_overlay_top', 'grass_overlay_right', 'grass_overlay_bottom', 'grass_overlay_left'
+]);
 // Plants that bend in the wind: the tip leans furthest, the base stays put.
-const WIND_SWAY = new Set(['short_grass', 'grass_tuft', 'fern', 'flower_short_grass', 'poppy', 'bush', 'seagrass']);
 const WIND_MAX_BEND = 2.5;   // texels the tip of a plant bends in the strongest gust
 const WIND_SPEED = 14;       // tiles per second a gust travels across the land
-const WIND_STIFFNESS = { bush: 0.45, seagrass: 0.6 };
 const TRUNK_MAX_BEND = 2.2;  // texels the top of a TRUNK_REF_HEIGHT-tall trunk bends in a gust
 const TRUNK_REF_HEIGHT = 9;   // trunk height (blocks) that reaches the full bend
 const LEAF_MAX_SWAY = 1.6;   // texels a leaf block shifts in the strongest gust
@@ -57,9 +61,6 @@ const FOG_TEXELS_PER_TILE = 8; // mist texture texels per block column (texture 
 const FALL_SLIDE_MS = 120;   // matches world.js FALL_TICK_INTERVAL
 const LEAF_FRINGE_DEPTH = 2;
 
-function isTrunk(id) {
-  return id.endsWith('_log') || id === 'birch_log_base';
-}
 
 // Images report `complete` once loaded; canvases (tinted textures) have no such flag.
 function isTextureReady(texture) {
@@ -111,12 +112,14 @@ export class Renderer {
     const backgroundBlocks = Array.isArray(window.backgroundBlocks) ? window.backgroundBlocks : ['dirt', 'coarse_dirt'];
     const ids = new Set([...backgroundBlocks, 'dirt', 'coarse_dirt', 'stone', 'grass']);
     for (const id of this.registry.map.keys()) ids.add(id);
-    for (const id of this.registry.map.keys()) if (id.endsWith('_leaves')) ids.add(`falling_leaf_${id}`);
-    for (const id of this.registry.map.keys()) if (id.endsWith('_chest')) ids.add(`${id}_left`).add(`${id}_right`);
-    for (const id of ['oak_leaf_particle', 'falling_leaf', 'steve', 'no_texture', 'bush_1', 'bush_2', 'bush_3', 'bush_4', 'seagrass_1', 'seagrass_2', 'seagrass_3', 'shell_1', 'shell_2', 'shell_3', 'grass_c0', 'grass_c1', 'grass_c2', 'grass_c3', 'grass_c4', 'grass_c5', 'grass_c6', 'grass_c7', 'grass_c8', 'grass_c9', 'grass_c10', 'grass_c11', 'grass_c12', 'grass_c13', 'grass_c14', 'grass_c15', 'grass_corner']) ids.add(id);
+    for (const [id, def] of this.registry.map) if (def.leaves) ids.add(`falling_leaf_${id}`);
+    for (const [id, def] of this.registry.map) if (def.kind === 'chest') ids.add(`${id}_left`).add(`${id}_right`);
+    for (const id of ['oak_leaf_particle', 'falling_leaf', 'steve', 'no_texture', 'grass_corner']) ids.add(id);
+    for (const side of GRASS_SIDES) ids.add(`grass_overlay_${side}`);
+    for (const [id, def] of this.registry.map) for (let i = 1; i <= (def.variants?.count ?? 0); i++) ids.add(`${id}_${i}`);
 
     for (const textureId of ids) {
-      if (textureId === 'air' || this.textures[textureId]) continue;
+      if (textureId === 'air' || textureId === 'double_slab' || this.textures[textureId]) continue;
       const image = new Image();
       image.onload = () => {
         this.textures[textureId] = image;
@@ -124,7 +127,7 @@ export class Renderer {
       image.onerror = () => {
         this.missingTextures.add(textureId);
       };
-      image.src = `textures/${textureId}.png`;
+      image.src = `assets/textures/${textureId}.png`;
     }
   }
 
@@ -234,7 +237,7 @@ export class Renderer {
         }
         // Water (still and moving) is drawn after the blocks, all at once (drawWaterLayer).
         if (cell.id === 'water') continue;
-        if (leafCtx && cell.id.endsWith('_leaves') && cell.meta?.layer !== 'bg') {
+        if (leafCtx && this.registry.get(cell.id)?.leaves && cell.meta?.layer !== 'bg') {
           this.ctx = leafCtx;
           this.drawBlock(x, y, t, cell.meta || {});
           this.ctx = ctx;
@@ -321,51 +324,132 @@ export class Renderer {
     return c;
   }
 
-  // Inner grass corners: where two grass blocks meet around a solid block's corner (both
-  // with their grass facing the open cell diagonal to it), a grass patch is laid over that
-  // corner of the solid block so the two bands join. Works for all four corners.
+  // Inner grass corners, worked out on the quarter-cell grid so slabs and stairs join too:
+  // where two grassy quarters meet around a filled quarter's corner with the diagonal quarter
+  // open, a grass patch is laid over that corner so the two bands join.
   drawGrassCorners(target, startX, endX, startY, endY) {
     const { world, camera } = this;
     const base = this.textures.grass_corner;
     if (!base) return;
-    const id = (x, y) => (world.inBounds(x, y) ? world.getBlockId(x, y) : 'air');
-    const open = (x, y) => {
-      const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null;
-      return !t || !t.solid || (t.shape && t.shape !== 'full');
+    const quarters = new Map();
+    const quartersAt = (x, y) => {
+      const k = x + ',' + y;
+      let q = quarters.get(k);
+      if (q === undefined) {
+        const id = world.inBounds(x, y) ? world.getBlockId(x, y) : null;
+        const fill = this.blockQuarters(x, y);
+        q = fill | (isGrassyCell(world.getCell(x, y)) ? fill << 4 : 0);
+        quarters.set(k, q);
+      }
+      return q;
+    };
+    // Quarter (gx, gy) on the half-cell grid: 1 filled, 2 filled and grassy.
+    const at = (gx, gy) => {
+      const q = quartersAt(Math.floor(gx / 2), Math.floor(gy / 2));
+      const bit = 1 << ((gy & 1) * 2 + (gx & 1));
+      return (q & (bit << 4)) ? 2 : (q & bit) ? 1 : 0;
     };
     target.imageSmoothingEnabled = false;
     for (let x = startX; x <= endX; x++) {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
       for (let y = startY; y <= endY; y++) {
-        if (open(x, y)) continue;
-        for (const dy of [-1, 1]) {
-          for (const dx of [-1, 1]) {
-            if (!open(x + dx, y + dy) || id(x + dx, y) !== 'grass' || id(x, y + dy) !== 'grass') continue;
-            const tex = this.biomeTexture('grass_corner', base, x);
-            const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
-            const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
-            const size = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE)) - sx;
-            // The texture is the top-left corner; mirror it for the others.
-            target.save();
-            target.translate(dx > 0 ? sx + size : sx, dy > 0 ? sy + size : sy);
-            target.scale(dx > 0 ? -1 : 1, dy > 0 ? -1 : 1);
-            target.drawImage(tex, 0, 0, size, size);
-            target.restore();
+        if (!(quartersAt(x, y) & 15)) continue;
+        const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
+        const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
+        const size = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE)) - sx;
+        const half = size / 2;
+        for (let q = 0; q < 4; q++) {
+          const gx = x * 2 + (q & 1), gy = y * 2 + (q >> 1);
+          if (!at(gx, gy)) continue;
+          for (const dy of [-1, 1]) {
+            for (const dx of [-1, 1]) {
+              if (at(gx + dx, gy + dy) || at(gx + dx, gy) !== 2 || at(gx, gy + dy) !== 2) continue;
+              const tex = this.biomeTexture('grass_corner', base, x);
+              const qx = sx + (q & 1) * half, qy = sy + (q >> 1) * half;
+              // The texture is the top-left corner; mirror it for the others, kept inside the quarter.
+              target.save();
+              target.beginPath();
+              target.rect(qx, qy, half, half);
+              target.clip();
+              target.translate(dx > 0 ? qx + half : qx, dy > 0 ? qy + half : qy);
+              target.scale(dx > 0 ? -1 : 1, dy > 0 ? -1 : 1);
+              target.drawImage(tex, 0, 0, size, size);
+              target.restore();
+            }
           }
         }
       }
     }
   }
 
-  // Connected grass (purely visual): a grass band along every side that faces open air,
-  // so neighbouring grass joins up all the way round. Bits: 1 up, 2 right, 4 down, 8 left.
-  connectedGrassId(tileX, tileY) {
-    const open = (x, y) => {
-      const t = this.world.inBounds(x, y) ? this.world.getBlockType(x, y) : null;
-      return !t || !t.solid || (t.shape && t.shape !== 'full') ? 1 : 0;
+  // Which quarters of a cell a block fills: bits 1 top-left, 2 top-right, 4 bottom-left, 8 bottom-right.
+  blockQuarters(x, y) {
+    const t = this.world.inBounds(x, y) ? this.world.getBlockType(x, y) : null;
+    if (!t || !t.solid) return 0;
+    const meta = this.world.getCell(x, y)?.meta || {};
+    if (meta.layer === 'bg') return 0;
+    if (!t.shape || t.shape === 'full') return 15;
+    if (t.shape === 'slab') {
+      if ((t.thickness ?? 8) < 8 || meta.open) return 0;
+      return (meta.slabPos || 'bottom') === 'top' ? 3 : 12;
+    }
+    if (t.shape === 'stairs') return (meta.orient || 'right') === 'right' ? 14 : 13;
+    return 0;
+  }
+
+  // Connected grass (purely visual): the soil texture with grass overlay bands laid along every
+  // edge of the block's shape that faces open air, quarter by quarter, so slabs and stairs next
+  // to each other only get grass where it shows. meta.sides (1 up, 2 right, 4 down, 8 left)
+  // limits which directions have grown in so far.
+  grassOverlay(tileX, tileY, meta) {
+    const own = this.blockQuarters(tileX, tileY);
+    const grown = meta?.sides ?? 15;
+    const near = {
+      0: own,
+      up: this.blockQuarters(tileX, tileY - 1), down: this.blockQuarters(tileX, tileY + 1),
+      left: this.blockQuarters(tileX - 1, tileY), right: this.blockQuarters(tileX + 1, tileY)
     };
-    const m = open(tileX, tileY - 1) | open(tileX + 1, tileY) << 1 | open(tileX, tileY + 1) << 2 | open(tileX - 1, tileY) << 3;
-    return `grass_c${m}`;
+    const filled = (qx, qy) => {
+      let cell = 0;
+      if (qy < 0) { cell = 'up'; qy += 2; } else if (qy > 1) { cell = 'down'; qy -= 2; }
+      else if (qx < 0) { cell = 'left'; qx += 2; } else if (qx > 1) { cell = 'right'; qx -= 2; }
+      return near[cell] & (1 << (qy * 2 + qx));
+    };
+    const edges = [];
+    for (let q = 0; q < 4; q++) {
+      if (!(own & (1 << q))) continue;
+      const qx = q & 1, qy = q >> 1;
+      // Edges inside the cell (a stair's riser) grow along with the top.
+      const has = (bit, inside) => grown & (inside ? 1 : bit);
+      if (has(1, qy > 0) && !filled(qx, qy - 1)) edges.push(`t${q}`);
+      if (has(2, qx < 1) && !filled(qx + 1, qy)) edges.push(`r${q}`);
+      if (has(4, qy < 1) && !filled(qx, qy + 1)) edges.push(`b${q}`);
+      if (has(8, qx > 0) && !filled(qx - 1, qy)) edges.push(`l${q}`);
+    }
+    if (!edges.length) return null;
+    const id = `grass_overlay|${edges.join(',')}`;
+    if (this.textures[id]) return id;
+    const bands = { t: 'top', r: 'right', b: 'bottom', l: 'left' };
+    for (const side of GRASS_SIDES) if (!isTextureReady(this.textures[`grass_overlay_${side}`])) return null;
+    const c = document.createElement('canvas');
+    c.width = 16; c.height = 16;
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    for (const e of edges) {
+      const q = +e[1], qx = (q & 1) * 8, qy = (q >> 1) * 8;
+      // Shift the band so it sits on this quarter's edge, then keep only this quarter.
+      const dx = e[0] === 'l' ? qx : e[0] === 'r' ? qx - 8 : 0;
+      const dy = e[0] === 't' ? qy : e[0] === 'b' ? qy - 8 : 0;
+      g.save();
+      g.beginPath();
+      g.rect(qx, qy, 8, 8);
+      g.clip();
+      g.drawImage(this.textures[`grass_overlay_${bands[e[0]]}`], dx, dy);
+      g.restore();
+    }
+    this.textures[id] = c;
+    BIOME_TINTED.add(id);
+    return id;
   }
 
   leafFoot(texture, rotation, size) {
@@ -431,6 +515,8 @@ export class Renderer {
   }
 
   lightFactorAt(tileX, tileY, dayBoost) {
+    // The light effect (/effect light): see everything as if in full daylight.
+    if (this.effects?.light) return 1;
     const world = this.world;
     const { ambient } = this.daylight;
     const sky = (world.getDisplaySkyLight(tileX, tileY) / 15) * ambient;
@@ -563,7 +649,7 @@ export class Renderer {
     out[3] = out[4] = out[5] = 0;
     if (w <= 0) return;
     const { ambient } = this.daylight;
-    const dark = 1 - Math.min(1, (this.world.getDisplaySkyLight(tileX, tileY) / 15) * ambient);
+    const dark = this.effects?.light ? 0 : 1 - Math.min(1, (this.world.getDisplaySkyLight(tileX, tileY) / 15) * ambient);
     if (dark <= 0) return;
     const cr = r / w, cg = g / w, cb = b / w;
     const openAir = this.isOpenSky(tileX, tileY);
@@ -955,33 +1041,7 @@ export class Renderer {
   }
 
   getBlockColor(blockId) {
-    const blockColors = {
-      'dirt': '#8B4513',
-      'coarse_dirt': '#654321',
-      'stone': '#808080',
-      'grass': '#7CFC00',
-      'sand': '#F4A460',
-      'gravel': '#696969',
-      'clay': '#CD853F',
-      'mud': '#8B4513',
-      'copper': '#B87333',
-      'steel_ore': '#8E9AA6',
-      'copper_ore': '#D8814A',
-      'gold_ore': '#FFD700',
-      'coal_ore': '#2F4F4F',
-      'oak_log': '#8B4513',
-      'birch_log': '#F5DEB3',
-      'spruce_log': '#654321',
-      'pine_log': '#3b2a20',
-      'maple_log': '#CD853F',
-      'oak_planks': '#DEB887',
-      'birch_planks': '#F5DEB3',
-      'spruce_planks': '#8B4513',
-      'pine_planks': '#4a3528',
-      'maple_planks': '#CD853F'
-    };
-    
-    return blockColors[blockId] || '#8B4513';
+    return this.registry.get(blockId)?.color || '#8B4513';
   }
 
   drawSky() {
@@ -1140,26 +1200,8 @@ drawStars() {
       } else {
         ctx.save();
         ctx.globalAlpha = alpha;
-        let c = '#5a9e5a';
-        if (particle.blockId === 'birch_leaves') {
-          c = '#9ac89a';
-        } else if (particle.blockId === 'spruce_leaves') {
-          c = '#3a9a3a';
-        } else if (particle.blockId === 'pine_leaves') {
-          c = '#2e6e5a';
-        } else if (particle.blockId === 'maple_green_leaves') {
-          c = '#5acc5a';
-        } else if (particle.blockId === 'maple_orange_leaves') {
-          c = '#ffaa33';
-        } else if (particle.blockId === 'maple_red_leaves') {
-          c = '#ff5555';
-        } else if (particle.blockId) {
-          if (particle.blockId.includes('oak')) c = '#5a9e5a';
-          if (particle.blockId.includes('birch')) c = '#9ac89a';
-          if (particle.blockId.includes('spruce')) c = '#3a9a3a';
-          if (particle.blockId.includes('maple')) c = '#ffaa33';
-          if (particle.blockId.includes('pine')) c = '#2e6e5a';
-        }
+        const leafDef = this.registry.get(particle.blockId);
+        let c = leafDef?.leaves?.particleColor || leafDef?.color || '#5a9e5a';
         
         const tintedLightFactor = Math.min(1.0, combinedLightFactor * particle.tintFactor);
         c = darkenHex(c, tintedLightFactor);
@@ -1184,7 +1226,7 @@ drawStars() {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
       for (let y = startY; y <= endY; y++) {
         const id = world.getCell(x, y).id;
-        if (!id.endsWith('_leaves')) continue;
+        if (!this.registry.get(id)?.leaves) continue;
         let texture = this.textures[id];
         if (!texture) continue;
         if (biomeHasLeafTint(id)) texture = this.getBiomeTinted(id, texture, x);
@@ -1613,7 +1655,6 @@ drawStars() {
     }
     const colorLut = this._pColorLut;
     const colorRGB = this._pColorRGB;
-    const TOP_COLOR = (225 << 24) | (255 << 16) | (232 << 8) | 196;
 
     // Fast 32-bit pixel rendering inside bounding box with LUT & dirty rect blit
     let activePixels = 0;
@@ -1626,17 +1667,6 @@ drawStars() {
           if (!grid[k]) continue;
           activePixels++;
           const light = blockLight[bRow + (x >> 3)];
-          if (y === tops[x]) {
-            if (light >= 0.99) {
-              d32[k] = TOP_COLOR;
-            } else {
-              const lr = (196 * light) | 0;
-              const lg = (232 * light) | 0;
-              const lb = (255 * light) | 0;
-              d32[k] = (225 << 24) | (lb << 16) | (lg << 8) | lr;
-            }
-            continue;
-          }
           const sm = smooth[x];
           const d = Number.isNaN(sm) ? (DEPTH >> 1) : ((y - sm) | 0);
           const lutIdx = d <= 0 ? 0 : d >= DEPTH ? DEPTH : d;
@@ -1780,7 +1810,7 @@ drawStars() {
     let below = 0;
     while (below < 16 && world.inBounds(tileX, tileY + below + 1)) {
       const cell = world.getCell(tileX, tileY + below + 1);
-      if (!isTrunk(cell.id) || cell.meta?.axis === 'x') break;
+      if (!this.registry.get(cell.id)?.trunk || cell.meta?.axis === 'x') break;
       below++;
     }
     const px = size / 16;
@@ -1892,7 +1922,9 @@ drawStars() {
 
   // The texture for `id` recoloured for the biome at tileX (unchanged if it isn't biome-tinted).
   biomeTexture(id, texture, tileX) {
-    if (!texture || !(BIOME_TINTED.has(id) || biomeHasLeafTint(id))) return texture;
+    // A variant texture (bush_2) tints like its block (bush).
+    const tinted = BIOME_TINTED.has(id) || this.registry?.get(id.replace(/_\d+$/, ''))?.biomeTint;
+    if (!texture || !(tinted || biomeHasLeafTint(id))) return texture;
     return this.getBiomeTinted(id, texture, tileX);
   }
 
@@ -1932,7 +1964,7 @@ drawStars() {
     if (!isTextureReady(texture)) return texture;
     const seed = this.world.seed ?? 0;
     const base = this.getGreenAverage(id, texture);
-    const [r, g, b] = colorId.endsWith('_leaves') ? leafColorAt(tileX, seed, colorId, base) : grassColorAt(tileX, seed);
+    const [r, g, b] = this.registry.get(colorId)?.leaves ? leafColorAt(tileX, seed, colorId, base) : grassColorAt(tileX, seed);
     if (r === base[0] && g === base[1] && b === base[2]) return texture;
     const key = `biome|${id}|${r},${g},${b}`;
     let tinted = this._imageCache.get(key);
@@ -2129,10 +2161,51 @@ drawStars() {
       ? this.lightFactorAt(tileX, tileY, true)
       : 1.0;
 
-    // Bushes come in sizes (meta.size 1-4), each with its own texture.
-    const textureId = type.id === 'bush' ? `bush_${meta?.size ?? 4}`
-      : type.id === 'seagrass' || type.id === 'shell' ? `${type.id}_${meta?.v ?? 1}`
-      : type.id === 'grass' && meta?.layer !== 'bg' && polishOn('connectedGrass') ? this.connectedGrassId(tileX, tileY) : type.id;
+    // Blocks with several looks (bush sizes, shells...) pick a texture from their meta.
+    const textureId = type.variants ? `${type.id}_${meta?.[type.variants.key] ?? type.variants.count}` : type.id;
+    if (type.id === 'double_slab') {
+      const shade = meta?.layer === 'bg' ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor;
+      const half = Math.floor(size / 2);
+      // A grass slab under another slab is covered, so it shows its bare soil.
+      // Grass slab halves show their bare soil; grass goes on as an overlay like other grass.
+      const halfId = (id) => this.registry.get(id)?.grassy ? bareIdOf(id) : id;
+      const bottomId = halfId(meta?.bottom);
+      const topId = halfId(meta?.top);
+      const bottom = bottomId && this.textures[bottomId];
+      const top = topId && this.textures[topId];
+      // Slab textures hold the slab in their lower half: the top one is drawn shifted up.
+      if (isTextureReady(bottom)) this.drawBlockTexture(this.biomeTexture(bottomId, bottom, tileX), sx, sy, size, shade);
+      if (isTextureReady(top)) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(sx, sy, size, half);
+        ctx.clip();
+        this.drawBlockTexture(this.biomeTexture(topId, top, tileX), sx, sy - half, size, shade);
+        ctx.restore();
+      }
+      if (isGrassyCell({ id: type.id, meta }) && polishOn('connectedGrass')) {
+        const overlayId = this.grassOverlay(tileX, tileY, meta);
+        if (overlayId) this.drawBlockTexture(this.biomeTexture(overlayId, this.textures[overlayId], tileX), sx, sy, size, shade);
+      }
+      return;
+    }
+    // Grass blocks are drawn as their bare soil with a grass overlay on top.
+    if (type.grassy && meta?.layer !== 'bg' && polishOn('connectedGrass')) {
+      const soilId = bareIdOf(type.id, meta);
+      const soil = this.textures[soilId];
+      if (isTextureReady(soil)) {
+        const flip = type.shape === 'stairs' && meta?.orient === 'left';
+        const shiftUp = type.shape === 'slab' && meta?.slabPos === 'top' ? Math.floor(size / 2) : 0;
+        ctx.save();
+        ctx.translate(flip ? sx + size : sx, sy - shiftUp);
+        if (flip) ctx.scale(-1, 1);
+        this.drawBlockTexture(soil, 0, 0, size, finalLightFactor);
+        ctx.restore();
+        const overlayId = this.grassOverlay(tileX, tileY, meta);
+        if (overlayId) this.drawBlockTexture(this.biomeTexture(overlayId, this.textures[overlayId], tileX), sx, sy, size, finalLightFactor);
+        return;
+      }
+    }
     let texture = this.textures[textureId] || this.textures[type.id] || this.missingTextureFor(type);
     texture = this.biomeTexture(textureId, texture, tileX);
     if (type.id === 'water') {
@@ -2142,7 +2215,7 @@ drawStars() {
       this.drawRock(texture, sx, sy, size, meta, finalLightFactor);
       return;
     }
-    if (type.id.endsWith('_leaves') && texture && meta?.layer !== 'bg') {
+    if (type.leaves && texture && meta?.layer !== 'bg') {
       const lx = sx + this.leafSwayOffset(tileX, tileY, size);
       // Solid shaded foliage behind the holey leaf texture, so canopies don't look see-through.
       if (!polishOn('leaves')) {
@@ -2153,7 +2226,7 @@ drawStars() {
       const k = 0.62 * Math.max(MIN_BRIGHTNESS, Math.min(1, finalLightFactor));
       ctx.fillStyle = `rgb(${Math.round(r * k)}, ${Math.round(g * k)}, ${Math.round(b * k)})`;
       // The backing stops short of open sides, so the canopy's outline stays ragged.
-      const leafy = (x, y) => { const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null; return !!t && (t.solid || t.id.endsWith('_leaves') || t.id.endsWith('_log')); };
+      const leafy = (x, y) => { const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null; return !!t && (t.solid || !!t.leaves || t.id.endsWith('_log')); };
       const inset = Math.round(size * 4 / 16);
       const l0 = leafy(tileX - 1, tileY) ? 0 : inset, r0 = leafy(tileX + 1, tileY) ? 0 : inset;
       const t0 = leafy(tileX, tileY - 1) ? 0 : inset, b0 = leafy(tileX, tileY + 1) ? 0 : inset;
@@ -2161,11 +2234,11 @@ drawStars() {
       this.drawBlockTexture(texture, lx, sy, size, finalLightFactor);
       return;
     }
-    if (WIND_SWAY.has(type.id) && texture && meta?.layer !== 'bg') {
-      this.drawSwaying(texture, sx, sy, size, finalLightFactor, this.windSwayAt(tileX), WIND_STIFFNESS[type.id] ?? 1);
+    if (type.windSway && texture && meta?.layer !== 'bg') {
+      this.drawSwaying(texture, sx, sy, size, finalLightFactor, this.windSwayAt(tileX), type.windSway);
       return;
     }
-    if (texture && meta?.axis !== 'x' && meta?.layer !== 'bg' && isTrunk(type.id)) {
+    if (texture && meta?.axis !== 'x' && meta?.layer !== 'bg' && type.trunk) {
       this.drawTrunk(texture, tileX, tileY, sx, sy, size, finalLightFactor);
       // Inside the crown: leaves in front of the trunk.
       const leafId = keptLeafCover(world, tileX, tileY);
@@ -2193,7 +2266,7 @@ drawStars() {
       return;
     }
     
-    if (type.id === 'ladder' && texture) {
+    if (type.climbable && texture) {
       if (meta?.wall === 'right') {
         ctx.save();
         ctx.translate(sx + size, sy);
@@ -2207,12 +2280,12 @@ drawStars() {
     }
 
     let chestTexture = null;
-    if (type.id.endsWith('_chest') && (meta?.chestType === 'left' || meta?.chestType === 'right')) {
+    if (type.kind === 'chest' && (meta?.chestType === 'left' || meta?.chestType === 'right')) {
       chestTexture = this.textures[`${type.id}_${meta.chestType}`];
     }
 
     // An open trapdoor stands on end against one side of its cell.
-    if (type.id.endsWith('_trapdoor') && meta?.open && texture) {
+    if (type.kind === 'trapdoor' && meta?.open && texture) {
       const half = Math.floor(size * (type.thickness ?? 8) / 16);
       ctx.save();
       // Rotate the hatch (drawn along the bottom of its texture) a quarter turn.

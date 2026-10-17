@@ -23,8 +23,8 @@ let loading = null;
 // Load LiquidFun once (it's a WebAssembly module); until it's ready, water stays as blocks.
 export function loadParticleEngine() {
   if (!loading) {
-    loading = import('../../lib/liquidfun/entry.js')
-      .then((m) => m.default({ locateFile: (f) => new URL(`../../lib/liquidfun/${f}`, import.meta.url).href }))
+    loading = import('../lib/liquidfun/entry.js')
+      .then((m) => m.default({ locateFile: (f) => new URL(`../lib/liquidfun/${f}`, import.meta.url).href }))
       .then((b) => { Box2D = b; return b; })
       .catch((e) => { console.warn('Particle water unavailable:', e); return null; });
   }

@@ -2,14 +2,14 @@
   "name": "underwild",
   "version": "0.5.4",
   "description": "Underwild - A 2D sandbox game",
-  "main": "main.js",
+  "main": "platforms/desktop/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
     "postinstall": "echo No native modules to rebuild",
     "dist": "electron-builder --win --publish never",
     "release": "electron-builder --win --publish always",
-    "set-version": "node scripts/set-version.mjs"
+    "set-version": "node build/scripts/set-version.mjs"
   },
   "devDependencies": {
     "@capacitor/android": "^6.1.2",
@@ -28,28 +28,19 @@
     "appId": "com.dillonrgaming.underwild",
     "productName": "Underwild",
     "directories": {
-      "output": "release"
+      "output": "build/release"
     },
     "files": [
       "**/*",
-      "!worlds/**",
-      "!dist/**",
-      "!release/**",
-      "!concepts/**",
-      "!crash-dumps/**",
+      "!build/**",
+      "!data/**",
       "!*.log",
       "!*-log.txt",
-      "!underwild-screen.png",
-      "!preferences.json",
-      "!diag.html",
-      "!tree_variants.png",
       "!caveman.md",
       "!rules.txt",
       "!.claude/**",
-      "!android/**",
-      "!www/**",
-      "!scripts/**",
-      "!capacitor.config.json"
+      "!.github/**",
+      "!platforms/android/**"
     ],
     "win": {
       "target": "nsis",

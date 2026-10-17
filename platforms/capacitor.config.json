@@ -1,0 +1,12 @@
+{
+  "appId": "com.dillonrgaming.underwild",
+  "appName": "Underwild",
+  "webDir": "../build/www",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

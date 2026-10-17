@@ -1,3 +1,4 @@
+import { settleGrass } from '../../assets/blocks/grassSpread.js';
 import { sampleBlockAt } from '../logic/terrainGen.js';
 import { TILE_SIZE } from './utils.js';
 import { WaterSim, waterMass } from '../logic/water.js';
@@ -221,6 +222,12 @@ export class World {
 
     this.chunks.set(this.chunkKey(chunkX), chunk);
     this._ghostCells.delete(chunkX);
+    // Fresh ground: grow / kill grass now rather than over the first minutes of play. Only
+    // the edge column of a neighbour that was already generated earlier gets looked at too.
+    if (!chunk.dirty) {
+      const startX = chunkX * this.chunkSize;
+      settleGrass(this, startX - 1, startX + this.chunkSize);
+    }
     this.water?.chunkLoaded(chunkX);
     this._touchChunkLRU(chunkX);
     this._enforceChunkLimit();

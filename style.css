@@ -1322,6 +1322,22 @@ img {
   margin-left: auto;
 }
 
+/* The clear-inventory X sits just left of the inventory tab, both pushed to the right. */
+.creative-tab-clear {
+  margin-left: auto;
+  color: #d9534f;
+}
+
+.creative-tab-clear + .creative-tab-inventory {
+  margin-left: 0;
+}
+
+.creative-tab-clear svg {
+  width: var(--item-size);
+  height: var(--item-size);
+  pointer-events: none;
+}
+
 .creative-panel {
   margin-bottom: var(--inventory-section-gap);
 }
@@ -1348,7 +1364,8 @@ img {
      grid sit in the same place on every tab. */
   display: block;
   visibility: hidden;
-  width: 50%;
+  width: 40%;
+  margin-left: auto;
   height: var(--creative-search-height);
   padding: 4px 8px 2px;
   font-size: 15px;
@@ -1365,6 +1382,40 @@ img {
 
 #inventory[data-creative-tab="search"] .creative-search {
   visibility: visible;
+}
+
+/* Type / Material switch: two halves of one pill, the picked one lit. */
+.creative-sort {
+  display: flex;
+  flex-shrink: 0;
+  height: var(--creative-search-height);
+  border: var(--input-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.creative-sort button {
+  padding: 2px 10px 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--input-text);
+  background: var(--input-bg);
+  border: none;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.creative-sort button + button {
+  border-left: var(--input-border);
+}
+
+.creative-sort button:hover {
+  opacity: 0.85;
+}
+
+.creative-sort button.selected {
+  opacity: 1;
+  background: var(--creative-tab-bg-selected);
 }
 
 /* On the creative Inventory tab the title sits in a row as tall as the search bar, centred
