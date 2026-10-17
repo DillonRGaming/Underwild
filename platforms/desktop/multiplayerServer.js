@@ -11,7 +11,8 @@ const dgram = require('dgram');
 const os = require('os');
 const { StringDecoder } = require('string_decoder');
 let WebSocketServer = null;
-try { ({ WebSocketServer } = require('ws')); } catch (e) {}
+let WebSocketClient = null;
+try { ({ WebSocketServer, WebSocket: WebSocketClient } = require('ws')); } catch (e) {}
 
 const GAME_PORT = 47777;       // first TCP port tried by a host
 const DISCOVERY_PORT = 47778;  // UDP port hosts announce on
@@ -222,6 +223,15 @@ let client = null;
 
 function join(address, port = GAME_PORT) {
   leave();
+  // Computers host over TCP (plus a WebSocket on the next port); phones host WebSocket only.
+  // Try TCP first and fall back to the WebSocket.
+  return joinTcp(address, port).then((res) => {
+    if (res.ok || !WebSocketClient) return res;
+    return joinWs(address, port + 1).then((ws) => (ws.ok ? ws : res));
+  });
+}
+
+function joinTcp(address, port) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host: address, port });
     socket.setNoDelay(true);
@@ -231,7 +241,7 @@ function join(address, port = GAME_PORT) {
       settled = true;
       socket.destroy();
       resolve({ ok: false, error: 'Could not reach that game (timed out).' });
-    }, 6000);
+    }, 3000);
     socket.once('connect', () => {
       settled = true;
       clearTimeout(timeout);
@@ -248,6 +258,43 @@ function join(address, port = GAME_PORT) {
     });
     socket.on('close', () => {
       if (client === socket) {
+        client = null;
+        send('mp:event', { type: 'host-disconnect' });
+      }
+    });
+  });
+}
+
+function joinWs(address, wsPort) {
+  return new Promise((resolve) => {
+    const ws = new WebSocketClient(`ws://${address}:${wsPort}`, { maxPayload: MAX_LINE });
+    let settled = false;
+    const wrapper = {
+      write: (line) => { if (ws.readyState === 1) ws.send(line.endsWith('\n') ? line.slice(0, -1) : line); },
+      end: () => ws.close(),
+      destroy: () => ws.terminate()
+    };
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      ws.terminate();
+      resolve({ ok: false, error: 'Could not reach that game (timed out).' });
+    }, 4000);
+    ws.on('open', () => {
+      settled = true;
+      clearTimeout(timeout);
+      client = wrapper;
+      resolve({ ok: true });
+    });
+    ws.on('message', (data) => send('mp:event', { type: 'message', id: 0, data: data.toString('utf8') }));
+    ws.on('error', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve({ ok: false, error: 'Could not connect to that game.' });
+    });
+    ws.on('close', () => {
+      if (client === wrapper) {
         client = null;
         send('mp:event', { type: 'host-disconnect' });
       }

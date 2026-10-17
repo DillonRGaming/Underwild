@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(LanDiscoveryPlugin.class);
+        registerPlugin(LanHostPlugin.class);
         super.onCreate(savedInstanceState);
         hideSystemBars();
     }

@@ -4,7 +4,7 @@
 //   - worlds: saved in the browser's IndexedDB
 //   - prefs: saved in localStorage
 //   - mp (Android app only): finds games on the Wi-Fi with the app's LanDiscovery plugin
-//     and joins them over WebSocket. Phones can join but not host.
+//     and joins them over WebSocket. It can also host, with the LanHost plugin.
 // The desktop-only parts (window buttons, app icon, fullscreen...) stay missing, so the
 // game hides them as it already does in a browser.
 
@@ -99,16 +99,49 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
     let browseTimer = null;
     let browseHandle = null;
     let socket = null;
+    const lanHost = cap.Plugins?.LanHost || cap.registerPlugin?.('LanHost');
+    let hostHandles = [];
     const HOST_TIMEOUT_MS = 4000;
 
     api.mp = {
       onEvent(cb) { listeners.add(cb); return () => listeners.delete(cb); },
-      async host() { return { ok: false, error: 'Hosting needs the desktop app. Phones can join games hosted on a computer.' }; },
-      stopHost() {},
-      announce() {},
-      hostSend() {},
-      kick() {},
-      async addresses() { return []; },
+      async host(port) {
+        if (!lanHost) return { ok: false, error: 'Hosting is not available in this app.' };
+        try {
+          if (!hostHandles.length) {
+            hostHandles = await Promise.all([
+              lanHost.addListener('guestConnect', ({ id, address }) => emit({ type: 'guest-connect', id, address })),
+              lanHost.addListener('guestMessage', ({ id, data }) => emit({ type: 'message', id, data })),
+              lanHost.addListener('guestDisconnect', ({ id }) => emit({ type: 'guest-disconnect', id }))
+            ]);
+          }
+          return await lanHost.startHost({ port: port || 47777 });
+        } catch (e) {
+          return { ok: false, error: e.message || 'Could not start the game.' };
+        }
+      },
+      stopHost() {
+        lanHost?.announce({ info: null }).catch(() => {});
+        lanHost?.stopHost().catch(() => {});
+        for (const h of hostHandles) h.remove?.();
+        hostHandles = [];
+      },
+      announce(info) {
+        lanHost?.announce({ info: info ? JSON.stringify({ game: 'underwild', v: 1, ...info }) : null }).catch(() => {});
+      },
+      hostSend(target, data) {
+        if (!lanHost) return;
+        const line = typeof data === 'string' && data.endsWith('\n') ? data.slice(0, -1) : data;
+        if (target === '*' || (target && typeof target === 'object')) {
+          lanHost.send({ all: true, except: target && typeof target === 'object' ? target.except : -1, data: line }).catch(() => {});
+        } else {
+          lanHost.send({ id: target, data: line }).catch(() => {});
+        }
+      },
+      kick(id) { lanHost?.kick({ id }).catch(() => {}); },
+      async addresses() {
+        try { return (await lanHost.addresses()).addresses || []; } catch (e) { return []; }
+      },
       async browse(on) {
         if (!on) {
           clearInterval(browseTimer);
