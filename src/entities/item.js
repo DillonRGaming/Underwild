@@ -55,9 +55,9 @@ export class ItemEntity {
     // Float in water, half submerged.
     const cx = Math.floor((this.x + this.width / 2) / 16);
     const cy = Math.floor((this.y + 2) / 16);
-    const water = world.inBounds(cx, cy) ? waterMass(world.getCell(cx, cy)) : 0;
+    const water = world.inBounds(cx, cy) ? world.waterAt(cx, cy) : 0;
     if (water > 0) {
-      const above = world.inBounds(cx, cy - 1) && waterMass(world.getCell(cx, cy - 1)) > 0;
+      const above = world.inBounds(cx, cy - 1) && world.waterAt(cx, cy - 1) > 0;
       const surfaceY = above ? -Infinity : (cy + 1) * 16 - Math.min(1, water) * 16;
       // Buoyancy matches gravity when the item's middle is at the water line, so it sits
       // half in, half out; deeper it's pushed up, higher it settles back down.

@@ -20,6 +20,8 @@ export const MP_VERSION = 1;
 const STATE_HZ = 20;
 const ITEMS_HZ = 15;
 const TIME_EVERY_MS = 1000;
+const WATER_HZ = 10;               // changes to the water sent to guests
+const WATER_FULL_MS = 2000;        // and all of it this often
 const SAVE_EVERY_MS = 4000;
 const KEEP_CHUNKS_AROUND = 6;      // chunks the host keeps loaded each side of a guest
 const PICKUP_RANGE = 12;
@@ -350,7 +352,18 @@ export class Multiplayer {
         this.game.explosion(msg.x, msg.y);
         this.send(msg, { except: id });
         break;
+      case 'bucket':
+        // A guest scooped or poured water: the host's water is the real one.
+        if (!peer.ready || !this.settings.allowBuild || !world?.water) return;
+        if (msg.op === 'pour') world.water.pour(msg.x | 0, msg.y | 0);
+        else if (msg.op === 'take') world.water.take(msg.x | 0, msg.y | 0);
+        break;
     }
+  }
+
+  // A guest used a bucket on (x, y) ('pour' or 'take'): the host does it to its water.
+  sendBucket(op, x, y) {
+    if (this.isGuest) this.send({ t: 'bucket', op, x, y });
   }
 
   // Do something to another player (a command's target, or a hit): id 0 is the host.
@@ -480,6 +493,9 @@ export class Multiplayer {
       case 'items':
         this.syncGuestItems(msg.list);
         break;
+      case 'wg':
+        this.game.world?.water?.netApply(msg.r || []);
+        break;
       case 'give':
         this.game.receiveItem(msg.id, msg.count);
         break;
@@ -603,6 +619,16 @@ export class Multiplayer {
           return [it.mpId, it.blockId || it.itemId, Math.round(it.x * 10) / 10, Math.round(it.y * 10) / 10, it.count || 1];
         });
         this.send({ t: 'items', list });
+      }
+      // Water: the parts that changed (guests don't simulate it, they draw what we send),
+      // and every couple of seconds all of it, for chunks a guest has only just loaded.
+      const water = this.game.world.water;
+      if (water && now - (this.lastWater || 0) >= 1000 / WATER_HZ) {
+        this.lastWater = now;
+        const full = now - (this.lastWaterFull || 0) >= WATER_FULL_MS;
+        if (full) this.lastWaterFull = now;
+        const r = water.netRegions(full);
+        if (r.length) this.send({ t: 'wg', r });
       }
       if (now - this.lastTime >= TIME_EVERY_MS) {
         this.lastTime = now;

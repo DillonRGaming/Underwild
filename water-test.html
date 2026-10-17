@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Particle Water Test</title>
+<style>
+  :root { --bg: #10151c; --text: #e8eef5; --muted: #8a97a6; --line: rgba(255,255,255,0.35); }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 16px; box-sizing: border-box; }
+  canvas { border: 2px solid var(--line); max-width: 100%; touch-action: none; cursor: crosshair; image-rendering: pixelated; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
+  button { background: rgba(0,0,0,0.35); color: var(--text); border: 2px solid var(--line); padding: 6px 12px; font: inherit; cursor: pointer; }
+  button.on { border-color: #fff; background: rgba(255,255,255,0.12); }
+  .hint { color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button id="reset">Reset level</button>
+    <button id="flood">Drop a big block of water</button>
+    <button id="tool-water" class="on">Pour water</button>
+    <button id="tool-block">Place blocks</button>
+    <button id="tool-erase">Erase blocks</button>
+    <span id="stats" class="hint"></span>
+  </div>
+  <canvas id="c"></canvas>
+  <div class="hint">Particle water: every bit of water moves on its own and pushes on its neighbours like real liquid.<br>
+    Each block of water is a 4&times;4 of water squares.<br>
+    Left-drag: use the selected tool (Pour water places a block of water in each block you drag over) &middot; Right-drag: place blocks &middot; Shift-drag: erase blocks</div>
+<script>
+// --- World ---------------------------------------------------------------------------
+const B = 16;
+const COLS = 48, ROWS = 28;
+const PW = COLS * B, PH = ROWS * B;
+const SCALE = 2;
+const canvas = document.getElementById('c');
+canvas.width = PW; canvas.height = PH;
+canvas.style.width = PW * SCALE + 'px';
+const ctx = canvas.getContext('2d');
+
+let solid = new Uint8Array(COLS * ROWS);
+const idx = (c, r) => r * COLS + c;
+const solidAt = (px, py) => {
+  const c = Math.floor(px / B), r = Math.floor(py / B);
+  return c < 0 || c >= COLS || r >= ROWS || (r >= 0 && solid[idx(c, r)] === 1);
+};
+
+// --- Particles (double density relaxation, Clavet et al.) ------------------------------
+// Each particle feels its neighbours within H pixels: packed tighter than the resting
+// density they push apart, looser they pull together a little. That's what makes it pour,
+// splash, run off ledges and settle flat on its own.
+const MAX = 6000;
+const H = 9;                 // neighbour radius (px)
+const REST = 2.6;            // resting density
+const K = 0.22;              // stiffness
+const K_NEAR = 0.6;          // close-range push (stops particles bunching)
+const GRAVITY = 0.12;
+const VISC = 0.18;           // viscosity: neighbours share velocity, so it flows as one body
+const DAMP = 0.99;
+const MAX_SPEED = 7;         // px per step: nothing gets flung
+const MAX_PUSH = 0.6;        // px a pair can push each other per step
+const RADIUS = 2.4;          // collision radius against blocks
+let n = 0;
+const x = new Float32Array(MAX), y = new Float32Array(MAX);
+const px = new Float32Array(MAX), py = new Float32Array(MAX);
+const vx = new Float32Array(MAX), vy = new Float32Array(MAX);
+
+function addParticle(ax, ay, avx = 0, avy = 0) {
+  if (n >= MAX || solidAt(ax, ay)) return;
+  x[n] = ax; y[n] = ay; vx[n] = avx; vy[n] = avy; n++;
+}
+
+// Spatial grid for finding neighbours.
+const GC = Math.ceil(PW / H), GR = Math.ceil(PH / H);
+const head = new Int32Array(GC * GR);
+const nextP = new Int32Array(MAX);
+function buildGrid() {
+  head.fill(-1);
+  for (let i = 0; i < n; i++) {
+    const gx = Math.min(GC - 1, Math.max(0, (x[i] / H) | 0));
+    const gy = Math.min(GR - 1, Math.max(0, (y[i] / H) | 0));
+    const g = gy * GC + gx;
+    nextP[i] = head[g];
+    head[g] = i;
+  }
+}
+
+const nbr = new Int32Array(64);
+const nq = new Float32Array(64);
+function neighbours(i) {
+  let count = 0;
+  const gx = (x[i] / H) | 0, gy = (y[i] / H) | 0;
+  for (let oy = -1; oy <= 1; oy++) {
+    const yy = gy + oy;
+    if (yy < 0 || yy >= GR) continue;
+    for (let ox = -1; ox <= 1; ox++) {
+      const xx = gx + ox;
+      if (xx < 0 || xx >= GC) continue;
+      for (let j = head[yy * GC + xx]; j !== -1; j = nextP[j]) {
+        if (j === i) continue;
+        const dx = x[j] - x[i], dy = y[j] - y[i];
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= H * H || d2 < 1e-6) continue;
+        nbr[count] = j;
+        nq[count] = Math.sqrt(d2) / H;
+        if (++count === 64) return count;
+      }
+    }
+  }
+  return count;
+}
+
+function step() {
+  // Gravity, then move, remembering where each particle was.
+  for (let i = 0; i < n; i++) {
+    vy[i] += GRAVITY;
+    vx[i] *= DAMP; vy[i] *= DAMP;
+    px[i] = x[i]; py[i] = y[i];
+    x[i] += vx[i]; y[i] += vy[i];
+  }
+  buildGrid();
+  // Viscosity and density relaxation.
+  for (let i = 0; i < n; i++) {
+    const cnt = neighbours(i);
+    let rho = 0, rhoNear = 0;
+    for (let a = 0; a < cnt; a++) {
+      const q = 1 - nq[a];
+      rho += q * q;
+      rhoNear += q * q * q;
+    }
+    const P = K * (rho - REST);
+    const PN = K_NEAR * rhoNear;
+    let dx = 0, dy = 0;
+    for (let a = 0; a < cnt; a++) {
+      const j = nbr[a];
+      const q = 1 - nq[a];
+      const rx = (x[j] - x[i]) / (nq[a] * H), ry = (y[j] - y[i]) / (nq[a] * H);
+      // How hard a pair pushes, capped so one step never shoves water into the ground.
+      const D = Math.max(-MAX_PUSH, Math.min(MAX_PUSH, P * q + PN * q * q));
+      const ddx = rx * D * 0.5, ddy = ry * D * 0.5;
+      x[j] += ddx; y[j] += ddy;
+      dx -= ddx; dy -= ddy;
+      // Viscosity: soften differences in speed along the line between them.
+      const u = (vx[i] - vx[j]) * rx + (vy[i] - vy[j]) * ry;
+      if (u > 0) {
+        const I = q * VISC * u * 0.5;
+        vx[i] -= I * rx; vy[i] -= I * ry;
+        vx[j] += I * rx; vy[j] += I * ry;
+      }
+    }
+    x[i] += dx; y[i] += dy;
+  }
+  // Blocks: push particles back out, sliding along the surface they hit.
+  for (let i = 0; i < n; i++) {
+    collide(i);
+    vx[i] = x[i] - px[i];
+    vy[i] = y[i] - py[i];
+    const sp = Math.hypot(vx[i], vy[i]);
+    if (sp > MAX_SPEED) { vx[i] *= MAX_SPEED / sp; vy[i] *= MAX_SPEED / sp; }
+    // Barely moving: calm it down, so resting water lies still instead of shimmering.
+    else if (sp < 0.08) { vx[i] *= 0.85; vy[i] *= 0.85; }
+    // Fell out of the world.
+    if (y[i] > PH + 20) { remove(i); i--; }
+  }
+}
+
+function collide(i) {
+  for (let pass = 0; pass < 2; pass++) {
+    const c = Math.floor(x[i] / B), r = Math.floor(y[i] / B);
+    let pushed = false;
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const cc = c + ox, rr = r + oy;
+        const isWall = cc < 0 || cc >= COLS || rr >= ROWS || (rr >= 0 && solid[idx(cc, rr)] === 1);
+        if (!isWall) continue;
+        // Nearest point of the block to the particle.
+        const nx = Math.max(cc * B, Math.min(x[i], (cc + 1) * B));
+        const ny = Math.max(rr * B, Math.min(y[i], (rr + 1) * B));
+        let ddx = x[i] - nx, ddy = y[i] - ny;
+        let d = Math.hypot(ddx, ddy);
+        if (d >= RADIUS) continue;
+        if (d < 1e-4) {
+          // Inside the block: out through the nearest side that opens onto free space
+          // (never into the block next door).
+          const open = (c2, r2) => !(c2 < 0 || c2 >= COLS || r2 >= ROWS || (r2 >= 0 && solid[idx(c2, r2)] === 1));
+          const left = open(cc - 1, rr) ? x[i] - cc * B : Infinity;
+          const right = open(cc + 1, rr) ? (cc + 1) * B - x[i] : Infinity;
+          const top = open(cc, rr - 1) ? y[i] - rr * B : Infinity;
+          const bottom = open(cc, rr + 1) ? (rr + 1) * B - y[i] : Infinity;
+          const m = Math.min(left, right, top, bottom);
+          if (m === Infinity) {
+            // Buried (solid all round): back up to the first open space above.
+            let up = rr - 1;
+            while (up >= 0 && !open(cc, up)) up--;
+            y[i] = (up + 1) * B - RADIUS;
+            px[i] = x[i]; py[i] = y[i];
+            pushed = true;
+            continue;
+          }
+          if (m === top) { ddx = 0; ddy = -1; d = 0; }
+          else if (m === bottom) { ddx = 0; ddy = 1; d = 0; }
+          else if (m === left) { ddx = -1; ddy = 0; d = 0; }
+          else { ddx = 1; ddy = 0; d = 0; }
+          x[i] = (ddx ? (ddx < 0 ? cc * B : (cc + 1) * B) : x[i]) + ddx * RADIUS;
+          y[i] = (ddy ? (ddy < 0 ? rr * B : (rr + 1) * B) : y[i]) + ddy * RADIUS;
+        } else {
+          x[i] += ddx / d * (RADIUS - d);
+          y[i] += ddy / d * (RADIUS - d);
+        }
+        pushed = true;
+      }
+    }
+    if (!pushed) break;
+  }
+}
+
+function remove(i) {
+  n--;
+  x[i] = x[n]; y[i] = y[n]; px[i] = px[n]; py[i] = py[n]; vx[i] = vx[n]; vy[i] = vy[n];
+}
+
+// --- Level ---------------------------------------------------------------------------
+const SPACING = 3.6;
+function fillBlocks(c0, r0, c1, r1) {
+  for (let yy = r0 * B + 2; yy < r1 * B - 1; yy += SPACING) {
+    for (let xx = c0 * B + 2; xx < c1 * B - 1; xx += SPACING) addParticle(xx + Math.random() * 0.4, yy + Math.random() * 0.4);
+  }
+}
+function resetLevel() {
+  solid.fill(0); n = 0;
+  const set = (c, r) => { if (c >= 0 && c < COLS && r >= 0 && r < ROWS) solid[idx(c, r)] = 1; };
+  for (let c = 0; c < COLS; c++) {
+    const g = 19 + Math.round(2 * Math.sin(c / 5) + (c > 18 && c < 30 ? 4 : 0));
+    for (let r = g; r < ROWS; r++) set(c, r);
+  }
+  for (let c = 4; c < 14; c++) set(c, 9);
+  set(4, 8); set(13, 8); set(13, 7);
+  for (let i = 0; i < 6; i++) for (let r = 12 + i; r < 19; r++) set(34 + i, r);
+  for (let c = 40; c < 47; c++) set(c, 12);
+  set(40, 13); set(40, 14);
+  fillBlocks(5, 6, 13, 9);
+}
+
+// --- Drawing -------------------------------------------------------------------------
+const stone = new Image(); stone.src = 'textures/stone.png';
+const dirt = new Image(); dirt.src = 'textures/dirt.png';
+// Water is drawn as 4x4-pixel squares, four across each block (so a block of water is a
+// 4x4 of them): every square a particle is in is filled, little gaps inside a pool are
+// filled in, and the top square of each column gets the bright surface edge.
+const CELL = 4;
+const GW = PW / CELL, GH = PH / CELL;
+const wet = new Uint8Array(GW * GH);
+const fill = new Uint8Array(GW * GH);
+function draw(t) {
+  ctx.fillStyle = '#76b2ec';
+  ctx.fillRect(0, 0, PW, PH * 0.55);
+  ctx.fillStyle = '#2c2622';
+  ctx.fillRect(0, PH * 0.55, PW, PH);
+
+  wet.fill(0);
+  for (let i = 0; i < n; i++) {
+    const gx = (x[i] / CELL) | 0, gy = (y[i] / CELL) | 0;
+    if (gx >= 0 && gx < GW && gy >= 0 && gy < GH) wet[gy * GW + gx] = 1;
+  }
+  // A dry square with water on three or four sides is a gap inside the water: fill it.
+  fill.set(wet);
+  for (let gy = 1; gy < GH - 1; gy++) {
+    for (let gx = 1; gx < GW - 1; gx++) {
+      const k = gy * GW + gx;
+      if (wet[k] || solidAt(gx * CELL + 1, gy * CELL + 1)) continue;
+      const around = wet[k - 1] + wet[k + 1] + wet[k - GW] + wet[k + GW];
+      if (around >= 3) fill[k] = 1;
+    }
+  }
+  for (let gx = 0; gx < GW; gx++) {
+    let depth = 0;
+    for (let gy = 0; gy < GH; gy++) {
+      const k = gy * GW + gx;
+      if (!fill[k]) { depth = 0; continue; }
+      const sx = gx * CELL, sy = gy * CELL;
+      if (depth === 0) {
+        ctx.fillStyle = 'rgb(196, 232, 255)';           // the surface edge
+      } else {
+        const d = Math.min(1, depth / 30);
+        const shimmer = depth < 3 ? (Math.sin(gx * 0.5 + t * 1.8) * 0.5 + 0.5) * 14 : 0;
+        ctx.fillStyle = `rgb(${Math.round(80 - 56 * d + shimmer)}, ${Math.round(150 - 92 * d + shimmer)}, ${Math.round(232 - 104 * d + shimmer)})`;
+      }
+      ctx.globalAlpha = 0.88;
+      ctx.fillRect(sx, sy, CELL, CELL);
+      depth++;
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (!solid[idx(c, r)]) continue;
+      const tex = r > 0 && !solid[idx(c, r - 1)] ? dirt : stone;
+      if (tex.complete && tex.naturalWidth) ctx.drawImage(tex, c * B, r * B, B, B);
+      else { ctx.fillStyle = '#777'; ctx.fillRect(c * B, r * B, B, B); }
+    }
+  }
+}
+
+// --- Input ---------------------------------------------------------------------------
+let tool = 'water';
+for (const [id, name] of [['tool-water', 'water'], ['tool-block', 'block'], ['tool-erase', 'erase']]) {
+  document.getElementById(id).onclick = () => {
+    tool = name;
+    document.querySelectorAll('[id^="tool-"]').forEach(b => b.classList.toggle('on', b.id === id));
+  };
+}
+document.getElementById('reset').onclick = resetLevel;
+document.getElementById('flood').onclick = () => fillBlocks(20, 0, 27, 5);
+let down = null;
+const pos = (e) => {
+  const rc = canvas.getBoundingClientRect();
+  return { x: (e.clientX - rc.left) / rc.width * PW, y: (e.clientY - rc.top) / rc.height * PH };
+};
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  down = { mode: e.shiftKey ? 'erase' : e.button === 2 ? 'block' : tool, ...pos(e), cell: null };
+  apply(down.x, down.y);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!down) return;
+  Object.assign(down, pos(e));
+  apply(down.x, down.y);
+});
+canvas.addEventListener('pointerup', () => { down = null; });
+function apply(ax, ay) {
+  const c = Math.floor(ax / B), r = Math.floor(ay / B);
+  if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+  // Each block is done once per drag.
+  const key = c + ',' + r;
+  if (down.cell === key) return;
+  down.cell = key;
+  if (down.mode === 'water') {
+    // A whole block of water, filling that block exactly (like placing a water block).
+    if (!solid[idx(c, r)]) fillBlocks(c, r, c + 1, r + 1);
+  } else if (down.mode === 'block') solid[idx(c, r)] = 1;
+  else solid[idx(c, r)] = 0;
+}
+
+// --- Loop ----------------------------------------------------------------------------
+const stats = document.getElementById('stats');
+let last = performance.now(), acc = 0, ms = 0, frames = 0;
+function loop(now) {
+  acc += Math.min(0.1, (now - last) / 1000);
+  last = now;
+  const t0 = performance.now();
+  let steps = 0;
+  while (acc >= 1 / 60 && steps < 2) { step(); acc -= 1 / 60; steps++; }
+  draw(now / 1000);
+  ms = ms * 0.9 + (performance.now() - t0) * 0.1;
+  if (++frames % 20 === 0) stats.textContent = `${n} particles · ${ms.toFixed(1)} ms/frame`;
+  requestAnimationFrame(loop);
+}
+resetLevel();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

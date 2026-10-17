@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Water Lab</title>
+<style>
+  :root { --bg: #14161c; --panel: #1e222b; --text: #e6e8ee; --muted: #9aa1b0; --accent: #5aa2ff; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; }
+  #wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px; }
+  canvas { image-rendering: pixelated; border: 2px solid #000; max-width: 100%; cursor: crosshair; }
+  #bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
+  button { background: var(--panel); color: var(--text); border: 1px solid #333a48; padding: 6px 10px; border-radius: 4px; cursor: pointer; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  #stats { color: var(--muted); font-family: monospace; }
+  #help { color: var(--muted); max-width: 900px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="bar">
+    <button data-tool="water" class="on">Pour water</button>
+    <button data-tool="stone">Place stone</button>
+    <button data-tool="erase">Dig</button>
+    <button id="scene-tank">Scene: tank</button>
+    <button id="scene-fall">Scene: waterfall</button>
+    <button id="scene-u">Scene: U-bend</button>
+    <button id="clear-water">Clear water</button>
+    <label>pixel size <input type="range" id="px-size" min="0" max="4" step="1" value="2"> <span id="px-size-v"></span></label>
+    <label>particles per block <input type="range" id="ppb" min="4" max="100" step="1" value="37"> <span id="ppb-v"></span></label>
+    <label><input type="checkbox" id="show-particles"> show particles</label>
+    <label><input type="checkbox" id="smooth" checked> smooth surface</label>
+  </div>
+  <canvas id="view"></canvas>
+  <div id="stats">loading…</div>
+  <div id="help">Left mouse: use tool. Right mouse: dig. The fluid is LiquidFun particles; what you see is a pixel grid
+    (its size set by the pixel size slider) filled wherever particles are. Tick "show particles" to see them.</div>
+</div>
+<script type="module">
+import Box2DFactory from './node_modules/liquidfun-wasm/dist/es/entry.js';
+
+const B = await Box2DFactory({ locateFile: (f) => `./node_modules/liquidfun-wasm/dist/es/${f}` });
+const { b2World, b2Vec2, b2BodyDef, b2PolygonShape, b2ParticleSystemDef, b2ParticleGroupDef, b2CircleShape,
+  b2_staticBody, b2_waterParticle, getPointer, HEAPF32 } = B;
+
+// --- World: a grid of blocks, 1 block = 1 metre, 16 texture pixels a block ---------------
+const W = 64, H = 40, PX = 16, ZOOM = 1;
+let WPX = 4;                         // water pixels across a block (slider)
+let RADIUS = 0.11;                   // particle radius in blocks (slider: particles per block)
+const view = document.getElementById('view');
+view.width = W * PX * ZOOM; view.height = H * PX * ZOOM;
+const ctx = view.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const world = new b2World(new b2Vec2(0, 20));
+const ground = world.CreateBody(new b2BodyDef());
+const psd = new b2ParticleSystemDef();
+psd.radius = RADIUS;
+psd.dampingStrength = 1.0;          // less bouncy
+psd.viscousStrength = 0.25;          // a little thicker, so splashes settle sooner
+psd.pressureStrength = 0.03;
+psd.maxCount = 0;                    // no limit
+const ps = world.CreateParticleSystem(psd);
+ps.SetDamping(0.15);                 // a tiny bit of overall damping
+
+const solid = new Uint8Array(W * H);
+const fixtures = new Map();          // tile -> fixture
+const box = new b2PolygonShape();
+function setSolid(x, y, on) {
+  if (x < 0 || y < 0 || x >= W || y >= H) return;
+  const k = y * W + x;
+  if (!!solid[k] === on) return;
+  solid[k] = on ? 1 : 0;
+  if (on) {
+    box.SetAsBox(0.5, 0.5, new b2Vec2(x + 0.5, y + 0.5), 0);
+    fixtures.set(k, ground.CreateFixture(box, 0));
+    // Particles inside the new block are removed.
+    const s = new b2PolygonShape(); s.SetAsBox(0.5, 0.5, new b2Vec2(x + 0.5, y + 0.5), 0);
+    ps.DestroyParticlesInShape(s, ground.GetTransform());
+  } else {
+    const f = fixtures.get(k);
+    if (f) { ground.DestroyFixture(f); fixtures.delete(k); }
+  }
+}
+function clearAll() { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) setSolid(x, y, false); clearWater(); }
+function clearWater() {
+  const s = new b2PolygonShape(); s.SetAsBox(W, H, new b2Vec2(W / 2, H / 2), 0);
+  ps.DestroyParticlesInShape(s, ground.GetTransform());
+}
+function frame() {
+  for (let x = 0; x < W; x++) { setSolid(x, H - 1, true); }
+  for (let y = 0; y < H; y++) { setSolid(0, y, true); setSolid(W - 1, y, true); }
+}
+function pourBox(x0, y0, x1, y1) {
+  const shape = new b2PolygonShape();
+  shape.SetAsBox((x1 - x0) / 2, (y1 - y0) / 2, new b2Vec2((x0 + x1) / 2, (y0 + y1) / 2), 0);
+  const gd = new b2ParticleGroupDef();
+  gd.flags = b2_waterParticle;
+  gd.shape = shape;
+  ps.CreateParticleGroup(gd);
+}
+function pourCircle(cx, cy, r) {
+  const c = new b2CircleShape(); c.m_radius = r; c.m_p = new b2Vec2(cx, cy);
+  const gd = new b2ParticleGroupDef();
+  gd.flags = b2_waterParticle;
+  gd.shape = c;
+  ps.CreateParticleGroup(gd);
+}
+
+// --- Scenes ------------------------------------------------------------------------------
+function sceneTank() {
+  clearAll(); frame();
+  for (let y = 30; y < H - 1; y++) setSolid(32, y, true);
+  for (let x = 1; x < 20; x++) setSolid(x, 18, true);
+  pourBox(1.2, 6, 14, 17.8);
+}
+function sceneFall() {
+  clearAll(); frame();
+  for (let x = 1; x < 26; x++) setSolid(x, 12, true);
+  for (let y = 4; y < 12; y++) setSolid(25, y, true);
+  for (let x = 30; x < 40; x++) setSolid(x, 30, true);
+  for (let x = 26; x < 36; x++) setSolid(x, 24, true);
+  pourBox(1.2, 3, 24.8, 11.8);
+  setTimeout(() => { for (let y = 4; y < 12; y++) setSolid(25, y, false); }, 800);
+}
+function sceneU() {
+  clearAll(); frame();
+  for (let y = 10; y < 36; y++) { setSolid(20, y, true); setSolid(44, y, true); }
+  for (let x = 20; x < 45; x++) setSolid(x, 36, true);
+  for (let y = 6; y < 33; y++) { setSolid(30, y, true); setSolid(34, y, true); }
+  for (let x = 30; x < 35; x++) setSolid(x, 32, false);
+  for (let y = 10; y < 32; y++) for (let x = 31; x < 34; x++) setSolid(x, y, true);
+  for (let x = 21; x < 30; x++) setSolid(x, 36, true);
+  pourBox(21.2, 8, 29.8, 35.8);
+}
+document.getElementById('scene-tank').onclick = sceneTank;
+document.getElementById('scene-fall').onclick = sceneFall;
+document.getElementById('scene-u').onclick = sceneU;
+document.getElementById('clear-water').onclick = clearWater;
+
+// --- Input -------------------------------------------------------------------------------
+let tool = 'water', mouse = null;
+for (const b of document.querySelectorAll('[data-tool]')) b.onclick = () => {
+  tool = b.dataset.tool;
+  for (const o of document.querySelectorAll('[data-tool]')) o.classList.toggle('on', o === b);
+};
+const toWorld = (e) => {
+  const r = view.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+};
+view.addEventListener('contextmenu', (e) => e.preventDefault());
+view.addEventListener('pointerdown', (e) => { mouse = { ...toWorld(e), button: e.button }; view.setPointerCapture(e.pointerId); });
+view.addEventListener('pointermove', (e) => { if (mouse) Object.assign(mouse, toWorld(e)); });
+view.addEventListener('pointerup', () => { mouse = null; });
+function useTool() {
+  if (!mouse) return;
+  const t = mouse.button === 2 ? 'erase' : tool;
+  const tx = Math.floor(mouse.x), ty = Math.floor(mouse.y);
+  if (t === 'water') {
+    if (!solid[ty * W + tx]) pourCircle(mouse.x, mouse.y, 0.6);
+  } else {
+    for (let dy = -1; dy <= 0; dy++) for (let dx = -1; dx <= 0; dx++) setSolid(tx + dx, ty + dy, t === 'stone');
+  }
+}
+
+// --- Textures ----------------------------------------------------------------------------
+const tex = {};
+for (const id of ['stone', 'dirt']) { const i = new Image(); i.src = `textures/${id}.png`; tex[id] = i; }
+
+// --- Drawing: particles splatted into a pixel grid ---------------------------------------
+let GW, GH, grid, tmpGrid, img, img32, depthBuf, tops, smoothTops, filledTops, SMOOTH, DEPTH;
+const layer = document.createElement('canvas');
+const lctx = layer.getContext('2d');
+// (Re)size everything that depends on the water pixel size.
+function setPixelSize(n) {
+  WPX = n;
+  GW = W * WPX; GH = H * WPX;
+  grid = new Uint8Array(GW * GH);
+  tmpGrid = new Uint8Array(GW * GH);
+  img = ctx.createImageData(GW, GH);
+  img32 = new Uint32Array(img.data.buffer);
+  layer.width = GW; layer.height = GH;
+  depthBuf = new Float32Array(GW * GH);
+  tops = new Float32Array(GW); smoothTops = new Float32Array(GW); filledTops = new Float32Array(GW);
+  SMOOTH = 2 * WPX;                  // two blocks either side
+  DEPTH = 7.5 * WPX;                 // how deep (in water pixels) it takes to reach the darkest
+  disc.length = 0;
+  const pr = Math.max(0, Math.round(RADIUS * WPX));
+  for (let dy = -pr; dy <= pr; dy++) for (let dx = -pr; dx <= pr; dx++) if (dx * dx + dy * dy <= pr * pr + (pr > 1 ? 1 : 0)) disc.push([dx, dy]);
+  if (!disc.length) disc.push([0, 0]);
+}
+const disc = [[0, 0]];               // water pixels each particle fills
+setPixelSize(WPX);
+const showParticles = document.getElementById('show-particles');
+// Pixel size: water pixels per block (1, 2, 4, 8 or 16 texture pixels each).
+const SIZES = [16, 8, 4, 2, 1];
+const pxSize = document.getElementById('px-size'), pxSizeV = document.getElementById('px-size-v');
+const showPx = () => { pxSizeV.textContent = `${PX / SIZES[pxSize.value]}×${PX / SIZES[pxSize.value]} px`; };
+pxSize.value = SIZES.indexOf(WPX);
+pxSize.oninput = () => { setPixelSize(SIZES[pxSize.value]); showPx(); };
+showPx();
+// Particles per block: smaller particles, more of them for the same water. LiquidFun packs
+// particles about 1.5 radii apart, so n per block means a radius of 1 / (1.5 * sqrt(n)).
+const ppb = document.getElementById('ppb'), ppbV = document.getElementById('ppb-v');
+const showPpb = () => { ppbV.textContent = ppb.value; };
+ppb.value = Math.round(1 / (1.5 * RADIUS) ** 2);
+ppb.oninput = () => { RADIUS = 1 / (1.5 * Math.sqrt(+ppb.value)); ps.SetRadius(RADIUS); showPpb(); };
+showPpb();
+const smooth = document.getElementById('smooth');
+
+function drawWater() {
+  grid.fill(0);
+  const n = ps.GetParticleCount();
+  const buf = HEAPF32.subarray(getPointer(ps.GetPositionBuffer()) >> 2, (getPointer(ps.GetPositionBuffer()) >> 2) + n * 2);
+  for (let p = 0; p < n; p++) {
+    const gx = Math.floor(buf[p * 2] * WPX), gy = Math.floor(buf[p * 2 + 1] * WPX);
+    for (const [dx, dy] of disc) {
+      const x = gx + dx, y = gy + dy;
+      if (x >= 0 && y >= 0 && x < GW && y < GH) grid[y * GW + x] = 1;
+    }
+  }
+  // Keep water out of blocks.
+  for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
+    if (!solid[ty * W + tx]) continue;
+    for (let r = 0; r < WPX; r++) grid.fill(0, (ty * WPX + r) * GW + tx * WPX, (ty * WPX + r) * GW + tx * WPX + WPX);
+  }
+  if (smooth.checked) smoothSurface();
+  // Colour by depth below the surface of the water each pixel belongs to. Water under a
+  // block has no surface of its own above it, so it takes its depth from the water beside
+  // it: down from open surfaces, then along each row, then down again.
+  const depth = waterDepth();
+  const d32 = img32;
+  d32.fill(0);
+  for (let k = 0; k < GW * GH; k++) {
+    if (!grid[k]) continue;
+    const dp = depth[k];
+    let r, g, b;
+    if (dp === 0) { r = 196; g = 232; b = 255; }
+    else { const t = Math.min(1, dp / DEPTH); r = Math.round(80 - 56 * t); g = Math.round(150 - 92 * t); b = Math.round(232 - 104 * t); }
+    d32[k] = (225 << 24) | (b << 16) | (g << 8) | r;
+  }
+  lctx.putImageData(img, 0, 0);
+  ctx.drawImage(layer, 0, 0, view.width, view.height);
+  if (showParticles.checked) {
+    ctx.fillStyle = 'rgba(255, 80, 80, 0.9)';
+    for (let p = 0; p < n; p++) ctx.fillRect(buf[p * 2] * PX * ZOOM - 1, buf[p * 2 + 1] * PX * ZOOM - 1, 2, 2);
+  }
+}
+
+const solidPx = (x, y) => y >= 0 && solid[Math.floor(y / WPX) * W + Math.floor(x / WPX)] === 1;
+function waterDepth() {
+  const D = depthBuf;
+  // Each column's surface: its first water pixel with open air above it (NaN when the
+  // water there is under a block, or there's none).
+  for (let x = 0; x < GW; x++) {
+    tops[x] = NaN;
+    let capped = false;
+    for (let y = 0; y < GH; y++) {
+      if (solidPx(x, y)) { capped = true; continue; }
+      if (grid[y * GW + x]) { if (!capped) tops[x] = y; break; }
+      capped = false;
+    }
+  }
+  // Shade from a smoothed surface, so a wavy surface doesn't draw a stripe down each
+  // column, and water under a block gets the surface of the water around it.
+  // Gaps (under a block, however wide) are bridged by blending between the nearest real
+  // surfaces either side; then the whole line is smoothed.
+  const filled = filledTops;
+  let prev = -1;
+  for (let x = 0; x <= GW; x++) {
+    if (x < GW && Number.isNaN(tops[x])) continue;
+    for (let g = prev + 1; g < x; g++) {
+      if (prev < 0 && x >= GW) filled[g] = NaN;
+      else if (prev < 0) filled[g] = tops[x];
+      else if (x >= GW) filled[g] = tops[prev];
+      else filled[g] = tops[prev] + (tops[x] - tops[prev]) * (g - prev) / (x - prev);
+    }
+    if (x < GW) filled[x] = tops[x];
+    prev = x;
+  }
+  for (let x = 0; x < GW; x++) {
+    let sum = 0, n = 0;
+    for (let k = Math.max(0, x - SMOOTH); k <= Math.min(GW - 1, x + SMOOTH); k++) if (!Number.isNaN(filled[k])) { sum += filled[k]; n++; }
+    smoothTops[x] = n ? sum / n : NaN;
+  }
+  for (let x = 0; x < GW; x++) {
+    const st = smoothTops[x];
+    for (let y = 0; y < GH; y++) {
+      const k = y * GW + x;
+      if (!grid[k]) continue;
+      // The real top pixel gets the bright surface line (0); below it, depth under the
+      // smoothed surface (at least 1).
+      D[k] = y === tops[x] ? 0 : Number.isNaN(st) ? DEPTH / 2 : Math.max(1, y - st);
+    }
+  }
+  return D;
+}
+
+// Fill single-pixel holes and knock off single-pixel bumps, so the particle surface reads
+// as a smooth water line rather than a lumpy blob outline.
+function smoothSurface() {
+  const out = tmpGrid;
+  out.set(grid);
+  for (let y = 1; y < GH - 1; y++) {
+    for (let x = 1; x < GW - 1; x++) {
+      const k = y * GW + x;
+      const n = grid[k - 1] + grid[k + 1] + grid[k - GW] + grid[k + GW];
+      if (!grid[k] && n >= 3) out[k] = 1;
+      else if (grid[k] && n <= 1) out[k] = 0;
+    }
+  }
+  grid.set(out);
+}
+
+function drawTerrain() {
+  ctx.fillStyle = '#7ec0ee';
+  ctx.fillRect(0, 0, view.width, view.height);
+  for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
+    const t = tex.stone;
+    if (!solid[ty * W + tx]) continue;
+    if (t.complete && t.naturalWidth) ctx.drawImage(t, tx * PX * ZOOM, ty * PX * ZOOM, PX * ZOOM, PX * ZOOM);
+    else { ctx.fillStyle = '#777'; ctx.fillRect(tx * PX * ZOOM, ty * PX * ZOOM, PX * ZOOM, PX * ZOOM); }
+  }
+}
+
+// --- Loop --------------------------------------------------------------------------------
+const stats = document.getElementById('stats');
+let simMs = 0, drawMs = 0, last = performance.now(), fps = 0, frames = 0, fpsAt = last;
+function loop(now) {
+  useTool();
+  const t0 = performance.now();
+  world.Step(1 / 60, 2, 1, 1);
+  const t1 = performance.now();
+  drawTerrain();
+  drawWater();
+  const t2 = performance.now();
+  simMs = simMs * 0.9 + (t1 - t0) * 0.1;
+  drawMs = drawMs * 0.9 + (t2 - t1) * 0.1;
+  frames++;
+  if (now - fpsAt > 500) { fps = Math.round(frames * 1000 / (now - fpsAt)); frames = 0; fpsAt = now; }
+  stats.textContent = `particles ${ps.GetParticleCount()}  ·  sim ${simMs.toFixed(1)} ms  ·  draw ${drawMs.toFixed(1)} ms  ·  ${fps} fps`;
+  requestAnimationFrame(loop);
+}
+// For testing without a visible window: lab.run(frames) steps and draws that many frames.
+window.lab = {
+  run(frames) { for (let i = 0; i < frames; i++) world.Step(1 / 60, 2, 1, 1); drawTerrain(); drawWater(); },
+  sceneTank, sceneFall, sceneU, setSolid, pourBox, clearAll, frame,
+  unblockFall() { for (let y = 4; y < 12; y++) setSolid(25, y, false); },
+};
+sceneTank();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,4 +1,6 @@
 import './src/platform/webPlatform.js';
+import { startIconPolish, refreshIcons } from './src/ui/iconPolish.js';
+import { POLISH_OPTIONS, polishState, setPolish, loadPolish, polishOn } from './src/core/polishSettings.js';
 import { checkForAppUpdate } from './src/platform/appUpdate.js';
 import { gameClock } from './src/core/gameClock.js';
 import { Engine } from './src/core/engine.js';
@@ -579,7 +581,8 @@ const DEFAULT_KEYBINDS = Object.freeze({
   pause: 'Escape',
   background: 'KeyZ',
   rotate: 'KeyR',
-  flip: 'KeyF'
+  flip: 'KeyF',
+  polish: 'KeyO'
 });
 
 const keybinds = { ...DEFAULT_KEYBINDS };
@@ -623,7 +626,47 @@ function saveGameSettings() {
   prefs.set('underwild_gameSettings', JSON.stringify({ renderDistance, textureQuality, renderFallingLeaves, autoJump, theme: currentTheme }));
 }
 
+// Graphics > Polish: a master switch and an ON/OFF pair per effect.
+function buildPolishOptions() {
+  const box = document.getElementById('polishOptions');
+  if (!box) return;
+  const rows = [['enabled', 'Polish (all)'], ...POLISH_OPTIONS];
+  box.innerHTML = rows.map(([key, label]) => `
+    <div class="option-group" data-polish-row="${key}">
+      <label>${label}:</label>
+      <div class="button-group">
+        <button class="minecraft-button small" data-polish="${key}" data-value="on">ON</button>
+        <button class="minecraft-button small" data-polish="${key}" data-value="off">OFF</button>
+      </div>
+    </div>`).join('');
+  box.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-polish]');
+    if (!button) return;
+    setPolish(button.dataset.polish, button.dataset.value === 'on');
+    prefs.set('underwild_polish', JSON.stringify(polishState()));
+    syncPolishOptions();
+    refreshIcons();
+  });
+  syncPolishOptions();
+}
+
+function syncPolishOptions() {
+  const state = polishState();
+  document.body.classList.toggle('polish-ui-corners', polishOn('uiCorners'));
+  document.querySelectorAll('[data-polish]').forEach((b) => {
+    const on = state[b.dataset.polish] !== false;
+    if ((b.dataset.value === 'on') === on) b.setAttribute('data-selected', 'true');
+    else b.removeAttribute('data-selected');
+  });
+  // The individual effects only matter while the master switch is on.
+  document.querySelectorAll('[data-polish-row]').forEach((row) => {
+    if (row.dataset.polishRow !== 'enabled') row.classList.toggle('polish-disabled', !state.enabled);
+  });
+}
+
 function loadGameSettings() {
+  try { loadPolish(JSON.parse(prefs.get('underwild_polish') || '{}')); } catch (e) {}
+  buildPolishOptions();
   try {
     const saved = JSON.parse(prefs.get('underwild_gameSettings') || '{}');
     if (RENDER_DISTANCE_CHUNKS[saved.renderDistance]) renderDistance = saved.renderDistance;
@@ -968,6 +1011,7 @@ class MenuManager {
       case 'bind-background':
       case 'bind-rotate':
       case 'bind-flip':
+      case 'bind-polish':
         this.startKeybindRebinding(action.replace('bind-', ''));
         break;
 
@@ -3917,28 +3961,11 @@ function useBucket(tileX, tileY) {
   if ((held !== 'bucket' && held !== 'water_bucket') || !world.inBounds(tileX, tileY)) return false;
   const sim = world.water;
   if (held === 'bucket') {
-    if (world.getBlockId(tileX, tileY) !== 'water') return false;
-    // A bucket holds a full block (16 layers). Take it from the clicked cell if that's
-    // full; otherwise from it and up to 2 cells either side on the same row, nearest first,
-    // but only if together they make a full block.
-    const full = 15 / 16;
-    const cells = [[tileX, tileY]];
-    // Each side stops at the first cell without water, so it only draws on connected water.
-    for (const dir of [-1, 1]) {
-      for (let d = 1; d <= 2 && world.getBlockId(tileX + dir * d, tileY) === 'water'; d++) cells.push([tileX + dir * d, tileY]);
-    }
-    cells.sort((p, q) => Math.abs(p[0] - tileX) - Math.abs(q[0] - tileX));
-    let total = 0;
-    for (const [x, y] of cells) total += Math.min(1, sim.mass(x, y));
-    if (Math.min(1, sim.mass(tileX, tileY)) < full && total < full) return true;
-    let need = 1;
-    for (const [x, y] of cells) {
-      if (need <= 0) break;
-      const m = sim.mass(x, y);
-      const take = Math.min(m, need);
-      if (take > 0) sim.setMass(x, y, m - take, true);
-      need -= take;
-    }
+    // A bucket scoops a full block's worth from the water at the clicked block, nearest first.
+    const took = sim.take(tileX, tileY);
+    if (took === 'none') return false;
+    if (took !== 'taken') return true;
+    multiplayer.sendBucket('take', tileX, tileY);
     // In creative the empty bucket stays and a new water bucket is added each time.
     if (!creativeMode) hotSlot.count -= 1;
     if (hotSlot.count <= 0) inventory.setSlot(selectedIndex, { type: 'item', itemId: 'water_bucket', count: 1 });
@@ -3949,17 +3976,14 @@ function useBucket(tileX, tileY) {
     player.playArmAction('place');
     return true;
   }
-  // Pour: fill the clicked cell, spilling anything that doesn't fit into the cell above.
+  // Pour: a full block of water into the clicked block (spilling into the one above if it's
+  // part full). Plants there are washed away.
   const id = world.getBlockId(tileX, tileY);
-  if (id !== 'air' && id !== 'water' && !NATURE_BLOCKS.has(id)) return true;
+  const cell = world.getCell(tileX, tileY);
+  if (id !== 'air' && !NATURE_BLOCKS.has(id) && cell.meta?.layer !== 'bg' && world.isSolidAt(tileX, tileY)) return true;
   if (NATURE_BLOCKS.has(id)) world.setBlock(tileX, tileY, 'air', null);
-  const here = sim.mass(tileX, tileY);
-  const fit = Math.min(1, 1 - here);
-  const aboveId = world.getBlockId(tileX, tileY - 1);
-  const spill = 1 - fit;
-  if (spill > 0.001 && aboveId !== 'air' && aboveId !== 'water') return true; // nowhere to pour
-  sim.setMass(tileX, tileY, here + fit, true);
-  if (spill > 0.001) sim.setMass(tileX, tileY - 1, sim.mass(tileX, tileY - 1) + spill, true);
+  if (!sim.pour(tileX, tileY)) return true;
+  multiplayer.sendBucket('pour', tileX, tileY);
   if (!creativeMode) inventory.setSlot(selectedIndex, { type: 'item', itemId: 'bucket', count: 1 });
   player.playArmAction('place');
   return true;
@@ -3995,7 +4019,7 @@ function tryPlaceBlockAt(screenX, screenY, isRepeat = false) {
     replace
   });
   if (placed) player.playArmAction('place');
-  if (placed && hotSlot.blockId.endsWith('_leaves')) burstLeaves(hotSlot.blockId, tileX, tileY, 2);
+  if (placed && hotSlot.blockId.endsWith('_leaves')) burstLeaves(hotSlot.blockId, tileX, tileY, Math.random() < 0.35 ? 1 : 0);
   if (placed && !creativeMode) {
     hotSlot.count -= 1;
     if (hotSlot.count <= 0) inventory.setSlot(selectedIndex, null);
@@ -4226,6 +4250,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === keybinds.background) backgroundBuild = !backgroundBuild;
+
   if (e.code === 'BracketLeft') setRenderDistance(CHUNK_RENDER_DISTANCE - 1);
   if (e.code === 'BracketRight') setRenderDistance(CHUNK_RENDER_DISTANCE + 1);
   if (e.code === 'KeyP') showOutline = !showOutline;
@@ -4899,7 +4924,7 @@ function renderStatIcons(container, kind, value, max) {
   }
 }
 
-const NATURE_BLOCKS = new Set(['short_grass', 'poppy', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble']);
+const NATURE_BLOCKS = new Set(['short_grass', 'poppy', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble', 'seagrass', 'shell']);
 let lastPreloadChunk = null;
 let lastPreloadTime = 0;
 let leafScanCounter = 0;
@@ -5040,9 +5065,9 @@ function spawnExplosionDrop(dropId, meta, id, x, y, dx, dy) {
 }
 
 // A few leaves flutter down when leaves are broken or placed.
-function burstLeaves(leafId, x, y, count = 3) {
+function burstLeaves(leafId, x, y, count = 1 + (Math.random() < 0.4 ? 1 : 0)) {
   if (!renderFallingLeaves) return;
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < count && leafParticles.length < 60; i++) {
     const px = (x + 0.2 + Math.random() * 0.6) * TILE_SIZE;
     const py = (y + 0.2 + Math.random() * 0.6) * TILE_SIZE;
     leafParticles.push(new LeafParticle(leafId, px, py, world.time, 0.6 + Math.random() * 0.5));
@@ -5226,11 +5251,16 @@ function initializeGameEngine() {
         // started on the background (a wall, or a background block you placed), it only
         // breaks the background. Background build mode is always the background.
         const id = world.getBlockId(tileX, tileY);
-        const isBackground = id === 'air' || world.getCell(tileX, tileY).meta?.layer === 'bg';
+        const cell = world.getCell(tileX, tileY);
+        const hasBg = cell.meta?.layer === 'bg' || !!cell.meta?.bgId;
+        const isBackground = id === 'air' || id === 'water' || hasBg;
         const onBackground = backgroundBuild || wallPress;
         if (isBackground !== onBackground) breaker.cancel();
         else {
-          const wallId = id === 'air' ? window.renderer?.naturalWallId(tileX, tileY) : null;
+          let wallId = null;
+          if (onBackground) {
+            wallId = cell.meta?.bgId || (cell.meta?.layer === 'bg' ? id : window.renderer?.naturalWallId(tileX, tileY));
+          }
           breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), wallId);
         }
       } else {
@@ -5274,4 +5304,16 @@ window.addEventListener('beforeunload', () => {
   const state = getSaveState();
   if (state) saveManager.saveSync(state.world, state.player, state.items, state.inventory, state.meta);
   saveManager.stopAutoSave();
+});
+startIconPolish();
+
+// The Toggle Polish key works everywhere: menus, inventory and in game (not while typing
+// or while a key is being rebound).
+window.addEventListener('keydown', (e) => {
+  if (e.code !== keybinds.polish || e.repeat || isEditableTarget(e.target)) return;
+  if (document.querySelector('.keybind-button.binding')) return;
+  setPolish('enabled', !polishState().enabled);
+  prefs.set('underwild_polish', JSON.stringify(polishState()));
+  syncPolishOptions();
+  refreshIcons();
 });

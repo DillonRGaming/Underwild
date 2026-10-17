@@ -130,41 +130,37 @@ function artTreeBlock(shape, centerX, x, y, top, logType, leavesType, lift = 0) 
 const TREE_SHAPES = {
   // Broad, rounded oaks (up to 5 out from the trunk) for the Forest and Meadow.
   big_oak: [
-    { visible: 3, art: [
-      '...###.....',
-      '.#######...',
+    { visible: 2, art: [
+      '..#####....',
       '#########..',
       '##########.',
       '###########',
       '.#########.',
       '..###.###..'] },
-    { visible: 3, art: [
-      '....####...',
-      '..#######..',
+    { visible: 2, art: [
+      '...#####...',
       '.#########.',
       '###########',
       '###########',
       '.##########',
       '...##..##..'] },
-    { visible: 4, art: [
+    { visible: 2, art: [
       '..##..###..',
       '.#########.',
       '###########',
       '###########',
       '.#########.',
       '..#######..'] },
-    { visible: 3, art: [
-      '....###....',
-      '..#######..',
+    { visible: 2, art: [
+      '...#####...',
       '.#########.',
       '###########',
       '###########',
       '##########.',
       '.########..',
       '...##.##...'] },
-    { visible: 4, art: [
-      '..####.....',
-      '.#######...',
+    { visible: 2, art: [
+      '..#####....',
       '#########..',
       '##########.',
       '##########.',
@@ -174,8 +170,8 @@ const TREE_SHAPES = {
   oak: [
     { trunk: 5, rows: [[-3, 1, 1], [-2, 2, 2], [-1, 3, 2], [0, 3, 3], [1, 2, 3], [2, 2, 2], [3, 1, 1]] },
     { trunk: 4, rows: [[-2, 2, 2], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 2, 2]] },
-    { trunk: 6, rows: [[-4, 1, 1], [-3, 2, 2], [-2, 2, 3], [-1, 3, 3], [0, 3, 2], [1, 2, 2], [2, 1, 1]] },
-    { trunk: 5, rows: [[-3, 1, 2], [-2, 2, 3], [-1, 2, 3], [0, 3, 3], [1, 2, 2], [2, 1, 1]] },
+    { trunk: 5, rows: [[-4, 1, 1], [-3, 2, 2], [-2, 2, 3], [-1, 3, 3], [0, 3, 2], [1, 2, 2], [2, 1, 1]] },
+    { trunk: 4, rows: [[-3, 1, 2], [-2, 2, 3], [-1, 2, 3], [0, 3, 3], [1, 2, 2], [2, 1, 1]] },
     { trunk: 4, rows: [[-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 2, 2], [2, 1, 1]] }
   ],
   // Aspen-like: long bare white trunk, slim teardrop crown widest low down.
@@ -647,6 +643,10 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   const onTrail = !sandy && (y === h || y === h - 1) && isTrailAt(x, seed, worldHeight, worldType);
   const vegetation = onTrail || sandy ? null : generateVegetationAt(x, y, h, seed);
   if (vegetation) return vegetation;
+  if (sandy && y === h - 1) {
+    const deco = lakeDecorAt(x, seed, underwater);
+    if (deco) return deco;
+  }
 
   if (y >= HEIGHT - 2) {
     return { id: 'bedrock', meta: null };
@@ -680,6 +680,16 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
       return { id: 'stone', meta: null };
     }
   }
+}
+
+// Seagrass on lakebeds; shells, rocks and pebbles on the dry beach.
+function lakeDecorAt(x, seed, underwater) {
+  const r = rand01From(x * 1201, seed + 77);
+  const v = 1 + Math.floor(rand01From(x * 1207, seed + 77) * 3);
+  if (underwater) return r < 0.45 ? { id: 'seagrass', meta: { v, water: 1 } } : null;
+  if (r < 0.2) return { id: 'shell', meta: { v } };
+  if (r < 0.3) return { id: r < 0.24 ? 'rock' : 'pebble', meta: rockMeta(rand01From(x * 1021, seed), rand01From(x * 1031, seed), rand01From(x * 1033, seed)) };
+  return null;
 }
 
 function generateVegetationAt(x, y, h, seed) {

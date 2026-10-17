@@ -34,6 +34,8 @@ import grassTuft from './grass_tuft.js';
 import rock from './rock.js';
 import dirtPath from './dirt_path.js';
 import pebble from './pebble.js';
+import seagrass from './seagrass.js';
+import shell from './shell.js';
 import poppy from './poppy.js';
 import fern from './fern.js';
 import flowerShortGrass from './flower_short_grass.js';
@@ -112,6 +114,8 @@ export function registerAllBlocks(registry) {
     rock,
     dirtPath,
     pebble,
+    seagrass,
+    shell,
     poppy,
     fern,
     flowerShortGrass,

@@ -8,7 +8,7 @@ export default {
   onBreak(world, x, y, meta) {
     if (world.inBounds(x, y - 1)) {
       const aboveId = world.getBlockId(x, y - 1);
-      if (['poppy', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble'].includes(aboveId)) {
+      if (['poppy', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble', 'seagrass', 'shell'].includes(aboveId)) {
         world.setBlock(x, y - 1, 'air', null);
       }
     }

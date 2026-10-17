@@ -1,7 +1,7 @@
 import { createFallingSand } from './sand.js';
 
 function sandstone(id, displayName, color) {
-  return { id, displayName, shape: 'full', solid: true, color, hardness: 2.5, isSolid() { return true; } };
+  return { id, displayName, shape: 'full', solid: true, color, hardness: 2.5, isSolid(meta) { return meta?.layer !== 'bg'; } };
 }
 
 export const LOOSE_SAND_IDS = ['sand', 'wet_sand', 'rippled_sand', 'cracked_sand', 'red_sand', 'red_rippled_sand'];

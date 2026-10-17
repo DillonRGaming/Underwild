@@ -16,7 +16,7 @@ function hasSolidNeighbor(world, x, y) {
 }
 
 // Plants pop off anything but these (see each plant's tick).
-const PLANTS = new Set(['short_grass', 'poppy', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble']);
+const PLANTS = new Set(['short_grass', 'poppy', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble', 'seagrass', 'shell']);
 const PLANT_SOIL = new Set(['grass', 'dirt', 'coarse_dirt', 'mud', 'sand']);
 
 export class Placer {
@@ -91,16 +91,16 @@ export class Placer {
       meta = { placed: true };
     } else if (type.id === 'bush') {
       meta = { size: 1 + Math.floor(Math.random() * BUSH_SIZES) };
+    } else if (type.id === 'seagrass' || type.id === 'shell') {
+      meta = { v: 1 + Math.floor(Math.random() * 3) };
     } else if (type.id === 'rock' || type.id === 'pebble') {
       meta = rockMeta(Math.random(), Math.random(), Math.random());
     }
     if (background) meta = { ...(meta || {}), layer: 'bg' };
     if (behind) meta = { ...(meta || {}), bgId: behind };
-    const displaced = world.getBlockId(tileX, tileY) === 'water' ? world.water?.mass?.(tileX, tileY) ?? 0 : 0;
-    // Plants, torches... let water through: it stays in the cell with them.
-    if (displaced > 0 && (!type.solid || background)) meta = { ...(meta || {}), water: displaced };
+    // Water here stays around plants and torches; a solid block pushes it aside (the water
+    // sim does both when the block changes).
     world.setBlock(tileX, tileY, type.id, meta);
-    if (displaced > 0 && type.solid && !background) world.water?.displace?.(tileX, tileY, displaced);
     if (type.onPlace) type.onPlace(world, tileX, tileY, meta);
 
     const belowX = tileX;

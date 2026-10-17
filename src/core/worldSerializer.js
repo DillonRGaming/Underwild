@@ -5,7 +5,21 @@ export class WorldSerializer {
   static FORMAT = 'underwild-world';
   static VERSION = 2;
 
+  // Loaded chunks' water lives in the water sim; it's saved as water in its blocks.
   static encode(world, player, items, inventory, worldMeta) {
+    const water = world.water;
+    if (water?.hasWater() && !WorldSerializer._encoding) {
+      WorldSerializer._encoding = true;
+      try {
+        return water.withDeposited(() => WorldSerializer.encodeCells(world, player, items, inventory, worldMeta));
+      } finally {
+        WorldSerializer._encoding = false;
+      }
+    }
+    return WorldSerializer.encodeCells(world, player, items, inventory, worldMeta);
+  }
+
+  static encodeCells(world, player, items, inventory, worldMeta) {
     const blocks = ['air'];
     const blockIndexMap = new Map([['air', 0]]);
 

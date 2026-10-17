@@ -1,12 +1,24 @@
 import { gameClock } from './gameClock.js';
 import { TILE_SIZE, darkenHex } from './utils.js';
 import { Clouds } from './clouds.js';
+import { polishOn } from './polishSettings.js';
+import { ClassicClouds } from './clouds_classic.js';
+import { drawSkyGradient, drawHills, isOutlined, edgePass, drawVignette, outlineLayer, blockSeams, screenOutline, cornerRect } from './polish.js';
 import { keptLeafCover } from '../logic/trunkLeaves.js';
 import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
-import { waterLevel, waterMass, WATER_LEVELS } from '../logic/water.js';
+import { waterLevel, waterMass, WATER_LEVELS, SQ as WATER_SQ } from '../logic/water.js';
 import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
 
 const MIN_BRIGHTNESS = 0.04;
+const _rawSplat = [];
+for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) if (dx * dx + dy * dy <= 9) _rawSplat.push(dx, dy);
+const SPLAT_LEN = _rawSplat.length >> 1;
+const SPLAT_DX = new Int32Array(SPLAT_LEN);
+const SPLAT_DY = new Int32Array(SPLAT_LEN);
+for (let i = 0; i < SPLAT_LEN; i++) {
+  SPLAT_DX[i] = _rawSplat[i * 2];
+  SPLAT_DY[i] = _rawSplat[i * 2 + 1];
+}
 const NIGHT_SKY = [3, 4, 9];
 const NIGHT_LIGHT = 0.07;
 const BACKGROUND_WALL = 'rgb(58, 46, 36)';
@@ -30,12 +42,12 @@ const HELD_ARM_ANGLE = -0.7;
 const HELD_ARM_LOOK = 0.2;
 const HELD_ARM_WALK = 0.25;
 // Blocks whose green pixels take on the local biome's grass colour.
-const BIOME_TINTED = new Set(['grass', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'bush_1', 'bush_2', 'bush_3', 'bush_4']);
+const BIOME_TINTED = new Set(['grass', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'bush_1', 'bush_2', 'bush_3', 'bush_4', 'grass_c0', 'grass_c1', 'grass_c2', 'grass_c3', 'grass_c4', 'grass_c5', 'grass_c6', 'grass_c7', 'grass_c8', 'grass_c9', 'grass_c10', 'grass_c11', 'grass_c12', 'grass_c13', 'grass_c14', 'grass_c15', 'grass_corner']);
 // Plants that bend in the wind: the tip leans furthest, the base stays put.
-const WIND_SWAY = new Set(['short_grass', 'grass_tuft', 'fern', 'flower_short_grass', 'poppy', 'bush']);
+const WIND_SWAY = new Set(['short_grass', 'grass_tuft', 'fern', 'flower_short_grass', 'poppy', 'bush', 'seagrass']);
 const WIND_MAX_BEND = 2.5;   // texels the tip of a plant bends in the strongest gust
 const WIND_SPEED = 14;       // tiles per second a gust travels across the land
-const WIND_STIFFNESS = { bush: 0.45 };
+const WIND_STIFFNESS = { bush: 0.45, seagrass: 0.6 };
 const TRUNK_MAX_BEND = 2.2;  // texels the top of a TRUNK_REF_HEIGHT-tall trunk bends in a gust
 const TRUNK_REF_HEIGHT = 9;   // trunk height (blocks) that reaches the full bend
 const LEAF_MAX_SWAY = 1.6;   // texels a leaf block shifts in the strongest gust
@@ -100,7 +112,7 @@ export class Renderer {
     for (const id of this.registry.map.keys()) ids.add(id);
     for (const id of this.registry.map.keys()) if (id.endsWith('_leaves')) ids.add(`falling_leaf_${id}`);
     for (const id of this.registry.map.keys()) if (id.endsWith('_chest')) ids.add(`${id}_left`).add(`${id}_right`);
-    for (const id of ['oak_leaf_particle', 'falling_leaf', 'steve', 'no_texture', 'bush_1', 'bush_2', 'bush_3', 'bush_4']) ids.add(id);
+    for (const id of ['oak_leaf_particle', 'falling_leaf', 'steve', 'no_texture', 'bush_1', 'bush_2', 'bush_3', 'bush_4', 'seagrass_1', 'seagrass_2', 'seagrass_3', 'shell_1', 'shell_2', 'shell_3', 'grass_c0', 'grass_c1', 'grass_c2', 'grass_c3', 'grass_c4', 'grass_c5', 'grass_c6', 'grass_c7', 'grass_c8', 'grass_c9', 'grass_c10', 'grass_c11', 'grass_c12', 'grass_c13', 'grass_c14', 'grass_c15', 'grass_corner']) ids.add(id);
 
     for (const textureId of ids) {
       if (textureId === 'air' || this.textures[textureId]) continue;
@@ -153,8 +165,11 @@ export class Renderer {
     this.updateHeldLight(ui);
     this.drawSky();
     // Clouds drift across the sky behind everything else; dimmer at night.
-    if (!this.clouds) this.clouds = new Clouds();
-    this.clouds.draw(ctx, this.camera, canvas, world.seed ?? 0, this.daylight?.base ?? 1);
+    if (!this.clouds) { this.clouds = new Clouds(); this.classicClouds = new ClassicClouds(); }
+    (polishOn('clouds') ? this.clouds : this.classicClouds).draw(ctx, this.camera, canvas, world.seed ?? 0, this.daylight?.base ?? 1);
+    const polish = ui?.textureQuality !== 'fast';
+    this._polish = polish;
+    if (polish && polishOn('hills')) drawHills(ctx, this.camera, canvas, world.seed ?? 0, this._skyRGB, this.daylight?.base ?? 1);
 
     const shake = ui?.explosionFX ? ui.explosionFX.getShakeOffset() : null;
     if (shake && (shake.x || shake.y)) {
@@ -180,6 +195,14 @@ export class Renderer {
     // Mist sits behind the land and trees, filling the open air between them.
     this.drawFog(startX, endX);
 
+    // Solid foreground blocks go on their own layer so their open corners can be rounded.
+    const terrain = polish && (polishOn('outlines') || polishOn('rounding') || polishOn('seams') || polishOn('wallShadows')) ? this.terrainLayer() : null;
+    const terrainCtx = terrain?.getContext('2d');
+    if (terrainCtx) terrainCtx.setTransform(ctx.getTransform());
+    // Leaves get a layer too, so the whole canopy can be outlined.
+    const leafLayer = polish && polishOn('leaves') ? this.terrainLayer('_leafLayer') : null;
+    const leafCtx = leafLayer?.getContext('2d');
+    if (leafCtx) leafCtx.setTransform(ctx.getTransform());
     this._splashes = [];
     this._waterFrame = (this._waterFrame || 0) + 1;
     for (let x = startX; x <= endX; x++) {
@@ -192,7 +215,10 @@ export class Renderer {
         if (!t.solid || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
           // A background block placed behind this one (a torch on a planks wall...).
           const bgType = cell.meta?.bgId ? this.registry.get(cell.meta.bgId) : null;
-          if (bgType) this.drawBlock(x, y, bgType, { layer: 'bg' });
+          if (bgType) {
+            this.drawBlock(x, y, bgType, { layer: 'bg' });
+            if (polish && bgType.solid && polishOn('seams')) this.seamTile(x, y);
+          }
           // Lakes have a fixed sand backdrop where their water was generated; it stays put
           // whatever the water in front of it does.
           else if (cell.meta?.noWall) { /* the natural wall here was mined out */ }
@@ -205,30 +231,45 @@ export class Renderer {
           if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
           else if (y >= this.naturalSurfaceAt(x)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
         }
-        // Water flowing through a plant: solid water behind it (so the colour matches the
-        // water around it), then a see-through layer in front so the plant sits in the water.
-        const plantWater = cell.meta?.water > 0 && cell.id !== 'water';
-        // Water flowing past a background block is just water in front of a wall: drawn
-        // once, like any other water (not twice like water in a plant, which looked darker).
-        if (plantWater && cell.meta?.layer === 'bg') {
-          this.drawBlock(x, y, t, cell.meta);
-          this.drawBlock(x, y, this.registry.get('water'), { mass: cell.meta.water });
-          continue;
-        }
-        if (plantWater) this.drawBlock(x, y, this.registry.get('water'), { mass: cell.meta.water });
-        this.drawBlock(x, y, t, cell.meta || {});
-        if (plantWater) {
-          ctx.save();
-          ctx.globalAlpha = 0.55;
-          this.drawBlock(x, y, this.registry.get('water'), { mass: cell.meta.water });
-          ctx.restore();
+        // Water (still and moving) is drawn after the blocks, all at once (drawWaterLayer).
+        if (cell.id === 'water') continue;
+        if (leafCtx && cell.id.endsWith('_leaves') && cell.meta?.layer !== 'bg') {
+          this.ctx = leafCtx;
+          this.drawBlock(x, y, t, cell.meta || {});
+          this.ctx = ctx;
+        } else if (terrainCtx && isOutlined(t, cell.meta)) {
+          this.ctx = terrainCtx;
+          this.drawBlock(x, y, t, cell.meta || {});
+          this.ctx = ctx;
+        } else {
+          this.drawBlock(x, y, t, cell.meta || {});
         }
       }
     }
+    if (polish && polishOn('connectedGrass')) this.drawGrassCorners(terrainCtx || ctx, startX, endX, startY, endY);
+    if (leafCtx) {
+      this.ctx = leafCtx;
+      this.drawLeafFringes(startX, endX, startY, endY);
+      this.ctx = ctx;
+      outlineLayer(leafLayer, camera.zoom);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(leafLayer, 0, 0);
+      ctx.restore();
+    }
+    if (terrainCtx) {
+      edgePass(this, terrainCtx, ctx, startX, endX, startY, endY);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(terrain, 0, 0);
+      ctx.restore();
+    }
+    if (polish && polishOn('rounding') && !(shake && (shake.x || shake.y))) this.roundWallCorners(startX, endX, startY, endY);
+    this.drawWaterLayer(startX, endX, startY, endY);
 
     // Foam and bubbles go on top of the water cells around them.
     this.drawSplashes();
-    this.drawLeafFringes(startX, endX, startY, endY);
+    if (!leafCtx) this.drawLeafFringes(startX, endX, startY, endY);
 
     this.drawLightOverlay(startX, endX, startY, endY);
     if (ui?.textureQuality !== 'fast') this.drawLightTint(startX, endX, startY, endY);
@@ -247,6 +288,7 @@ export class Renderer {
     const rects = [[p.x - 8, p.y - 8, p.width + 16, p.height + 8]];
     for (const rp of others) rects.push([rp.x - 8, rp.y - 8, rp.width + 16, rp.height + 8]);
     for (const item of world.items || []) rects.push([item.x - 8, item.y - 8, 16, 16]);
+    if (polish && polishOn('entityOutlines')) outlineLayer(layer, camera.zoom);
     this.ctx.globalCompositeOperation = 'source-atop';
     this.drawWaterOver(rects);
     this.ctx.globalCompositeOperation = 'source-over';
@@ -262,6 +304,113 @@ export class Renderer {
     this.drawHoveredBlockOutline();
     this.drawPositionOutlines();
     if (shake && (shake.x || shake.y)) ctx.restore();
+    if (polish && polishOn('vignette')) drawVignette(ctx, canvas);
+  }
+
+  // A canvas the size of the screen, cleared, for the solid blocks.
+  terrainLayer(key = '_terrain') {
+    const { canvas } = this;
+    if (!this[key]) this[key] = document.createElement('canvas');
+    const c = this[key];
+    if (c.width !== canvas.width || c.height !== canvas.height) { c.width = canvas.width; c.height = canvas.height; }
+    const tctx = c.getContext('2d');
+    tctx.setTransform(1, 0, 0, 1, 0, 0);
+    tctx.clearRect(0, 0, c.width, c.height);
+    tctx.imageSmoothingEnabled = false;
+    return c;
+  }
+
+  // Inner grass corners: where two grass blocks meet around a solid block's corner (both
+  // with their grass facing the open cell diagonal to it), a grass patch is laid over that
+  // corner of the solid block so the two bands join. Works for all four corners.
+  drawGrassCorners(target, startX, endX, startY, endY) {
+    const { world, camera } = this;
+    const base = this.textures.grass_corner;
+    if (!base) return;
+    const id = (x, y) => (world.inBounds(x, y) ? world.getBlockId(x, y) : 'air');
+    const open = (x, y) => {
+      const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null;
+      return !t || !t.solid || (t.shape && t.shape !== 'full');
+    };
+    target.imageSmoothingEnabled = false;
+    for (let x = startX; x <= endX; x++) {
+      if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
+      for (let y = startY; y <= endY; y++) {
+        if (open(x, y)) continue;
+        for (const dy of [-1, 1]) {
+          for (const dx of [-1, 1]) {
+            if (!open(x + dx, y + dy) || id(x + dx, y) !== 'grass' || id(x, y + dy) !== 'grass') continue;
+            const tex = this.biomeTexture('grass_corner', base, x);
+            const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
+            const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
+            const size = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE)) - sx;
+            // The texture is the top-left corner; mirror it for the others.
+            target.save();
+            target.translate(dx > 0 ? sx + size : sx, dy > 0 ? sy + size : sy);
+            target.scale(dx > 0 ? -1 : 1, dy > 0 ? -1 : 1);
+            target.drawImage(tex, 0, 0, size, size);
+            target.restore();
+          }
+        }
+      }
+    }
+  }
+
+  // Connected grass (purely visual): a grass band along every side that faces open air,
+  // so neighbouring grass joins up all the way round. Bits: 1 up, 2 right, 4 down, 8 left.
+  connectedGrassId(tileX, tileY) {
+    const open = (x, y) => {
+      const t = this.world.inBounds(x, y) ? this.world.getBlockType(x, y) : null;
+      return !t || !t.solid || (t.shape && t.shape !== 'full') ? 1 : 0;
+    };
+    const m = open(tileX, tileY - 1) | open(tileX + 1, tileY) << 1 | open(tileX, tileY + 1) << 2 | open(tileX - 1, tileY) << 3;
+    return `grass_c${m}`;
+  }
+
+  leafFoot(texture, rotation, size) {
+    this._leafPixels ??= new Map();
+    let pts = this._leafPixels.get(texture);
+    if (!pts) {
+      if (!isTextureReady(texture)) return size / 2;
+      pts = [];
+      try {
+        const c = document.createElement('canvas');
+        c.width = 16; c.height = 16;
+        const x = c.getContext('2d');
+        x.drawImage(texture, 0, 0, 16, 16);
+        const d = x.getImageData(0, 0, 16, 16).data;
+        for (let j = 0; j < 16; j++) for (let i = 0; i < 16; i++) if (d[(j * 16 + i) * 4 + 3] > 128) pts.push([i + 0.5 - 8, j + 1 - 8]);
+      } catch { /* leave empty */ }
+      this._leafPixels.set(texture, pts);
+    }
+    if (!pts.length) return size / 2;
+    const sin = Math.sin(rotation), cos = Math.cos(rotation);
+    let foot = -Infinity;
+    for (const [px, py] of pts) foot = Math.max(foot, px * sin + py * cos);
+    return foot * size / 16;
+  }
+
+  // Average colour of a texture's opaque pixels, cached per texture.
+  averageColor(texture) {
+    this._avgColors ??= new Map();
+    let c = this._avgColors.get(texture);
+    if (!c) {
+      if (!isTextureReady(texture)) return [80, 120, 60];
+      c = [80, 120, 60];
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = 16; cv.height = 16;
+        const x = cv.getContext('2d');
+        x.drawImage(texture, 0, 0, 16, 16);
+        const d = x.getImageData(0, 0, 16, 16).data;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 128) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+        if (n) c = [r / n, g / n, b / n];
+      } catch { /* not loaded yet */ }
+      if (this._avgColors.size > 256) this._avgColors.clear();
+      this._avgColors.set(texture, c);
+    }
+    return c;
   }
 
   updateDaylight() {
@@ -558,6 +707,81 @@ export class Renderer {
     return depth <= dirtDepth ? 'dirt' : 'stone';
   }
 
+  // Is something behind or in front at this cell (a block, or a wall)? Open sky isn't.
+  hasBackdrop(tileX, tileY) {
+    const world = this.world;
+    if (!world.inBounds(tileX, tileY) || !world.isChunkLoaded(world.chunkXFor(tileX))) return true;
+    const t = world.getBlockType(tileX, tileY);
+    if (t && t.solid && (!t.shape || t.shape === 'full')) return true;
+    const cell = world.getCell(tileX, tileY);
+    if (cell.meta?.bgId) return true;
+    return this.naturalWallId(tileX, tileY) !== null;
+  }
+
+  // Rounds the corners where background walls meet open sky: an inside corner (sky cell
+  // walled on two sides) gets a dark pixel filling its corner; an outside corner (wall
+  // cell with sky on two sides) gets its corner pixel replaced by the sky beside it.
+  roundWallCorners(startX, endX, startY, endY) {
+    const { ctx, camera, canvas, world } = this;
+    const u = Math.max(1, Math.round(camera.zoom));
+    const isWall = (x, y) => {
+      const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null;
+      if (t && t.solid && (!t.shape || t.shape === 'full')) return false; // front blocks round themselves
+      return this.hasBackdrop(x, y);
+    };
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    for (let x = startX; x <= endX; x++) {
+      if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
+      for (let y = startY; y <= endY; y++) {
+        const wall = isWall(x, y);
+        const sky = !this.hasBackdrop(x, y);
+        if (!wall && !sky) continue;
+        const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
+        const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
+        const ex = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE));
+        const ey = Math.round(camera.worldToScreenY((y + 1) * TILE_SIZE));
+        for (const dy of [-1, 1]) {
+          for (const dx of [-1, 1]) {
+            const cx = dx < 0 ? sx : ex - u, cy = dy < 0 ? sy : ey - u;
+            if (sky && this.hasBackdrop(x + dx, y) && this.hasBackdrop(x, y + dy)) {
+              ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
+              ctx.fillRect(cx, cy, u, u);
+            } else if (wall && !this.hasBackdrop(x + dx, y) && !this.hasBackdrop(x, y + dy) && !this.hasBackdrop(x + dx, y + dy)) {
+              // Copy the sky from just outside the corner over the corner pixel.
+              const ox = cx + dx * u, oy = cy;
+              if (ox < 0 || ox + u > canvas.width || oy < 0 || oy + u > canvas.height) continue;
+              ctx.drawImage(canvas, ox, oy, u, u, cx, cy, u, u);
+              ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
+              ctx.fillRect(cx - dx * u, cy - dy * u, u, u);
+            }
+          }
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  // Dark edges on a background wall where it meets open sky (they move as walls are mined).
+  outlineWall(tileX, tileY, left, top, w, h) {
+    const ctx = this.ctx;
+    const u = Math.max(1, Math.round(this.camera.zoom));
+    ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
+    if (!this.hasBackdrop(tileX, tileY - 1)) ctx.fillRect(left, top, w, u);
+    if (!this.hasBackdrop(tileX, tileY + 1)) ctx.fillRect(left, top + h - u, w, u);
+    if (!this.hasBackdrop(tileX - 1, tileY)) ctx.fillRect(left, top, u, h);
+    if (!this.hasBackdrop(tileX + 1, tileY)) ctx.fillRect(left + w - u, top, u, h);
+  }
+
+  seamTile(tileX, tileY) {
+    const { camera } = this;
+    const left = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
+    const top = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
+    blockSeams(this.ctx, left, top, Math.round(camera.worldToScreenX((tileX + 1) * TILE_SIZE)) - left,
+      Math.round(camera.worldToScreenY((tileY + 1) * TILE_SIZE)) - top, Math.max(1, Math.round(camera.zoom)));
+  }
+
   // fill (0..1) draws only the bottom part of the wall, e.g. behind a partly filled water cell.
   drawBackgroundWall(tileX, tileY, flat = false, wallId = null, fill = 1) {
     const { ctx, camera } = this;
@@ -571,6 +795,8 @@ export class Renderer {
       const rows = Math.max(1, Math.round(16 * fill));
       const y0 = top + height - Math.round(height * rows / 16);
       ctx.drawImage(this.getTintedTexture(texture, BACKGROUND_WALL_SHADE), 0, 16 - rows, 16, rows, left, y0, width, top + height - y0);
+      if (this._polish && rows === 16 && polishOn('seams')) blockSeams(ctx, left, top, width, height, Math.max(1, Math.round(camera.zoom)));
+      if (this._polish && rows === 16 && polishOn('outlines')) this.outlineWall(tileX, tileY, left, top, width, height);
     } else {
       ctx.fillStyle = BACKGROUND_WALL;
       const y0 = top + height - Math.round(height * fill);
@@ -592,6 +818,7 @@ export class Renderer {
   }
 
   drawLightOverlay(startX, endX, startY, endY) {
+    if (polishOn('smoothLight')) { this.drawSmoothLightOverlay(startX, endX, startY, endY); return; }
     const { ctx, camera } = this;
     ctx.save();
     ctx.fillStyle = '#000';
@@ -617,6 +844,35 @@ export class Renderer {
         }
       }
     }
+    ctx.restore();
+  }
+
+  // The darkness as one pixel per block, scaled up smoothly, so light fades across blocks
+  // instead of stepping block by block.
+  drawSmoothLightOverlay(startX, endX, startY, endY) {
+    const { ctx, camera } = this;
+    const w = endX - startX + 1, h = endY - startY + 1;
+    if (!this._darkCanvas) this._darkCanvas = document.createElement('canvas');
+    const c = this._darkCanvas;
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; this._darkImg = c.getContext('2d').createImageData(w, h); }
+    const d = this._darkImg.data;
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        const tx = startX + i, ty = startY + j;
+        const a = this.isShadedTile(tx, ty) ? Math.max(0, Math.min(1, this.overlayAlphaAt(tx, ty))) : 0;
+        const o = (j * w + i) * 4;
+        d[o] = d[o + 1] = d[o + 2] = 0;
+        d[o + 3] = Math.round(a * 255);
+      }
+    }
+    c.getContext('2d').putImageData(this._darkImg, 0, 0);
+    const tile = TILE_SIZE * camera.zoom;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    // Pixel centres sit on block centres, so the fades run from the middle of one block to
+    // the middle of the next.
+    ctx.drawImage(c, camera.worldToScreenX(startX * TILE_SIZE), camera.worldToScreenY(startY * TILE_SIZE), w * tile, h * tile);
     ctx.restore();
   }
 
@@ -669,6 +925,7 @@ export class Renderer {
             
             if (texture) {
               ctx.drawImage(texture, x, y, tileSize, tileSize);
+              if (polishOn('seams')) blockSeams(ctx, x, y, tileSize, tileSize, tileSize / 16, true);
             } else {
               ctx.fillStyle = this.getBlockColor(blockId);
               ctx.fillRect(x, y, tileSize, tileSize);
@@ -692,6 +949,8 @@ export class Renderer {
       ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+    if (polishOn('vignette')) drawVignette(ctx, canvas);
+    if (polishOn('outlines')) screenOutline(ctx, canvas, 8);
   }
 
   getBlockColor(blockId) {
@@ -759,8 +1018,12 @@ export class Renderer {
       b = Math.floor(140 * (1 - t) + NIGHT_SKY[2] * t);
     }
     
-    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    this._skyRGB = [r, g, b];
+    if (polishOn('sky')) drawSkyGradient(ctx, canvas, r, g, b, this.daylight?.base ?? 1);
+    else {
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
 
     if (!sunVisible) {
       this.drawStars();
@@ -854,15 +1117,16 @@ drawStars() {
       const tileY = Math.floor(particle.y / TILE_SIZE);
       const combinedLightFactor = this.lightFactorAt(tileX, tileY, false);
       
-      let alpha = 1.0;
-      if (particle.fadeOut) {
-        alpha = 1.0 - particle.fadeProgress;
-      }
+      const alpha = particle.alpha ?? 1;
       
       let texture = this.textures[`falling_leaf_${particle.blockId}`] || this.textures['falling_leaf'] || this.textures['oak_leaf_particle'] || null;
       if (texture && particle.blockId && biomeHasLeafTint(particle.blockId)) {
         texture = this.getBiomeTinted(`falling_leaf_${particle.blockId}`, texture, Math.floor(particle.x / TILE_SIZE), particle.blockId);
       }
+
+      // How far below its centre the leaf's visible pixels reach at its current spin (world
+      // px), so it lands on its real shape rather than its square texture.
+      if (texture) particle.foot = this.leafFoot(texture, particle.rotation, TILE_SIZE * 0.8);
 
       if (texture) {
         ctx.save();
@@ -1067,200 +1331,6 @@ drawStars() {
     return c;
   }
 
-  // Water: the ripple texture drifts slowly sideways, and the top block of a body of
-  // water gets a bright, gently waving surface line.
-  drawWater(texture, tileX, tileY, sx, sy, size, lightFactor, level = WATER_LEVELS) {
-    const quant = Math.max(MIN_BRIGHTNESS, Math.min(1, Math.round(lightFactor * 50) / 50));
-    const image = quant >= 1 ? texture : this.getTintedTexture(texture, quant);
-    const ctx = this.ctx;
-    const t = gameClock.seconds();
-    const px = size / 16;
-    const shift = Math.floor(((t * 1.5 + tileY * 3) % 16 + 16) % 16);
-    ctx.imageSmoothingEnabled = false;
-    // Water in mid-air (nothing but air or a thin trickle under it) is drawn as a stream
-    // scrolling downward; where a stream lands it keeps its shape down to the water line.
-    const world = this.world;
-    const massAt = (x, y) => (world.inBounds(x, y) ? waterMass(world.getCell(x, y)) : 0);
-    const solidAt = (x, y) => {
-      if (!world.inBounds(x, y)) return true;
-      const id = world.getBlockId(x, y);
-      return id !== 'air' && id !== 'water';
-    };
-    // Mid-air: nothing but air or a trickle below, and fed from above or off a ledge beside
-    // it. A loose scrap with nothing feeding it is just drawn as a thin layer.
-    const inAir = (x, y) => {
-      const m = massAt(x, y);
-      if (m <= 0 || m >= 0.9 || solidAt(x, y + 1) || massAt(x, y + 1) >= 0.5) return false;
-      return massAt(x, y - 1) > 0 || massAt(x - 1, y) > 0 || massAt(x + 1, y) > 0;
-    };
-    // A loose scrap of water dropping through the air: draw it as a drop, not a floating layer.
-    if (level < WATER_LEVELS && !solidAt(tileX, tileY + 1) && massAt(tileX, tileY + 1) < 0.5 && !inAir(tileX, tileY)) {
-      const m = massAt(tileX, tileY);
-      const dw = Math.max(2, Math.round(2 + m * 6)), dh = Math.max(3, Math.round(4 + m * 10));
-      const phase = (t * 3 + tileX * 0.37) % 1;
-      const dy = Math.round(phase * (16 - dh));
-      ctx.drawImage(image, 8 - (dw >> 1), 0, dw, dh, sx + Math.round((8 - dw / 2) * px), sy + Math.round(dy * px), Math.round(dw * px), Math.round(dh * px));
-      return;
-    }
-    // A thin film left resting on full water (a scrap of the slight squeeze deep water is
-    // under) is hidden, and the water under it is drawn as the surface.
-    const film = (x, y) => {
-      const mm = massAt(x, y);
-      return mm > 0 && mm < 0.25 && massAt(x, y + 1) >= 0.9 && massAt(x, y - 1) <= 0;
-    };
-    if (film(tileX, tileY)) return;
-    const falling = inAir(tileX, tileY);
-    const landing = !falling && inAir(tileX, tileY - 1);
-    if (!falling && !landing && massAt(tileX, tileY - 1) > 0 && !film(tileX, tileY - 1)) level = WATER_LEVELS; // under water: full
-    if (falling || landing) {
-      const isWater = (x, y) => massAt(x, y) > 0;
-      // Pool water beside it: the stream is landing in a pool rather than on bare ground.
-      const inPool = landing && [-1, 1].some(dx => isWater(tileX + dx, tileY) && !inAir(tileX + dx, tileY));
-      // Width follows the flow feeding the stream, so it doesn't bulge where it lands.
-      const flow = Math.round(Math.min(1, massAt(tileX, tileY - 1) || massAt(tileX, tileY)) * 16);
-      const inset = Math.max(0, (16 - Math.min(16, 8 + Math.round(flow / 2))) >> 1);
-      // Side-by-side streams merge into one sheet; water spilling off a ledge reaches back
-      // to the ledge it pours from.
-      const fedAbove = isWater(tileX, tileY - 1);
-      const joins = dx => inAir(tileX + dx, tileY) || (!fedAbove && falling && isWater(tileX + dx, tileY));
-      const wetL = joins(-1), wetR = joins(1);
-      const srcX = wetL ? 0 : inset;
-      const widthTx = (wetR ? 16 : 16 - inset) - srcX;
-      const x0 = sx + Math.round(srcX * px);
-      const wPx = Math.round((srcX + widthTx) * px) - Math.round(srcX * px);
-      const surfaceY = inPool ? sy + Math.round((16 - Math.max(1, level)) * px) : sy + size;
-      const scroll = (t * 24) % 16;
-      ctx.save();
-      ctx.beginPath();
-      // Water pouring off a ledge (nothing above it) starts at the height of the water it
-      // spills from, not at the top of the block.
-      let topT = 0;
-      if (!fedAbove) {
-        topT = 16 - Math.max(1, level);
-        for (const dx of [-1, 1]) {
-          const nm = massAt(tileX + dx, tileY);
-          if (nm > 0 && !inAir(tileX + dx, tileY)) topT = Math.min(topT, 16 - Math.max(1, Math.min(16, Math.round(nm * 16))));
-        }
-      }
-      const streamTop = sy + Math.round(topT * px);
-      ctx.rect(x0, streamTop, wPx, surfaceY - streamTop);
-      ctx.clip();
-      const off = Math.round(scroll * px);
-      ctx.drawImage(image, srcX, 0, widthTx, 16, x0, sy + off - size, wPx, size);
-      ctx.drawImage(image, srcX, 0, widthTx, 16, x0, sy + off, wPx, size);
-      ctx.restore();
-      // Foam where a stream that has fallen at least two blocks hits water.
-      const hitsWater = inPool || massAt(tileX, tileY + 1) >= 0.5;
-      if (landing && hitsWater && inAir(tileX, tileY - 2)) {
-        const row = inPool ? tileY : tileY + 1;
-        let l = 0, r = 0;
-        while (l < 2 && isWater(tileX - l - 1, row) && !inAir(tileX - l - 1, row)) l++;
-        while (r < 2 && isWater(tileX + r + 1, row) && !inAir(tileX + r + 1, row)) r++;
-        this._splashes?.push({ tileX, cx: x0 + wPx / 2, surfaceY, half: wPx / 2, px, size, quant,
-          minX: sx - l * size, maxX: sx + (r + 1) * size });
-      }
-      if (!inPool) return;
-    }
-    // The surface is smoothed between columns: each edge of a surface cell sits halfway
-    // between this column's water height and its neighbour's, so a draining dip reads as
-    // a smooth slope rather than block steps. Heights are in world texels (down = larger).
-    // Heights ease toward the simulated amount over a few frames, so tiny back-and-forth
-    // wobbles in the simulation never show as jitter.
-    const shownAt = (x, y) => this.shownWaterMass(x, y, massAt(x, y));
-    const underWater = massAt(tileX, tileY - 1) > 0 && !film(tileX, tileY - 1);
-    const fill = underWater ? WATER_LEVELS : Math.max(1, Math.min(16, Math.round(Math.min(1, shownAt(tileX, tileY)) * 16)));
-    const own = (tileY + 1) * 16 - fill;
-    const isSurface = massAt(tileX, tileY - 1) <= 0 || film(tileX, tileY - 1);
-    const surfaceAt = x => {
-      if (solidAt(x, tileY)) return null; // a wall: keep the edge flat against it
-      for (let r = tileY - 2; r <= tileY + 4; r++) {
-        const mm = massAt(x, r);
-        if (mm <= 0 || film(x, r)) continue;
-        if (r === tileY - 2 && massAt(x, r - 1) > 0) return r * 16;
-        return (r + 1) * 16 - Math.max(1, Math.min(16, Math.round(shownAt(x, r) * 16)));
-      }
-      return solidAt(x, tileY + 1) ? own : (tileY + 5) * 16;
-    };
-    const tops = new Array(16);
-    let smooth = false;
-    if (isSurface) {
-      // Each column's height is blended with two columns either side (stopping at walls),
-      // and the edges sit between neighbouring blended heights: a soft curve, not steps.
-      const raw = new Map();
-      const rawAt = x => {
-        if (!raw.has(x)) raw.set(x, x === tileX ? own : surfaceAt(x));
-        return raw.get(x);
-      };
-      const blended = x => {
-        const c = rawAt(x);
-        if (c === null) return null;
-        let sum = c * 3, w = 3;
-        for (const dir of [-1, 1]) {
-          for (let d = 1; d <= 2; d++) {
-            const v = rawAt(x + dir * d);
-            if (v === null) break;
-            sum += v * (3 - d);
-            w += 3 - d;
-          }
-        }
-        return sum / w;
-      };
-      const mid = blended(tileX);
-      const bl = blended(tileX - 1), br = blended(tileX + 1);
-      const edgeL = bl === null ? mid : (mid + bl) / 2;
-      const edgeR = br === null ? mid : (mid + br) / 2;
-      const ownSmooth = mid;
-      for (let i = 0; i < 16; i++) {
-        const u = (i + 0.5) / 16;
-        const abs = u < 0.5 ? edgeL + (ownSmooth - edgeL) * (u / 0.5) : ownSmooth + (edgeR - ownSmooth) * ((u - 0.5) / 0.5);
-        tops[i] = Math.max(0, Math.min(15, Math.round(abs - tileY * 16)));
-        if (tops[i] !== 16 - fill) smooth = true;
-      }
-    }
-    // Deeper water is darker: blocks of water above this cell set how dark its top is, and
-    // it darkens smoothly toward its bottom.
-    let depth = 0;
-    while (depth < 10 && massAt(tileX, tileY - depth - 1) > 0) depth++;
-    const depthAlpha = d => Math.min(0.6, d * 0.07);
-    const grad = ctx.createLinearGradient(0, sy, 0, sy + size);
-    grad.addColorStop(0, `rgba(4, 14, 40, ${depthAlpha(depth)})`);
-    grad.addColorStop(1, `rgba(4, 14, 40, ${depthAlpha(depth + 1)})`);
-    const shadeDepth = (x, y, w, hh) => {
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, y, w, hh);
-    };
-    const shade = Math.round(255 * quant);
-    const surfaceLine = (i, topT) => {
-      const wave = Math.sin(t * 2 + (tileX * 16 + i) * 0.45) > 0.55 ? 1 : 0;
-      const y0 = sy + topT * px;
-      ctx.fillStyle = `rgba(${Math.round(shade * 0.7)}, ${Math.round(shade * 0.88)}, ${shade}, 0.85)`;
-      ctx.fillRect(Math.round(sx + i * px), Math.round(y0 + wave * px), Math.ceil(px), Math.ceil(px));
-      ctx.fillStyle = `rgba(${Math.round(shade * 0.45)}, ${Math.round(shade * 0.7)}, ${shade}, 0.55)`;
-      ctx.fillRect(Math.round(sx + i * px), Math.round(y0 + (wave + 1) * px), Math.ceil(px), Math.ceil(px));
-    };
-    if (smooth) {
-      for (let i = 0; i < 16; i++) {
-        const topT = tops[i];
-        const x0 = Math.round(sx + i * px), x1 = Math.round(sx + (i + 1) * px);
-        const y0 = sy + Math.round(topT * px);
-        ctx.drawImage(image, (i + shift) % 16, topT, 1, 16 - topT, x0, y0, x1 - x0, sy + size - y0);
-        shadeDepth(x0, y0, x1 - x0, sy + size - y0);
-        surfaceLine(i, topT);
-      }
-      return;
-    }
-    // Drift: draw the texture split at `shift` texels so it wraps seamlessly.
-    // A partly filled cell only shows its bottom `level` layers.
-    const top = 16 - fill;
-    const syTop = sy + Math.round(top * px);
-    const h = sy + size - syTop;
-    const w1 = 16 - shift;
-    ctx.drawImage(image, shift, top, w1, fill, sx, syTop, Math.round(w1 * px), h);
-    if (shift > 0) ctx.drawImage(image, 0, top, shift, fill, sx + Math.round(w1 * px), syTop, size - Math.round(w1 * px), h);
-    shadeDepth(sx, syTop, size, h);
-    if (isSurface) for (let i = 0; i < 16; i++) surfaceLine(i, top);
-  }
-
   // A cleared offscreen canvas the size of the screen.
   entityLayer() {
     const { canvas } = this;
@@ -1277,52 +1347,232 @@ drawStars() {
     return layer;
   }
 
-  // Tints the parts of the given world rects [x, y, w, h] that are below the water line.
-  drawWaterOver(rects) {
+  // All the water on screen drawn as 4x4-pixel squares, four across a block (the water sim's
+  // squares): deeper squares darker, a bright edge on top and a soft shimmer just under it.
+  // Built as one small image (a pixel per square) and drawn scaled up, so it costs one draw
+  // however much water there is.
+  // Water: drawn exclusively from simulated LiquidFun particles in 16x16 resolution.
+  drawWaterLayer(startX, endX, startY, endY) {
     const { ctx, camera, world } = this;
-    for (const [rx, ry, rw, rh] of rects) {
-      for (let ty = Math.floor(ry / TILE_SIZE); ty <= Math.floor((ry + rh) / TILE_SIZE); ty++) {
-        for (let tx = Math.floor(rx / TILE_SIZE); tx <= Math.floor((rx + rw) / TILE_SIZE); tx++) {
-          if (!world.inBounds(tx, ty)) continue;
-          const m = waterMass(world.getCell(tx, ty));
-          if (m <= 0) continue;
-          const wetAbove = world.inBounds(tx, ty - 1) && waterMass(world.getCell(tx, ty - 1)) > 0;
-          const top = wetAbove ? ty * TILE_SIZE : (ty + 1) * TILE_SIZE - Math.min(1, this.shownWaterMass(tx, ty, m)) * TILE_SIZE;
-          const x0 = Math.max(rx, tx * TILE_SIZE), x1 = Math.min(rx + rw, (tx + 1) * TILE_SIZE);
-          const y0 = Math.max(ry, top), y1 = Math.min(ry + rh, (ty + 1) * TILE_SIZE);
-          if (x1 <= x0 || y1 <= y0) continue;
-          const l = Math.max(MIN_BRIGHTNESS, this.lightFactorAt(tx, ty, false));
-          ctx.fillStyle = `rgba(${Math.round(40 * l)}, ${Math.round(90 * l)}, ${Math.round(190 * l)}, 0.55)`;
-          const sx0 = Math.round(camera.worldToScreenX(x0)), sx1 = Math.round(camera.worldToScreenX(x1));
-          const sy0 = Math.round(camera.worldToScreenY(y0)), sy1 = Math.round(camera.worldToScreenY(y1));
-          ctx.fillRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
-        }
+    const sim = world.water;
+    const particlePos = sim?.particles?.positions();
+    if (!particlePos || !particlePos.length) { this._waterShown = null; return; }
+    const PER = WATER_SQ;
+    const cols = endX - startX + 1, rows = endY - startY + 1;
+    const gw = cols * PER, gh = rows * PER;
+    if (!this._waterCanvas || this._waterCanvas.width !== gw || this._waterCanvas.height !== gh) {
+      this._waterCanvas = document.createElement('canvas');
+      this._waterCanvas.width = gw; this._waterCanvas.height = gh;
+    }
+    const wc = this._waterCanvas.getContext('2d');
+    wc.clearRect(0, 0, gw, gh);
+    const lightAt = (tx, ty) => (this.isOpenSky(tx, ty) ? Math.max(MIN_BRIGHTNESS, this.lightFactorAt(tx, ty, true)) : 1);
+    this.drawParticleWater(wc, particlePos, startX, startY, cols, rows, PER, lightAt);
+    const x0 = Math.round(camera.worldToScreenX(startX * TILE_SIZE));
+    const y0 = Math.round(camera.worldToScreenY(startY * TILE_SIZE));
+    const x1 = Math.round(camera.worldToScreenX((endX + 1) * TILE_SIZE));
+    const y1 = Math.round(camera.worldToScreenY((endY + 1) * TILE_SIZE));
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(this._waterCanvas, x0, y0, x1 - x0, y1 - y0);
+    ctx.restore();
+    this._waterShown = { x0, y0, x1, y1 };
+  }
+
+  // Particle water: drawn as 8x8 water pixels per block (each 2x2 texture pixels); each
+  // particle fills the pixel it's in and the ones beside it (there are fewer particles
+  // Particle water: drawn as 16x16 water pixels per block (1:1 with block texture pixels);
+  // Particle water: drawn as 16x16 water pixels per block (1:1 with block texture pixels);
+  // each particle fills a radius of ~2 pixels.
+  // Drawn into the water image `wc` (per texture px).
+  drawParticleWater(wc, pos, startX, startY, cols, rows, per, lightAt) {
+    const WPX = 16, sc = per / WPX;
+    const GW = cols * WPX, GH = rows * WPX;
+    if (!this._pGrid || this._pGrid.length !== GW * GH) {
+      this._pGrid = new Uint8Array(GW * GH);
+      this._pTmp = new Uint8Array(GW * GH);
+      this._pTops = new Float32Array(GW);
+      this._pFill = new Float32Array(GW);
+      this._pSmooth = new Float32Array(GW);
+      this._pCanvas = document.createElement('canvas');
+      this._pCanvas.width = GW; this._pCanvas.height = GH;
+      this._pImg = this._pCanvas.getContext('2d').createImageData(GW, GH);
+      this._pImg32 = new Uint32Array(this._pImg.data.buffer);
+      this._pActiveBBox = null;
+    }
+    const grid = this._pGrid;
+    const d32 = this._pImg32;
+
+    // Fast clear only of the previous active water area
+    if (this._pActiveBBox) {
+      const { x0, x1, y0, y1 } = this._pActiveBBox;
+      for (let y = y0; y <= y1; y++) {
+        const rowOffset = y * GW;
+        grid.fill(0, rowOffset + x0, rowOffset + x1 + 1);
+        d32.fill(0, rowOffset + x0, rowOffset + x1 + 1);
       }
+    }
+
+    let minGx = GW, maxGx = -1, minGy = GH, maxGy = -1;
+    const minPx = startX - 1, maxPx = startX + cols + 1;
+    const minPy = startY - 1, maxPy = startY + rows + 1;
+    for (let p = 0; p < pos.length; p += 2) {
+      const px = pos[p], py = pos[p + 1];
+      if (px < minPx || px > maxPx || py < minPy || py > maxPy) continue;
+      const gx = Math.floor((px - startX) * WPX), gy = Math.floor((py - startY) * WPX);
+      if (gx < minGx) minGx = gx;
+      if (gx > maxGx) maxGx = gx;
+      if (gy < minGy) minGy = gy;
+      if (gy > maxGy) maxGy = gy;
+      for (let s = 0; s < SPLAT_LEN; s++) {
+        const x = gx + SPLAT_DX[s], y = gy + SPLAT_DY[s];
+        if (x >= 0 && y >= 0 && x < GW && y < GH) grid[y * GW + x] = 1;
+      }
+    }
+    if (maxGx < 0) {
+      this._pActiveBBox = null;
+      return;
+    }
+
+    const bx0 = Math.max(0, minGx - 3);
+    const bx1 = Math.min(GW - 1, maxGx + 3);
+    const by0 = Math.max(0, minGy - 3);
+    const by1 = Math.min(GH - 1, maxGy + 3);
+    this._pActiveBBox = { x0: bx0, x1: bx1, y0: by0, y1: by1 };
+
+    const sim = this.world.water;
+    const solid = this._pSolid && this._pSolid.length === cols * rows ? this._pSolid : (this._pSolid = new Uint8Array(cols * rows));
+    const blockLight = this._pBlockLight && this._pBlockLight.length === cols * rows ? this._pBlockLight : (this._pBlockLight = new Float32Array(cols * rows));
+
+    // Precompute block solid and lighting only for intersecting blocks in the bounding box
+    const btx0 = bx0 >> 4, btx1 = Math.min(cols - 1, bx1 >> 4);
+    const bty0 = by0 >> 4, bty1 = Math.min(rows - 1, by1 >> 4);
+    for (let j = bty0; j <= bty1; j++) {
+      const rowOffset = j * cols;
+      for (let i = btx0; i <= btx1; i++) {
+        solid[rowOffset + i] = sim.closed(startX + i, startY + j) ? 1 : 0;
+        blockLight[rowOffset + i] = lightAt(startX + i, startY + j);
+      }
+    }
+
+    // Keep water out of blocks; fill one-pixel holes, drop one-pixel bumps; ensure flush fill against solid blocks.
+    const tmp = this._pTmp;
+    for (let y = by0; y <= by1; y++) {
+      const rowSolid = (y >> 4) * cols;
+      const rowOffset = y * GW;
+      const belowY = y + 1;
+      const belowSolidRow = belowY < GH ? (belowY >> 4) * cols : -1;
+      for (let x = bx0; x <= bx1; x++) {
+        const k = rowOffset + x;
+        const colBlock = x >> 4;
+        if (solid[rowSolid + colBlock] === 1) { tmp[k] = 0; continue; }
+        const wallBelow = belowSolidRow >= 0 && solid[belowSolidRow + colBlock] === 1;
+        // If resting right on the solid floor with water above it, fill flush against the ground
+        if (wallBelow && y > 0 && grid[k - GW] === 1) { tmp[k] = 1; continue; }
+        if (x === 0 || y === 0 || x === GW - 1 || y === GH - 1) { tmp[k] = grid[k]; continue; }
+        const n = grid[k - 1] + grid[k + 1] + grid[k - GW] + grid[k + GW];
+        const wallTouch = wallBelow || (x > 0 && solid[rowSolid + ((x - 1) >> 4)] === 1) || (x + 1 < GW && solid[rowSolid + ((x + 1) >> 4)] === 1);
+        tmp[k] = grid[k] ? (n <= 1 && !wallTouch ? 0 : 1) : (n >= 3 ? 1 : 0);
+      }
+    }
+
+    for (let y = by0; y <= by1; y++) {
+      const rowOffset = y * GW;
+      grid.set(tmp.subarray(rowOffset + bx0, rowOffset + bx1 + 1), rowOffset + bx0);
+    }
+
+    // Each column's surface (first water pixel with open air above), gaps bridged, smoothed.
+    const tops = this._pTops, filled = this._pFill, smooth = this._pSmooth;
+    for (let x = bx0; x <= bx1; x++) {
+      tops[x] = NaN;
+      let capped = false;
+      const colBlock = x >> 4;
+      for (let y = by0; y <= by1; y++) {
+        if (solid[(y >> 4) * cols + colBlock] === 1) { capped = true; continue; }
+        if (grid[y * GW + x]) { if (!capped) tops[x] = y; break; }
+        capped = false;
+      }
+    }
+
+    let prev = -1;
+    for (let x = bx0; x <= bx1 + 1; x++) {
+      if (x <= bx1 && Number.isNaN(tops[x])) continue;
+      for (let g = prev + 1; g < x; g++) {
+        filled[g] = prev < bx0 ? (x <= bx1 ? tops[x] : NaN) : x > bx1 ? tops[prev] : tops[prev] + (tops[x] - tops[prev]) * (g - prev) / (x - prev);
+      }
+      if (x <= bx1) filled[x] = tops[x];
+      prev = x;
+    }
+
+    // Fast sliding-window surface smoothing (O(N) instead of O(N * window))
+    const SM = 2 * WPX, DEPTH = 7.5 * WPX;
+    let winSum = 0, winCount = 0;
+    const initRight = Math.min(bx1, bx0 + SM);
+    for (let k = Math.max(bx0, bx0 - SM); k <= initRight; k++) {
+      if (!Number.isNaN(filled[k])) { winSum += filled[k]; winCount++; }
+    }
+    smooth[bx0] = winCount ? winSum / winCount : NaN;
+
+    for (let x = bx0 + 1; x <= bx1; x++) {
+      const addIdx = x + SM;
+      if (addIdx <= bx1 && !Number.isNaN(filled[addIdx])) { winSum += filled[addIdx]; winCount++; }
+      const subIdx = x - SM - 1;
+      if (subIdx >= bx0 && !Number.isNaN(filled[subIdx])) { winSum -= filled[subIdx]; winCount--; }
+      smooth[x] = winCount ? winSum / winCount : NaN;
+    }
+
+    // Fast 32-bit pixel rendering inside bounding box
+    for (let y = by0; y <= by1; y++) {
+      const rowOffset = y * GW;
+      const bRow = (y >> 4) * cols;
+      for (let x = bx0; x <= bx1; x++) {
+        const k = rowOffset + x;
+        if (!grid[k]) continue;
+        const light = blockLight[bRow + (x >> 4)];
+        let r, g, b;
+        if (y === tops[x]) { r = 196; g = 232; b = 255; }
+        else {
+          const sm = smooth[x];
+          const t = Math.min(1, (Number.isNaN(sm) ? DEPTH / 2 : Math.max(1, y - sm)) / DEPTH);
+          r = 80 - 56 * t; g = 150 - 92 * t; b = 232 - 104 * t;
+        }
+        const lr = Math.round(r * light);
+        const lg = Math.round(g * light);
+        const lb = Math.round(b * light);
+        // Little-endian ABGR: alpha = 225
+        d32[k] = (225 << 24) | (lb << 16) | (lg << 8) | lr;
+      }
+    }
+
+    const pctx = this._pCanvas.getContext('2d');
+    pctx.putImageData(this._pImg, 0, 0, bx0, by0, bx1 - bx0 + 1, by1 - by0 + 1);
+    wc.imageSmoothingEnabled = false;
+    wc.drawImage(this._pCanvas, 0, 0, GW * sc, GH * sc);
+  }
+
+  // Water in front of the players and items (they look submerged): the same water image,
+  // fainter, over just their pixels (the caller draws with source-atop).
+  drawWaterOver(rects) {
+    const shown = this._waterShown;
+    if (!shown || !this._waterCanvas) return;
+    const { ctx, camera } = this;
+    // Each one separately, darkened by the light where it is (the water image is drawn at
+    // full brightness underground, where the light overlay darkens it later, but these are
+    // drawn after that overlay).
+    for (const [rx, ry, rw, rh] of rects) {
+      const light = this.lightFactorAt(Math.floor((rx + rw / 2) / TILE_SIZE), Math.floor((ry + rh / 2) / TILE_SIZE), false);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(camera.worldToScreenX(rx), camera.worldToScreenY(ry), rw * camera.zoom, rh * camera.zoom);
+      ctx.clip();
+      ctx.imageSmoothingEnabled = false;
+      ctx.globalAlpha = 0.6;
+      if (light < 1) ctx.filter = `brightness(${Math.max(MIN_BRIGHTNESS, light).toFixed(2)})`;
+      ctx.drawImage(this._waterCanvas, shown.x0, shown.y0, shown.x1 - shown.x0, shown.y1 - shown.y0);
+      ctx.restore();
     }
   }
 
-  // The water amount shown at (x, y): eases toward the simulated mass once per frame.
-  shownWaterMass(x, y, actual) {
-    if (!this._shownWater) this._shownWater = new Map();
-    const key = x * 4096 + y;
-    if (actual <= 0) { this._shownWater.delete(key); return 0; }
-    let e = this._shownWater.get(key);
-    if (!e) {
-      // Water that has only just appeared (poured or flowed in) grows in from nothing
-      // instead of popping in as a full block.
-      const cell = this.world.getCell(x, y);
-      const fresh = cell.meta?.newAt && gameClock.now() - cell.meta.newAt < 500 && gameClock.now() >= cell.meta.newAt;
-      e = { v: fresh ? 0 : actual, f: this._waterFrame };
-      this._shownWater.set(key, e);
-      if (!fresh) return actual;
-    }
-    if (e.f !== this._waterFrame) {
-      e.f = this._waterFrame;
-      e.v += (actual - e.v) * 0.2;
-      if (this._shownWater.size > 40000) this._shownWater.clear();
-    }
-    return e.v;
-  }
 
   // Where a stream lands in water: churning foam on the surface, droplets thrown up and
   // bubbles rising back up through the pool beneath.
@@ -1767,11 +2017,12 @@ drawStars() {
       : 1.0;
 
     // Bushes come in sizes (meta.size 1-4), each with its own texture.
-    const textureId = type.id === 'bush' ? `bush_${meta?.size ?? 4}` : type.id;
+    const textureId = type.id === 'bush' ? `bush_${meta?.size ?? 4}`
+      : type.id === 'seagrass' || type.id === 'shell' ? `${type.id}_${meta?.v ?? 1}`
+      : type.id === 'grass' && meta?.layer !== 'bg' && polishOn('connectedGrass') ? this.connectedGrassId(tileX, tileY) : type.id;
     let texture = this.textures[textureId] || this.textures[type.id] || this.missingTextureFor(type);
     texture = this.biomeTexture(textureId, texture, tileX);
-    if (type.id === 'water' && texture) {
-      this.drawWater(texture, tileX, tileY, sx, sy, size, finalLightFactor, waterLevel({ id: 'water', meta }));
+    if (type.id === 'water') {
       return;
     }
     if ((type.id === 'rock' || type.id === 'pebble') && texture) {
@@ -1779,7 +2030,22 @@ drawStars() {
       return;
     }
     if (type.id.endsWith('_leaves') && texture && meta?.layer !== 'bg') {
-      this.drawBlockTexture(texture, sx + this.leafSwayOffset(tileX, tileY, size), sy, size, finalLightFactor);
+      const lx = sx + this.leafSwayOffset(tileX, tileY, size);
+      // Solid shaded foliage behind the holey leaf texture, so canopies don't look see-through.
+      if (!polishOn('leaves')) {
+        this.drawBlockTexture(texture, lx, sy, size, finalLightFactor);
+        return;
+      }
+      const [r, g, b] = this.averageColor(texture);
+      const k = 0.62 * Math.max(MIN_BRIGHTNESS, Math.min(1, finalLightFactor));
+      ctx.fillStyle = `rgb(${Math.round(r * k)}, ${Math.round(g * k)}, ${Math.round(b * k)})`;
+      // The backing stops short of open sides, so the canopy's outline stays ragged.
+      const leafy = (x, y) => { const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null; return !!t && (t.solid || t.id.endsWith('_leaves') || t.id.endsWith('_log')); };
+      const inset = Math.round(size * 4 / 16);
+      const l0 = leafy(tileX - 1, tileY) ? 0 : inset, r0 = leafy(tileX + 1, tileY) ? 0 : inset;
+      const t0 = leafy(tileX, tileY - 1) ? 0 : inset, b0 = leafy(tileX, tileY + 1) ? 0 : inset;
+      ctx.fillRect(lx + l0, sy + t0, size - l0 - r0, size - t0 - b0);
+      this.drawBlockTexture(texture, lx, sy, size, finalLightFactor);
       return;
     }
     if (WIND_SWAY.has(type.id) && texture && meta?.layer !== 'bg') {
@@ -2348,7 +2614,8 @@ drawHeldItem(pose = null) {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
     ctx.globalAlpha = 0.6;
-    ctx.strokeRect(sx, sy, size, size);
+    if (polishOn('rounding')) cornerRect(ctx, sx, sy, size, '#ffffff', 2);
+    else ctx.strokeRect(sx, sy, size, size);
     
     ctx.restore();
   }
@@ -2387,7 +2654,8 @@ drawHeldItem(pose = null) {
         
         ctx.strokeStyle = '#888888';
         ctx.lineWidth = 2;
-        ctx.strokeRect(sx, sy, size, size);
+        if (polishOn('rounding')) cornerRect(ctx, sx, sy, size, '#888888', 2);
+        else ctx.strokeRect(sx, sy, size, size);
         ctx.globalAlpha = 1;
       }
     }

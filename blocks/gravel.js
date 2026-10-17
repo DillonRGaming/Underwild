@@ -7,8 +7,8 @@ export default {
   solid: true,
   color: '#a9a9a9',
   hardness: 2.0,
-  isSolid() {
-    return true;
+  isSolid(meta) {
+    return meta?.layer !== 'bg';
   },
   falls: true,
   tick(world, x, y, meta) {

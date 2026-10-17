@@ -8,9 +8,51 @@ export const FALL_TICK_MS = 60; // matches world.js FALL_TICK_INTERVAL
 
 export function fallTick(world, x, y, id, meta) {
   if (y >= world.height - 1) return;
+  const isBg = meta?.layer === 'bg';
   const belowCell = world.getCell(x, y + 1);
   const below = belowCell.id;
-  if (below !== 'air' && below !== 'water') {
+  const belowSolid = world.isSolidAt(x, y + 1);
+
+  if (isBg) {
+    const belowHasBg = belowCell.meta?.layer === 'bg' || !!belowCell.meta?.bgId;
+    if (belowSolid || belowHasBg) {
+      if (meta.fallStreak || meta.fallWait) { meta.fallStreak = 0; meta.fallWait = 0; }
+      return;
+    }
+    const streak = meta.fallStreak || 0;
+    const waitFor = n => below === 'water' ? FALL_WAIT_WATER : Math.max(FALL_WAIT_MIN, FALL_WAIT_START - n);
+    const need = streak === 0 ? 1 : waitFor(streak);
+    meta.fallWait = (meta.fallWait || 0) + 1;
+    if (meta.fallWait < need) return;
+
+    let top = y;
+    while (top > 0 && world.getCell(x, top - 1).meta?.layer === 'bg' && world.getBlockType(x, top - 1)?.falls) top--;
+    const fell = { fellAt: gameClock.now(), slideMs: waitFor(streak + 1) * FALL_TICK_MS, fallStreak: streak + 1, fallWait: 0, layer: 'bg' };
+
+    for (let ty = y; ty >= top; ty--) {
+      const tid = ty === y ? id : world.getBlockId(x, ty);
+      const targetCell = world.getCell(x, ty + 1);
+      if (targetCell.id === 'air' || ty < y) {
+        const waterMass = targetCell.meta?.water;
+        const newMeta = waterMass ? { ...fell, water: waterMass } : { ...fell };
+        world.setBlock(x, ty + 1, tid, newMeta);
+      } else {
+        world.setBlock(x, ty + 1, targetCell.id, { ...(targetCell.meta || {}), bgId: tid, ...fell });
+      }
+    }
+    const topCell = world.getCell(x, top);
+    if (topCell.meta?.bgId) {
+      const cleanMeta = { ...topCell.meta };
+      delete cleanMeta.bgId;
+      world.setBlock(x, top, topCell.id, cleanMeta);
+    } else {
+      const topWater = topCell.meta?.water;
+      world.setBlock(x, top, topWater ? 'water' : 'air', topWater ? { mass: topWater } : null);
+    }
+    return;
+  }
+
+  if (belowSolid) {
     if (meta.fallStreak || meta.fallWait) { meta.fallStreak = 0; meta.fallWait = 0; }
     return;
   }
@@ -22,7 +64,7 @@ export function fallTick(world, x, y, id, meta) {
   if (meta.fallWait < need) return;
   // The whole stack of loose blocks resting on this one drops with it.
   let top = y;
-  while (top > 0 && world.getBlockType(x, top - 1)?.falls) top--;
+  while (top > 0 && world.getCell(x, top - 1).meta?.layer !== 'bg' && world.getBlockType(x, top - 1)?.falls) top--;
   const fell = { fellAt: gameClock.now(), slideMs: waitFor(streak + 1) * FALL_TICK_MS, fallStreak: streak + 1, fallWait: 0 };
   const waterMeta = below === 'water' ? { ...(belowCell.meta || {}) } : null;
   for (let ty = y; ty >= top; ty--) {
@@ -41,8 +83,8 @@ export function createFallingSand(id, displayName, color) {
     color,
     hardness: 1.5,
     falls: true,
-    isSolid() {
-      return true;
+    isSolid(meta) {
+      return meta?.layer !== 'bg';
     },
     tick(world, x, y, meta) {
       fallTick(world, x, y, id, meta);

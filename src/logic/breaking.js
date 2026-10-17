@@ -12,20 +12,21 @@ function makeShards() {
   return shards;
 }
 
-const SUPPORTED_PLANTS = new Set(['poppy', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble']);
+const SUPPORTED_PLANTS = new Set(['poppy', 'short_grass', 'fern', 'flower_short_grass', 'bush', 'grass_tuft', 'rock', 'pebble', 'seagrass', 'shell']);
 
 export class Breaker {
   constructor(registry) {
     this.registry = registry;
     this.state = { active: false, progress: 0, x: 0, y: 0, id: null, shards: makeShards() };
   }
-  // wallId: mining an empty cell digs out the natural wall behind it (dirt, stone...).
+  // wallId: mining an empty cell digs out the wall or background block behind it (dirt, stone, sand...).
   begin(world, x, y, creativeMode = false, heldItem = null, wallId = null) {
     let id = world.getBlockId(x, y);
-    const wall = id === 'air' && wallId ? wallId : null;
+    const cell = world.getCell(x, y);
+    const wall = wallId || (cell.meta?.layer === 'bg' ? id : cell.meta?.bgId || null);
     if (wall) id = wall;
-    // Water can't be mined or picked up as a block (collect it with a bucket instead).
-    if (id === 'air' || id === 'water') {
+    // Water can't be mined directly, but walls behind it can.
+    if (!wall && (id === 'air' || id === 'water')) {
       this.cancel();
       return;
     }
@@ -80,8 +81,16 @@ export class Breaker {
     if (this.state.progress >= 1 && this.state.wall) {
       const { x, y, wall } = this.state;
       this.cancel();
-      if (world.getBlockId(x, y) !== 'air') return null;
-      world.setBlock(x, y, 'air', { noWall: true });
+      const cell = world.getCell(x, y);
+      if (cell.meta?.bgId) {
+        const meta = { ...cell.meta };
+        delete meta.bgId;
+        world.setBlock(x, y, cell.id, meta);
+      } else if (cell.meta?.layer === 'bg') {
+        world.setBlock(x, y, 'air', null);
+      } else {
+        world.setBlock(x, y, cell.id === 'air' ? 'air' : cell.id, { ...(cell.meta || {}), noWall: true });
+      }
       return { id: wall, drop: this.registry.get(wall)?.drop ?? wall, meta: null, x, y, extraDrops: [] };
     }
     if (this.state.progress >= 1) {

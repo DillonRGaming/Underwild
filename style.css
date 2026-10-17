@@ -2460,3 +2460,28 @@ body.touch-mode #inventory.creative-mode .inventory-main { margin-bottom: 8px; }
 /* ...and the recipe list beside the title shrinks to the room left, instead of sticking out. */
 body.touch-mode #inventory .inventory-header { min-width: 0; }
 body.touch-mode #inventory .inventory-header .recipe-panel { flex: 1 1 0; min-width: 0; width: auto; }
+
+.polish-heading {
+  margin: 18px 0 8px;
+  font-size: 18px;
+  text-align: center;
+}
+.option-group.polish-disabled {
+  opacity: 0.45;
+}
+
+/* Polish > UI Corners: every bordered box gets pixel-cut corners, like the blocks in game. */
+body.polish-ui-corners :is(
+  .minecraft-button, .win-btn, .keybind-button, .minecraft-input, .chat-input,
+  .suggestions-dropdown, .suggestion-icon, .background-blocks, .bg-block-remove,
+  .info-panel, .chat-container, .inventory-content, .inventory-slot, .crafting-slot,
+  .crafting-output-slot, .hotbar-slot, #hotbar, .recipe-row, .forge-panel, .forge-choice,
+  .music-thumb, .skin-preview, .mod-thumbnail, .menu-panel, .creative-tab
+) {
+  --notch: 3px;
+  clip-path: polygon(
+    var(--notch) 0, calc(100% - var(--notch)) 0, 100% var(--notch),
+    100% calc(100% - var(--notch)), calc(100% - var(--notch)) 100%,
+    var(--notch) 100%, 0 calc(100% - var(--notch)), 0 var(--notch)
+  );
+}

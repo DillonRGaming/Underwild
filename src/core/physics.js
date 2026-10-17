@@ -199,9 +199,9 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   const waterAt = (y) => {
     const ty = Math.floor(y / TILE_SIZE);
     if (!world.inBounds(playerTileX, ty)) return false;
-    const m = waterMass(world.getCell(playerTileX, ty));
+    const m = world.waterAt(playerTileX, ty);
     if (m <= 0) return false;
-    const aboveWet = world.inBounds(playerTileX, ty - 1) && waterMass(world.getCell(playerTileX, ty - 1)) > 0;
+    const aboveWet = world.inBounds(playerTileX, ty - 1) && world.waterAt(playerTileX, ty - 1) > 0;
     return aboveWet || y >= (ty + 1) * TILE_SIZE - Math.min(1, m) * TILE_SIZE;
   };
   const feetWet = waterAt(player.y + player.height - 1);
@@ -368,7 +368,7 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
       // Head out: hold the water line around the chest, bobbing gently.
       let surfaceY = null;
       for (let ty = Math.floor(player.y / TILE_SIZE); ty <= Math.floor((player.y + player.height) / TILE_SIZE); ty++) {
-        const m = world.inBounds(playerTileX, ty) ? waterMass(world.getCell(playerTileX, ty)) : 0;
+        const m = world.inBounds(playerTileX, ty) ? world.waterAt(playerTileX, ty) : 0;
         if (m > 0) { surfaceY = (ty + 1) * TILE_SIZE - Math.min(1, m) * TILE_SIZE; break; }
       }
       if (surfaceY !== null) {

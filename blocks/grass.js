@@ -1,3 +1,5 @@
+import { hasOpenSide } from './dirt.js';
+
 export default {
   id: 'grass',
   displayName: 'Grass',
@@ -16,19 +18,11 @@ export default {
       }
     }
 
-    const aboveX = x;
-    const aboveY = y - 1;
-    if (world.inBounds(aboveX, aboveY)) {
-      const aboveId = world.getBlockId(aboveX, aboveY);
-      const aboveType = world.getBlockType(aboveX, aboveY);
-      
-      if (aboveType && aboveType.solid) {
-        if (Math.random() < 0.1) {
-          world.setBlock(x, y, 'dirt', null);
-          world.updateLighting(x, y);
-          return;
-        }
-      }
+    // Grass dies back to dirt once nothing is open above or beside it.
+    if (!hasOpenSide(world, x, y) && Math.random() < 0.1) {
+      world.setBlock(x, y, 'dirt', null);
+      world.updateLighting(x, y);
+      return;
     }
   }
 };

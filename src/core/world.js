@@ -1,6 +1,6 @@
 import { sampleBlockAt } from '../logic/terrainGen.js';
 import { TILE_SIZE } from './utils.js';
-import { WaterSim } from '../logic/water.js';
+import { WaterSim, waterMass } from '../logic/water.js';
 
 const LIGHT_SCALE = 2;
 const MAX_LIGHT = 15 * LIGHT_SCALE;
@@ -17,8 +17,6 @@ const AIR_CELL = Object.freeze({ id: 'air', meta: null });
 
 // Seconds between falling-block ticks; sand and gravel count these to time their drops.
 const FALL_TICK_INTERVAL = 0.06;
-// Seconds between water simulation steps.
-const WATER_STEP_INTERVAL = 0.02;
 
 export class World {
   constructor(width, height, registry, seed = 0) {
@@ -223,7 +221,7 @@ export class World {
 
     this.chunks.set(this.chunkKey(chunkX), chunk);
     this._ghostCells.delete(chunkX);
-    this.water?.wakeChunk(chunkX);
+    this.water?.chunkLoaded(chunkX);
     this._touchChunkLRU(chunkX);
     this._enforceChunkLimit();
 
@@ -251,11 +249,12 @@ export class World {
   setChunk(chunkX, cells, dirty = true) {
     this.chunks.set(this.chunkKey(chunkX), { chunkX, cells, dirty });
     this._touchChunkLRU(chunkX);
-    this.water?.wakeChunk(chunkX);
+    this.water?.chunkLoaded(chunkX);
   }
 
   resetChunks() {
     this._chunkGeneration++;
+    this.water?.reset();
     this.chunks.clear();
     this.loadedChunkOrder.length = 0;
     this._savedChunks.clear();
@@ -273,6 +272,8 @@ export class World {
 
   unloadChunk(chunkX) {
     const key = this.chunkKey(chunkX);
+    // The chunk's water goes back into its cells before they're put away.
+    this.water?.chunkUnloading(chunkX);
 
     if (Array.isArray(this.items)) {
       const minX = chunkX * this.chunkSize;
@@ -342,7 +343,24 @@ export class World {
   touchCell(x, y) {
     const chunk = this.chunks.get(this.chunkKey(this.chunkXFor(x)));
     if (chunk) chunk.dirty = true;
+    // A door or trapdoor swinging changes what water can get through.
+    this.water?.blockChanged(x, y);
     if (this.onBlockChanged) this.onBlockChanged(x, y);
+  }
+
+  // Replace a cell outright, with none of setBlock's side effects (used while saving).
+  setCellRaw(x, y, cell) {
+    const chunk = this.chunks.get(this.chunkKey(this.chunkXFor(x)));
+    if (!chunk?.cells) return;
+    chunk.cells[y * this.chunkSize + (x - chunk.chunkX * this.chunkSize)] = cell;
+    chunk.dirty = true;
+  }
+
+  // Water in a block as a share of a full block.
+  waterAt(x, y) {
+    if (!this.inBounds(x, y)) return 0;
+    if (this.water && this.isChunkLoaded(this.chunkXFor(x))) return this.water.massAt(x, y);
+    return waterMass(this.getCell(x, y));
   }
 
   getCell(x, y) {
@@ -378,7 +396,9 @@ export class World {
       // block puts the background block back. A mined-out natural wall stays gone.
       const keepBg = old?.meta?.bgId;
       const keepNoWall = old?.meta?.noWall;
-      if (keepBg && meta?.layer !== 'bg') {
+      if (old?.meta?.layer === 'bg' && meta?.layer !== 'bg') {
+        if (id !== 'air') meta = { ...(meta || {}), bgId: old.id };
+      } else if (keepBg && meta?.layer !== 'bg') {
         if (id === 'air') { id = keepBg; meta = { layer: 'bg' }; }
         else if (!meta?.bgId) meta = { ...(meta || {}), bgId: keepBg };
       } else if (keepNoWall && !meta?.noWall) {
@@ -388,7 +408,7 @@ export class World {
       chunk.dirty = true;
       this.blockVersion = (this.blockVersion || 0) + 1;
       this.updateLighting(x, y);
-      this.water?.wakeAround(x, y);
+      this.water?.blockChanged(x, y);
       if (this.onBlockChanged) this.onBlockChanged(x, y);
     } else {
       if (!this._crossChunkPending.has(cx)) {
@@ -426,10 +446,8 @@ export class World {
     if (!chunk) return;
     chunk.dirty = true;
     this.blockVersion = (this.blockVersion || 0) + 1;
-    if (!old || old.id !== id) {
-      this.updateLighting(x, y);
-      this.water?.wakeAround(x, y);
-    }
+    if (!old || old.id !== id) this.updateLighting(x, y);
+    this.water?.blockChanged(x, y);
   }
 
   getLight(x, y) {
@@ -719,8 +737,10 @@ export class World {
   isSolidAt(x, y) {
     const t = this.getBlockType(x, y);
     if (!t) return false;
+    const cell = this.getCell(x, y);
+    if (cell.meta?.layer === 'bg') return false;
     if (typeof t.isSolid === 'function') {
-      return t.isSolid(this.getCell(x, y).meta);
+      return t.isSolid(cell.meta);
     }
     return !!t.solid;
   }
@@ -730,15 +750,10 @@ export class World {
       this.flushLighting();
       return;
     }
+    // Water steps every game tick.
+    this.water.step(dt);
     // Falling blocks tick on a fixed clock so they drop at a steady pace;
     // everything else keeps the old random ~10%-of-frames cadence.
-    this._waterAccum = (this._waterAccum || 0) + dt;
-    // Catch up a few steps on slow frames so water keeps its real-time speed.
-    for (let n = 0; n < 3 && this._waterAccum >= WATER_STEP_INTERVAL; n++) {
-      this._waterAccum -= WATER_STEP_INTERVAL;
-      this.water.step();
-    }
-    this._waterAccum = Math.min(this._waterAccum, WATER_STEP_INTERVAL);
     this._fallAccum = (this._fallAccum || 0) + dt;
     const fallDue = this._fallAccum >= FALL_TICK_INTERVAL;
     if (fallDue) this._fallAccum = Math.min(this._fallAccum - FALL_TICK_INTERVAL, FALL_TICK_INTERVAL);

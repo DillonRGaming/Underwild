@@ -41,53 +41,69 @@ function density(cx, row, t, seed, rows, cover) {
   return n * fade - cover;
 }
 
-// Far to near. par: how much the layer follows the camera (0 = fixed to the screen,
-// 1 = moves with the world). Far layers use smaller blocks, sit higher, scroll slower and
-// are much fainter; the haze layers are lots of very faint clouds between the others.
+// Far to near. par: how much the layer follows the camera; px: cloud pixel size in game
+// pixels. Each layer is drawn once into a long strip (crisp pixel-art puffs with a bright
+// top and a shaded underside) and then just slides across the sky.
 const LAYERS = [
-  { par: 0.03, block: 4,  rows: 40, y: -0.30, speed: 1.5, alpha: 0.10, cover: 0.38, seed: 101 },
-  { par: 0.05, block: 5,  rows: 16, y: 0.28,  speed: 2.5, alpha: 0.30, cover: 0.47, seed: 202 },
-  { par: 0.07, block: 5,  rows: 34, y: -0.15, speed: 3,   alpha: 0.12, cover: 0.40, seed: 303 },
-  { par: 0.10, block: 6,  rows: 14, y: -0.12, speed: 4,   alpha: 0.45, cover: 0.48, seed: 404 },
-  { par: 0.13, block: 7,  rows: 30, y: 0.05,  speed: 5,   alpha: 0.14, cover: 0.42, seed: 505 },
-  { par: 0.17, block: 8,  rows: 12, y: 0.12,  speed: 6,   alpha: 0.65, cover: 0.49, seed: 606 },
+  { par: 0.04, px: 1, rows: 26, y: 0.04, speed: 2, alpha: 0.55, cover: 0.5, seed: 202 },
+  { par: 0.08, px: 2, rows: 22, y: 0.10, speed: 4, alpha: 0.8, cover: 0.53, seed: 404 },
+  { par: 0.14, px: 2, rows: 24, y: 0.20, speed: 7, alpha: 0.95, cover: 0.56, seed: 606 },
 ];
+const STRIP = 1024; // strip width in cloud pixels; wraps
+
+function buildStrip(L, seed) {
+  const c = document.createElement('canvas');
+  c.width = STRIP; c.height = L.rows;
+  const x = c.getContext('2d');
+  const img = x.createImageData(STRIP, L.rows);
+  const solid = (cx, row) => {
+    if (row < 0 || row >= L.rows) return false;
+    const w = ((cx % STRIP) + STRIP) % STRIP;
+    // Fade the noise toward the strip's ends so it wraps without a seam.
+    const R = L.rows / 1.5;
+    const n = density(w / 3.5, row / 1.5, 0, seed, R, L.cover);
+    const n2 = density((w - STRIP) / 3.5, row / 1.5, 0, seed, R, L.cover);
+    const k = w / STRIP;
+    return n * (1 - k) + n2 * k > 0;
+  };
+  for (let row = 0; row < L.rows; row++) {
+    for (let cx = 0; cx < STRIP; cx++) {
+      if (!solid(cx, row)) continue;
+      let v = [255, 255, 255];
+      if (!solid(cx, row + 1) || !solid(cx, row + 2)) v = [196, 212, 236];
+      else if (!solid(cx, row - 1)) v = [255, 255, 255];
+      else v = [238, 244, 252];
+      const i = (row * STRIP + cx) * 4;
+      img.data[i] = v[0]; img.data[i + 1] = v[1]; img.data[i + 2] = v[2]; img.data[i + 3] = 255;
+    }
+  }
+  x.putImageData(img, 0, 0);
+  return c;
+}
 
 export class Clouds {
   // light: 0 (night) .. 1 (day)
   draw(ctx, camera, canvas, worldSeed, light) {
-    // Clouds are far away: they keep their size whatever the camera's zoom.
-    const z = 3;
-    const secs = gameClock.seconds();
-    const t = secs * MORPH;
-    const l = Math.max(0, Math.min(1, light));
-    const night = 0.3 + 0.7 * l;    // fainter at night too, not just darker
-    const c = Math.round(40 + 215 * l);
-    const rgb = `rgba(${c}, ${c}, ${c}, `;
-    for (const L of LAYERS) {
-      const B = L.block, size = B * z;
-      const top = canvas.height * L.y - (camera.y - SURFACE_Y) * L.par * z;
-      if (top > canvas.height || top + L.rows * size < 0) continue;
-      // Screen x of world-cloud x is (x - left) * z.
-      const left = camera.x * L.par - secs * L.speed;
-      const first = Math.floor(left / B) - 1;
-      const last = Math.ceil((left + canvas.width / z) / B) + 1;
-      const seed = worldSeed + L.seed;
-      for (let row = 0; row < L.rows; row++) {
-        const y = Math.round(top + row * size);
-        const h = Math.round(top + (row + 1) * size) - y;
-        if (y > canvas.height || y + h < 0) continue;
-        for (let cx = first; cx <= last; cx++) {
-          const d = density(cx, row, t, seed, L.rows, L.cover);
-          if (d <= 0) continue;
-          const x = Math.round((cx * B - left) * z);
-          const w = Math.round(((cx + 1) * B - left) * z) - x;
-          // Faint at the ragged edges, fuller in the thick middles.
-          const a = night * L.alpha * Math.min(1, 0.25 + d * 4);
-          ctx.fillStyle = rgb + a.toFixed(3) + ')';
-          ctx.fillRect(x, y, w, h);
-        }
-      }
+    if (this._seed !== worldSeed) {
+      this._seed = worldSeed;
+      this._strips = LAYERS.map((L) => buildStrip(L, worldSeed + L.seed));
     }
+    const secs = gameClock.seconds();
+    const l = Math.max(0, Math.min(1, light));
+    const g = Math.max(2, Math.round(camera.zoom));
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    if (l < 0.98) ctx.filter = `brightness(${(0.25 + 0.75 * l).toFixed(2)})`;
+    LAYERS.forEach((L, li) => {
+      const size = g * L.px;
+      const top = Math.round(canvas.height * L.y - (camera.y - SURFACE_Y) * L.par * camera.zoom);
+      if (top > canvas.height || top + L.rows * size < 0) return;
+      const left = (camera.x * L.par * camera.zoom + secs * L.speed * g) / size;
+      const w = STRIP * size;
+      let x = -(((left % STRIP) + STRIP) % STRIP) * size;
+      ctx.globalAlpha = L.alpha * (0.35 + 0.65 * l);
+      for (; x < canvas.width; x += w) ctx.drawImage(this._strips[li], Math.round(x), top, w, L.rows * size);
+    });
+    ctx.restore();
   }
 }
