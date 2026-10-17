@@ -1,4 +1,4 @@
-import './src/platform/webPlatform.js';
+import './platform/webPlatform.js';
 import { startIconPolish, refreshIcons } from './ui/iconPolish.js';
 import { POLISH_OPTIONS, polishState, setPolish, loadPolish, polishOn } from './core/polishSettings.js';
 import { checkForAppUpdate } from './platform/appUpdate.js';
