@@ -52,7 +52,6 @@ jobs:
       - run: npm ci
       - run: node build/scripts/build-web.mjs
       - run: npx cap sync android
-        working-directory: platforms
       - name: Build the signed APK
         working-directory: platforms/android
         run: |

@@ -37,7 +37,7 @@ import { Multiplayer } from './multiplayer.js';
 import { WorldSerializer } from './core/worldSerializer.js';
 import { waterPerf } from './core/waterPerf.js';
 
-const GAME_VERSION = '0.5.6';
+const GAME_VERSION = '0.5.7';
 checkForAppUpdate(GAME_VERSION);
 
 let worldName = 'New World';
