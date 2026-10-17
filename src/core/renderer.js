@@ -8,10 +8,11 @@ import { keptLeafCover } from '../logic/trunkLeaves.js';
 import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
 import { waterLevel, waterMass, WATER_LEVELS, SQ as WATER_SQ } from '../logic/water.js';
 import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
+import { waterPerf } from './waterPerf.js';
 
 const MIN_BRIGHTNESS = 0.04;
 const _rawSplat = [];
-for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) if (dx * dx + dy * dy <= 9) _rawSplat.push(dx, dy);
+for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx * dx + dy * dy <= 2) _rawSplat.push(dx, dy);
 const SPLAT_LEN = _rawSplat.length >> 1;
 const SPLAT_DX = new Int32Array(SPLAT_LEN);
 const SPLAT_DY = new Int32Array(SPLAT_LEN);
@@ -1351,42 +1352,49 @@ drawStars() {
   // squares): deeper squares darker, a bright edge on top and a soft shimmer just under it.
   // Built as one small image (a pixel per square) and drawn scaled up, so it costs one draw
   // however much water there is.
-  // Water: drawn exclusively from simulated LiquidFun particles in 16x16 resolution.
+  // Water layer: renders all resting block water and dynamic particles into the 8x8 chunky water canvas.
   drawWaterLayer(startX, endX, startY, endY) {
     const { ctx, camera, world } = this;
     const sim = world.water;
-    const particlePos = sim?.particles?.positions();
-    if (!particlePos || !particlePos.length) { this._waterShown = null; return; }
-    const PER = WATER_SQ;
-    const cols = endX - startX + 1, rows = endY - startY + 1;
-    const gw = cols * PER, gh = rows * PER;
-    if (!this._waterCanvas || this._waterCanvas.width !== gw || this._waterCanvas.height !== gh) {
-      this._waterCanvas = document.createElement('canvas');
-      this._waterCanvas.width = gw; this._waterCanvas.height = gh;
+    if (!sim) { this._waterShown = null; return; }
+    const particlePos = sim.particles?.positions();
+    waterPerf.startRender();
+    try {
+      const PER = WATER_SQ;
+      const cols = endX - startX + 1, rows = endY - startY + 1;
+      const gw = cols * PER, gh = rows * PER;
+      if (!this._waterCanvas || this._waterCanvas.width !== gw || this._waterCanvas.height !== gh) {
+        this._waterCanvas = document.createElement('canvas');
+        this._waterCanvas.width = gw; this._waterCanvas.height = gh;
+      }
+      const wc = this._waterCanvas.getContext('2d');
+      wc.clearRect(0, 0, gw, gh);
+      const lightAt = (tx, ty) => (this.isOpenSky(tx, ty) ? Math.max(MIN_BRIGHTNESS, this.lightFactorAt(tx, ty, true)) : 1);
+      const shown = this.drawParticleWater(wc, sim, particlePos, startX, startY, cols, rows, PER, lightAt);
+      if (!shown) {
+        this._waterShown = null;
+        return;
+      }
+      const x0 = Math.round(camera.worldToScreenX(startX * TILE_SIZE));
+      const y0 = Math.round(camera.worldToScreenY(startY * TILE_SIZE));
+      const x1 = Math.round(camera.worldToScreenX((endX + 1) * TILE_SIZE));
+      const y1 = Math.round(camera.worldToScreenY((endY + 1) * TILE_SIZE));
+      waterPerf.time('renderCanvasBlit', () => {
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(this._waterCanvas, x0, y0, x1 - x0, y1 - y0);
+        ctx.restore();
+      });
+      this._waterShown = { x0, y0, x1, y1 };
+    } finally {
+      waterPerf.endRender();
     }
-    const wc = this._waterCanvas.getContext('2d');
-    wc.clearRect(0, 0, gw, gh);
-    const lightAt = (tx, ty) => (this.isOpenSky(tx, ty) ? Math.max(MIN_BRIGHTNESS, this.lightFactorAt(tx, ty, true)) : 1);
-    this.drawParticleWater(wc, particlePos, startX, startY, cols, rows, PER, lightAt);
-    const x0 = Math.round(camera.worldToScreenX(startX * TILE_SIZE));
-    const y0 = Math.round(camera.worldToScreenY(startY * TILE_SIZE));
-    const x1 = Math.round(camera.worldToScreenX((endX + 1) * TILE_SIZE));
-    const y1 = Math.round(camera.worldToScreenY((endY + 1) * TILE_SIZE));
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this._waterCanvas, x0, y0, x1 - x0, y1 - y0);
-    ctx.restore();
-    this._waterShown = { x0, y0, x1, y1 };
   }
 
-  // Particle water: drawn as 8x8 water pixels per block (each 2x2 texture pixels); each
-  // particle fills the pixel it's in and the ones beside it (there are fewer particles
-  // Particle water: drawn as 16x16 water pixels per block (1:1 with block texture pixels);
-  // Particle water: drawn as 16x16 water pixels per block (1:1 with block texture pixels);
-  // each particle fills a radius of ~2 pixels.
-  // Drawn into the water image `wc` (per texture px).
-  drawParticleWater(wc, pos, startX, startY, cols, rows, per, lightAt) {
-    const WPX = 16, sc = per / WPX;
+  // Water rendering: 8x8 water pixels per block (each 2x2 texture pixels);
+  // Draws both resting block water (Terraria-style) and moving particles seamlessly.
+  drawParticleWater(wc, sim, pos, startX, startY, cols, rows, per, lightAt) {
+    const WPX = 8, sc = per / WPX;
     const GW = cols * WPX, GH = rows * WPX;
     if (!this._pGrid || this._pGrid.length !== GW * GH) {
       this._pGrid = new Uint8Array(GW * GH);
@@ -1414,140 +1422,245 @@ drawStars() {
     }
 
     let minGx = GW, maxGx = -1, minGy = GH, maxGy = -1;
+    let visibleParticles = 0;
     const minPx = startX - 1, maxPx = startX + cols + 1;
     const minPy = startY - 1, maxPy = startY + rows + 1;
-    for (let p = 0; p < pos.length; p += 2) {
-      const px = pos[p], py = pos[p + 1];
-      if (px < minPx || px > maxPx || py < minPy || py > maxPy) continue;
-      const gx = Math.floor((px - startX) * WPX), gy = Math.floor((py - startY) * WPX);
-      if (gx < minGx) minGx = gx;
-      if (gx > maxGx) maxGx = gx;
-      if (gy < minGy) minGy = gy;
-      if (gy > maxGy) maxGy = gy;
-      for (let s = 0; s < SPLAT_LEN; s++) {
-        const x = gx + SPLAT_DX[s], y = gy + SPLAT_DY[s];
-        if (x >= 0 && y >= 0 && x < GW && y < GH) grid[y * GW + x] = 1;
+
+    waterPerf.time('renderParticleSplat', () => {
+      // 1. Fill from resting block water (seamless across all chunks, 0ms physics)
+      const cs = sim.cs, h = sim.h;
+      for (let tx = 0; tx < cols; tx++) {
+        const bx = startX + tx;
+        const slot = sim.slotAt(bx);
+        if (!slot) continue;
+        const baseIdx = bx - Math.floor(bx / cs) * cs;
+        const mass = slot.mass;
+        const gx = tx * WPX;
+        for (let ty = 0; ty < rows; ty++) {
+          const by = startY + ty;
+          if (by < 0 || by >= h) continue;
+          const m = mass[by * cs + baseIdx];
+          if (m <= 0.01) continue;
+          const waterH = m >= 0.99 ? WPX : Math.max(1, Math.min(WPX, Math.round(m * WPX)));
+          const gyStart = ty * WPX + (WPX - waterH);
+          const gyEnd = ty * WPX + WPX - 1;
+          if (gx < minGx) minGx = gx;
+          if (gx + WPX - 1 > maxGx) maxGx = gx + WPX - 1;
+          if (gyStart < minGy) minGy = gyStart;
+          if (gyEnd > maxGy) maxGy = gyEnd;
+          for (let gy = gyStart; gy <= gyEnd; gy++) {
+            const off = gy * GW + gx;
+            grid[off] = 1; grid[off + 1] = 1; grid[off + 2] = 1; grid[off + 3] = 1;
+            grid[off + 4] = 1; grid[off + 5] = 1; grid[off + 6] = 1; grid[off + 7] = 1;
+          }
+        }
       }
-    }
+
+      // 2. Splat moving particles (buckets, waterfalls, splashes)
+      if (pos && pos.length) {
+        for (let p = 0; p < pos.length; p += 2) {
+          const px = pos[p], py = pos[p + 1];
+          if (px < minPx || px > maxPx || py < minPy || py > maxPy) continue;
+          visibleParticles++;
+          const gx = Math.floor((px - startX) * WPX), gy = Math.floor((py - startY) * WPX);
+          if (gx < minGx) minGx = gx;
+          if (gx > maxGx) maxGx = gx;
+          if (gy < minGy) minGy = gy;
+          if (gy > maxGy) maxGy = gy;
+          for (let s = 0; s < SPLAT_LEN; s++) {
+            const x = gx + SPLAT_DX[s], y = gy + SPLAT_DY[s];
+            if (x >= 0 && y >= 0 && x < GW && y < GH) grid[y * GW + x] = 1;
+          }
+        }
+      }
+    });
+
+    waterPerf.setCounts({
+      visibleParticles,
+      gridW: GW,
+      gridH: GH
+    });
+
     if (maxGx < 0) {
       this._pActiveBBox = null;
-      return;
+      return false;
     }
 
-    const bx0 = Math.max(0, minGx - 3);
-    const bx1 = Math.min(GW - 1, maxGx + 3);
-    const by0 = Math.max(0, minGy - 3);
-    const by1 = Math.min(GH - 1, maxGy + 3);
+    const bx0 = Math.max(0, minGx - 1);
+    const bx1 = Math.min(GW - 1, maxGx + 1);
+    const by0 = Math.max(0, minGy - 1);
+    const by1 = Math.min(GH - 1, maxGy + 1);
     this._pActiveBBox = { x0: bx0, x1: bx1, y0: by0, y1: by1 };
 
-    const sim = this.world.water;
     const solid = this._pSolid && this._pSolid.length === cols * rows ? this._pSolid : (this._pSolid = new Uint8Array(cols * rows));
     const blockLight = this._pBlockLight && this._pBlockLight.length === cols * rows ? this._pBlockLight : (this._pBlockLight = new Float32Array(cols * rows));
 
     // Precompute block solid and lighting only for intersecting blocks in the bounding box
-    const btx0 = bx0 >> 4, btx1 = Math.min(cols - 1, bx1 >> 4);
-    const bty0 = by0 >> 4, bty1 = Math.min(rows - 1, by1 >> 4);
-    for (let j = bty0; j <= bty1; j++) {
-      const rowOffset = j * cols;
-      for (let i = btx0; i <= btx1; i++) {
-        solid[rowOffset + i] = sim.closed(startX + i, startY + j) ? 1 : 0;
-        blockLight[rowOffset + i] = lightAt(startX + i, startY + j);
+    waterPerf.time('renderSolidLight', () => {
+      const btx0 = bx0 >> 3, btx1 = Math.min(cols - 1, bx1 >> 3);
+      const bty0 = by0 >> 3, bty1 = Math.min(rows - 1, by1 >> 3);
+      for (let j = bty0; j <= bty1; j++) {
+        const rowOffset = j * cols;
+        for (let i = btx0; i <= btx1; i++) {
+          solid[rowOffset + i] = sim.closed(startX + i, startY + j) ? 1 : 0;
+          blockLight[rowOffset + i] = lightAt(startX + i, startY + j);
+        }
       }
-    }
+    });
 
     // Keep water out of blocks; fill one-pixel holes, drop one-pixel bumps; ensure flush fill against solid blocks.
     const tmp = this._pTmp;
-    for (let y = by0; y <= by1; y++) {
-      const rowSolid = (y >> 4) * cols;
-      const rowOffset = y * GW;
-      const belowY = y + 1;
-      const belowSolidRow = belowY < GH ? (belowY >> 4) * cols : -1;
-      for (let x = bx0; x <= bx1; x++) {
-        const k = rowOffset + x;
-        const colBlock = x >> 4;
-        if (solid[rowSolid + colBlock] === 1) { tmp[k] = 0; continue; }
-        const wallBelow = belowSolidRow >= 0 && solid[belowSolidRow + colBlock] === 1;
-        // If resting right on the solid floor with water above it, fill flush against the ground
-        if (wallBelow && y > 0 && grid[k - GW] === 1) { tmp[k] = 1; continue; }
-        if (x === 0 || y === 0 || x === GW - 1 || y === GH - 1) { tmp[k] = grid[k]; continue; }
-        const n = grid[k - 1] + grid[k + 1] + grid[k - GW] + grid[k + GW];
-        const wallTouch = wallBelow || (x > 0 && solid[rowSolid + ((x - 1) >> 4)] === 1) || (x + 1 < GW && solid[rowSolid + ((x + 1) >> 4)] === 1);
-        tmp[k] = grid[k] ? (n <= 1 && !wallTouch ? 0 : 1) : (n >= 3 ? 1 : 0);
+    waterPerf.time('renderMorphology', () => {
+      for (let y = by0; y <= by1; y++) {
+        const rowSolid = (y >> 3) * cols;
+        const rowOffset = y * GW;
+        const belowY = y + 1;
+        const belowSolidRow = belowY < GH ? (belowY >> 3) * cols : -1;
+        for (let x = bx0; x <= bx1; x++) {
+          const colBlock = x >> 3;
+          const k = rowOffset + x;
+          if (solid[rowSolid + colBlock] === 1) { tmp[k] = 0; continue; }
+          const wallBelow = belowSolidRow >= 0 && solid[belowSolidRow + colBlock] === 1;
+          // If resting right on the solid floor with water above it, fill flush against the ground
+          if (wallBelow && y > 0 && grid[k - GW] === 1) { tmp[k] = 1; continue; }
+          if (x === 0 || y === 0 || x === GW - 1 || y === GH - 1) { tmp[k] = grid[k]; continue; }
+          const gk = grid[k];
+          const gLeft = grid[k - 1], gUp = grid[k - GW];
+          if (gk === 1) {
+            const n = gLeft + grid[k + 1] + gUp + grid[k + GW];
+            if (n > 1) {
+              tmp[k] = 1;
+            } else {
+              const wallTouch = wallBelow || (x > 0 && solid[rowSolid + ((x - 1) >> 3)] === 1) || (x + 1 < GW && solid[rowSolid + ((x + 1) >> 3)] === 1);
+              tmp[k] = (n >= 1 && wallTouch) ? 1 : 0;
+            }
+          } else {
+            // Gap fill: needs at least 3 neighbors (requires at least one of left or up to be 1)
+            if (gLeft + gUp === 0) {
+              tmp[k] = 0;
+            } else {
+              const n = gLeft + grid[k + 1] + gUp + grid[k + GW];
+              tmp[k] = n >= 3 ? 1 : 0;
+            }
+          }
+        }
       }
-    }
 
-    for (let y = by0; y <= by1; y++) {
-      const rowOffset = y * GW;
-      grid.set(tmp.subarray(rowOffset + bx0, rowOffset + bx1 + 1), rowOffset + bx0);
-    }
+      for (let y = by0; y <= by1; y++) {
+        const rowOffset = y * GW;
+        for (let x = bx0; x <= bx1; x++) grid[rowOffset + x] = tmp[rowOffset + x];
+      }
+    });
 
     // Each column's surface (first water pixel with open air above), gaps bridged, smoothed.
     const tops = this._pTops, filled = this._pFill, smooth = this._pSmooth;
-    for (let x = bx0; x <= bx1; x++) {
-      tops[x] = NaN;
-      let capped = false;
-      const colBlock = x >> 4;
-      for (let y = by0; y <= by1; y++) {
-        if (solid[(y >> 4) * cols + colBlock] === 1) { capped = true; continue; }
-        if (grid[y * GW + x]) { if (!capped) tops[x] = y; break; }
-        capped = false;
+    waterPerf.time('renderSurfaceDetect', () => {
+      for (let x = bx0; x <= bx1; x++) {
+        tops[x] = NaN;
+        let capped = false;
+        const colBlock = x >> 3;
+        for (let y = by0; y <= by1; y++) {
+          if (solid[(y >> 3) * cols + colBlock] === 1) { capped = true; continue; }
+          if (grid[y * GW + x]) { if (!capped) tops[x] = y; break; }
+          capped = false;
+        }
       }
-    }
 
-    let prev = -1;
-    for (let x = bx0; x <= bx1 + 1; x++) {
-      if (x <= bx1 && Number.isNaN(tops[x])) continue;
-      for (let g = prev + 1; g < x; g++) {
-        filled[g] = prev < bx0 ? (x <= bx1 ? tops[x] : NaN) : x > bx1 ? tops[prev] : tops[prev] + (tops[x] - tops[prev]) * (g - prev) / (x - prev);
+      let prev = -1;
+      for (let x = bx0; x <= bx1 + 1; x++) {
+        if (x <= bx1 && Number.isNaN(tops[x])) continue;
+        for (let g = prev + 1; g < x; g++) {
+          filled[g] = prev < bx0 ? (x <= bx1 ? tops[x] : NaN) : x > bx1 ? tops[prev] : tops[prev] + (tops[x] - tops[prev]) * (g - prev) / (x - prev);
+        }
+        if (x <= bx1) filled[x] = tops[x];
+        prev = x;
       }
-      if (x <= bx1) filled[x] = tops[x];
-      prev = x;
-    }
+    });
 
     // Fast sliding-window surface smoothing (O(N) instead of O(N * window))
-    const SM = 2 * WPX, DEPTH = 7.5 * WPX;
-    let winSum = 0, winCount = 0;
-    const initRight = Math.min(bx1, bx0 + SM);
-    for (let k = Math.max(bx0, bx0 - SM); k <= initRight; k++) {
-      if (!Number.isNaN(filled[k])) { winSum += filled[k]; winCount++; }
-    }
-    smooth[bx0] = winCount ? winSum / winCount : NaN;
+    const SM = 2 * WPX, DEPTH = Math.round(7.5 * WPX);
+    waterPerf.time('renderSurfaceSmooth', () => {
+      let winSum = 0, winCount = 0;
+      const initRight = Math.min(bx1, bx0 + SM);
+      for (let k = Math.max(bx0, bx0 - SM); k <= initRight; k++) {
+        if (!Number.isNaN(filled[k])) { winSum += filled[k]; winCount++; }
+      }
+      smooth[bx0] = winCount ? winSum / winCount : NaN;
 
-    for (let x = bx0 + 1; x <= bx1; x++) {
-      const addIdx = x + SM;
-      if (addIdx <= bx1 && !Number.isNaN(filled[addIdx])) { winSum += filled[addIdx]; winCount++; }
-      const subIdx = x - SM - 1;
-      if (subIdx >= bx0 && !Number.isNaN(filled[subIdx])) { winSum -= filled[subIdx]; winCount--; }
-      smooth[x] = winCount ? winSum / winCount : NaN;
-    }
+      for (let x = bx0 + 1; x <= bx1; x++) {
+        const addIdx = x + SM;
+        if (addIdx <= bx1 && !Number.isNaN(filled[addIdx])) { winSum += filled[addIdx]; winCount++; }
+        const subIdx = x - SM - 1;
+        if (subIdx >= bx0 && !Number.isNaN(filled[subIdx])) { winSum -= filled[subIdx]; winCount--; }
+        smooth[x] = winCount ? winSum / winCount : NaN;
+      }
+    });
 
-    // Fast 32-bit pixel rendering inside bounding box
-    for (let y = by0; y <= by1; y++) {
-      const rowOffset = y * GW;
-      const bRow = (y >> 4) * cols;
-      for (let x = bx0; x <= bx1; x++) {
-        const k = rowOffset + x;
-        if (!grid[k]) continue;
-        const light = blockLight[bRow + (x >> 4)];
-        let r, g, b;
-        if (y === tops[x]) { r = 196; g = 232; b = 255; }
-        else {
-          const sm = smooth[x];
-          const t = Math.min(1, (Number.isNaN(sm) ? DEPTH / 2 : Math.max(1, y - sm)) / DEPTH);
-          r = 80 - 56 * t; g = 150 - 92 * t; b = 232 - 104 * t;
-        }
-        const lr = Math.round(r * light);
-        const lg = Math.round(g * light);
-        const lb = Math.round(b * light);
-        // Little-endian ABGR: alpha = 225
-        d32[k] = (225 << 24) | (lb << 16) | (lg << 8) | lr;
+    // Precompute color LUT
+    if (!this._pColorLut || this._pColorLut.length !== DEPTH + 1) {
+      this._pColorLut = new Uint32Array(DEPTH + 1);
+      this._pColorRGB = new Uint8Array((DEPTH + 1) * 3);
+      for (let d = 0; d <= DEPTH; d++) {
+        const t = d / DEPTH;
+        const r = Math.round(80 - 56 * t);
+        const g = Math.round(150 - 92 * t);
+        const b = Math.round(232 - 104 * t);
+        this._pColorLut[d] = (225 << 24) | (b << 16) | (g << 8) | r;
+        this._pColorRGB[d * 3] = r;
+        this._pColorRGB[d * 3 + 1] = g;
+        this._pColorRGB[d * 3 + 2] = b;
       }
     }
+    const colorLut = this._pColorLut;
+    const colorRGB = this._pColorRGB;
+    const TOP_COLOR = (225 << 24) | (255 << 16) | (232 << 8) | 196;
 
-    const pctx = this._pCanvas.getContext('2d');
-    pctx.putImageData(this._pImg, 0, 0, bx0, by0, bx1 - bx0 + 1, by1 - by0 + 1);
-    wc.imageSmoothingEnabled = false;
-    wc.drawImage(this._pCanvas, 0, 0, GW * sc, GH * sc);
+    // Fast 32-bit pixel rendering inside bounding box with LUT & dirty rect blit
+    let activePixels = 0;
+    waterPerf.time('renderPixelShading', () => {
+      for (let y = by0; y <= by1; y++) {
+        const rowOffset = y * GW;
+        const bRow = (y >> 3) * cols;
+        for (let x = bx0; x <= bx1; x++) {
+          const k = rowOffset + x;
+          if (!grid[k]) continue;
+          activePixels++;
+          const light = blockLight[bRow + (x >> 3)];
+          if (y === tops[x]) {
+            if (light >= 0.99) {
+              d32[k] = TOP_COLOR;
+            } else {
+              const lr = (196 * light) | 0;
+              const lg = (232 * light) | 0;
+              const lb = (255 * light) | 0;
+              d32[k] = (225 << 24) | (lb << 16) | (lg << 8) | lr;
+            }
+            continue;
+          }
+          const sm = smooth[x];
+          const d = Number.isNaN(sm) ? (DEPTH >> 1) : ((y - sm) | 0);
+          const lutIdx = d <= 0 ? 0 : d >= DEPTH ? DEPTH : d;
+          if (light >= 0.99) {
+            d32[k] = colorLut[lutIdx];
+          } else {
+            const base = lutIdx * 3;
+            const lr = (colorRGB[base] * light) | 0;
+            const lg = (colorRGB[base + 1] * light) | 0;
+            const lb = (colorRGB[base + 2] * light) | 0;
+            d32[k] = (225 << 24) | (lb << 16) | (lg << 8) | lr;
+          }
+        }
+      }
+
+      const dirtyW = bx1 - bx0 + 1, dirtyH = by1 - by0 + 1;
+      const pctx = this._pCanvas.getContext('2d');
+      pctx.putImageData(this._pImg, 0, 0, bx0, by0, dirtyW, dirtyH);
+      wc.imageSmoothingEnabled = false;
+      wc.drawImage(this._pCanvas, bx0, by0, dirtyW, dirtyH, bx0 * sc, by0 * sc, dirtyW * sc, dirtyH * sc);
+    });
+
+    waterPerf.setCounts({ activeWaterPixels: activePixels });
+    return true;
   }
 
   // Water in front of the players and items (they look submerged): the same water image,

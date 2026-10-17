@@ -35,8 +35,9 @@ import { Preferences } from './src/core/preferences.js';
 import { ItemEntity } from './src/entities/item.js';
 import { Multiplayer } from './src/multiplayer.js';
 import { WorldSerializer } from './src/core/worldSerializer.js';
+import { waterPerf } from './src/core/waterPerf.js';
 
-const GAME_VERSION = '0.5.3';
+const GAME_VERSION = '0.5.4';
 checkForAppUpdate(GAME_VERSION);
 
 let worldName = 'New World';
@@ -2437,7 +2438,8 @@ const availableCommands = [
   { cmd: 'fill', args: [{ name: 'block', kind: 'block' }, { options: ['solid', 'hollow', 'replace'], optional: true }, { name: 'block', kind: 'block', optional: true }] },
   { cmd: 'seed', args: [{ name: 'seed', optional: true }] },
   { cmd: 'itemconfig', args: [{ options: ITEM_CONFIG_KEYS }, { name: 'value' }] },
-  { cmd: 'lighting', args: [{ options: ['recalc'] }] }
+  { cmd: 'lighting', args: [{ options: ['recalc'] }] },
+  { cmd: 'log', args: [] }
 ];
 
 const itemCategories = {
@@ -3258,6 +3260,16 @@ function processTextInputCommand(command) {
     case 'lighting':
       if (!parts[1] || parts[1] === 'recalc') world.initializeLighting();
       return;
+
+    case 'log': {
+      const res = waterPerf.downloadReport();
+      if (res && res.success) {
+        console.log(`[Underwild] Water performance report downloaded: ${res.filename}`);
+      } else {
+        console.warn('[Underwild] Failed to download water performance report:', res?.error);
+      }
+      return;
+    }
 
     default:
       return;
@@ -5202,6 +5214,7 @@ function runGameTicks(dt) {
 function initializeGameEngine() {
   const updateFunction = (dt, time) => {
     if (!world || !player) return;
+    waterPerf.frameTick(dt);
     if (gamePaused && !multiplayer.active) {
       updateHTMLUI();
       return;

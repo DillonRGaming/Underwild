@@ -12,6 +12,7 @@
 // with a mass, or a plant's meta.water) only while unloaded and in saves.
 
 import { ParticleWater } from './particleWater.js';
+import { waterPerf } from '../core/waterPerf.js';
 
 export const WATER_LEVELS = 16;
 export const SQ = 16;             // drawing resolution: water pixels across a block (one per texture pixel)
@@ -114,7 +115,6 @@ export class WaterSim {
     let totalWater = 0;
     for (let i = 0; i < this.size; i++) if (slot.mass[i] > 0) totalWater += slot.mass[i];
     console.log(`[WaterSim] chunkLoaded(${cx}) totalWaterMass=${totalWater.toFixed(1)}`);
-    this.wake();
     this.particles.chunkLoaded(cx);
   }
 
@@ -358,11 +358,13 @@ export class WaterSim {
     if (this.world.remote) return;
     this.particles.step(dt);
     if (!this.awake) return;
-    let biggest = 0;
-    for (let n = 0; n < STEPS; n++) biggest = Math.max(biggest, this.simulate());
-    if (biggest < QUIET) {
-      if (++this.quiet >= QUIET_TICKS) this.awake = false;
-    } else this.quiet = 0;
+    waterPerf.time('simBlockWater', () => {
+      let biggest = 0;
+      for (let n = 0; n < STEPS; n++) biggest = Math.max(biggest, this.simulate());
+      if (biggest < QUIET) {
+        if (++this.quiet >= QUIET_TICKS) this.awake = false;
+      } else this.quiet = 0;
+    });
   }
 
   // One step over every loaded chunk. Returns the biggest single flow.

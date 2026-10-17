@@ -225,6 +225,9 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
 
   // Swimming, Minecraft-style: slower sideways, slowly sink, hold jump to swim up.
   if (inWater && !noClipMode) {
+    if (Math.abs(player.vx) > 0.2 || Math.abs(player.vy) > 0.2) {
+      world.water?.particles?.wakeUp?.();
+    }
     walkSpeed *= 0.55;
     sprintSpeed *= 0.7;
     accel = 700;
