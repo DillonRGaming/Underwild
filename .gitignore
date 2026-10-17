@@ -7,4 +7,4 @@ build/www/
 build/dist/
 build/release/
 # Your worlds, settings and logs while running from source
-data/
+/data/
