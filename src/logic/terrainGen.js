@@ -664,7 +664,7 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   if (y >= HEIGHT - 2) {
     return { id: 'bedrock', meta: null };
   } else if (y < h) {
-    return underwater && y >= waterLevel ? { id: 'water', meta: { still: true } } : { id: 'air', meta: null };
+    return { id: 'air', meta: null }; // TEMP: water generation disabled for mobile host testing
   } else if (y === h) {
     return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : (isGrassStep ? 'dirt' : 'grass'), meta: null };
   } else if (sandy && y <= h + sandLayersAt(x, seed)) {
