@@ -5,7 +5,9 @@ export function trunkLeafCover(world, x, y) {
   const leafAt = (tx, ty) => {
     if (!world.inBounds(tx, ty)) return null;
     const cell = world.getCell(tx, ty);
-    return world.getBlockType(tx, ty)?.leaves && cell.meta?.layer !== 'bg' ? cell.id : null;
+    if (world.getBlockType(tx, ty)?.leaves) return cell.id;
+    if (cell.meta?.bgId && world.registry?.get(cell.meta.bgId)?.leaves) return cell.meta.bgId;
+    return null;
   };
   const left = leafAt(x - 1, y);
   const right = leafAt(x + 1, y);

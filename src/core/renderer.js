@@ -9,6 +9,7 @@ import { keptLeafCover } from '../logic/trunkLeaves.js';
 import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
 import { waterLevel, waterMass, WATER_LEVELS, SQ as WATER_SQ } from '../logic/water.js';
 import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
+import { perf } from './perf.js';
 import { waterPerf } from './waterPerf.js';
 
 const NAME_TAG_NEAR = 15;   // blocks: name tags are fully shown up to here
@@ -168,150 +169,230 @@ export class Renderer {
       return;
     }
 
-    this.updateDaylight();
-    this.updateHeldLight(ui);
-    this.drawSky();
-    // Clouds drift across the sky behind everything else; dimmer at night.
-    if (!this.clouds) { this.clouds = new Clouds(); this.classicClouds = new ClassicClouds(); }
-    (polishOn('clouds') ? this.clouds : this.classicClouds).draw(ctx, this.camera, canvas, world.seed ?? 0, this.daylight?.base ?? 1);
-    const polish = ui?.textureQuality !== 'fast';
-    this._polish = polish;
-    if (polish && polishOn('hills')) drawHills(ctx, this.camera, canvas, world.seed ?? 0, this._skyRGB, this.daylight?.base ?? 1);
+    perf.startPhase('renderTotal');
+    try {
+      perf.startPhase('renderSkyHills');
+      this.updateDaylight();
+      this.updateHeldLight(ui);
+      this.drawSky();
+      // Clouds drift across the sky behind everything else; dimmer at night.
+      if (!this.clouds) { this.clouds = new Clouds(); this.classicClouds = new ClassicClouds(); }
+      (polishOn('clouds') ? this.clouds : this.classicClouds).draw(ctx, this.camera, canvas, world.seed ?? 0, this.daylight?.base ?? 1);
+      const polish = ui?.textureQuality !== 'fast';
+      this._polish = polish;
+      if (polish && polishOn('hills')) drawHills(ctx, this.camera, canvas, world.seed ?? 0, this._skyRGB, this.daylight?.base ?? 1);
+      perf.endPhase('renderSkyHills');
 
-    const shake = ui?.explosionFX ? ui.explosionFX.getShakeOffset() : null;
-    if (shake && (shake.x || shake.y)) {
-      ctx.save();
-      ctx.translate(Math.round(shake.x), Math.round(shake.y));
-    }
+      const shake = ui?.explosionFX ? ui.explosionFX.getShakeOffset() : null;
+      if (shake && (shake.x || shake.y)) {
+        ctx.save();
+        ctx.translate(Math.round(shake.x), Math.round(shake.y));
+      }
 
-    const viewW = canvas.width / camera.zoom;
-    const viewH = canvas.height / camera.zoom;
-    
-    const margin = 2;
-    const startX = Math.max(0, Math.floor(camera.x / TILE_SIZE) - margin);
-    const endX = Math.min(this.world.width - 1, Math.ceil((camera.x + viewW) / TILE_SIZE) + margin);
-    const startY = Math.max(0, Math.floor(camera.y / TILE_SIZE) - margin);
-    const endY = Math.min(this.world.height - 1, Math.ceil((camera.y + viewH) / TILE_SIZE) + margin);
+      const viewW = canvas.width / camera.zoom;
+      const viewH = canvas.height / camera.zoom;
+      
+      const margin = 2;
+      const startX = Math.max(0, Math.floor(camera.x / TILE_SIZE) - margin);
+      const endX = Math.min(this.world.width - 1, Math.ceil((camera.x + viewW) / TILE_SIZE) + margin);
+      const startY = Math.max(0, Math.floor(camera.y / TILE_SIZE) - margin);
+      const endY = Math.min(this.world.height - 1, Math.ceil((camera.y + viewH) / TILE_SIZE) + margin);
 
-    const lightNow = performance.now();
-    const lightDt = this._lastLightTime ? Math.min(0.1, (lightNow - this._lastLightTime) / 1000) : 0;
-    this._lastLightTime = lightNow;
-    world.updateDisplayLight(lightDt, startX - 1, endX + 1, startY - 1, endY + 1);
-    this.updatePlacedLight(startX, endX, startY, endY);
+      perf.startPhase('renderLightPropagation');
+      const lightNow = performance.now();
+      const lightDt = this._lastLightTime ? Math.min(0.1, (lightNow - this._lastLightTime) / 1000) : 0;
+      this._lastLightTime = lightNow;
+      world.updateDisplayLight(lightDt, startX - 1, endX + 1, startY - 1, endY + 1);
+      this.updatePlacedLight(startX, endX, startY, endY);
+      perf.endPhase('renderLightPropagation');
 
-    // Mist sits behind the land and trees, filling the open air between them.
-    this.drawFog(startX, endX);
+      // Mist sits behind the land and trees, filling the open air between them.
+      perf.startPhase('renderFog');
+      this.drawFog(startX, endX);
+      perf.endPhase('renderFog');
 
-    // Solid foreground blocks go on their own layer so their open corners can be rounded.
-    const terrain = polish && (polishOn('outlines') || polishOn('rounding') || polishOn('seams') || polishOn('wallShadows')) ? this.terrainLayer() : null;
-    const terrainCtx = terrain?.getContext('2d');
-    if (terrainCtx) terrainCtx.setTransform(ctx.getTransform());
-    // Leaves get a layer too, so the whole canopy can be outlined.
-    const leafLayer = polish && polishOn('leaves') ? this.terrainLayer('_leafLayer') : null;
-    const leafCtx = leafLayer?.getContext('2d');
-    if (leafCtx) leafCtx.setTransform(ctx.getTransform());
-    this._splashes = [];
-    this._waterFrame = (this._waterFrame || 0) + 1;
-    for (let x = startX; x <= endX; x++) {
-      if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
-      for (let y = startY; y <= endY; y++) {
-        const cell = world.getCell(x, y);
-        const t = this.registry.get(cell.id);
-        if (!t) continue;
-        // Anything that doesn't fill its cell (plants, slabs, stairs, trapdoors) shows the wall behind it.
-        if (!t.solid || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
-          // A background block placed behind this one (a torch on a planks wall...).
-          const bgType = cell.meta?.bgId ? this.registry.get(cell.meta.bgId) : null;
-          if (bgType) {
-            this.drawBlock(x, y, bgType, { layer: 'bg' });
-            if (polish && bgType.solid && polishOn('seams')) this.seamTile(x, y);
+      // Solid foreground blocks go on their own layer so their open corners can be rounded.
+      const terrain = polish && (polishOn('outlines') || polishOn('rounding') || polishOn('seams') || polishOn('wallShadows')) ? this.terrainLayer() : null;
+      const terrainCtx = terrain?.getContext('2d');
+      if (terrainCtx) terrainCtx.setTransform(ctx.getTransform());
+      // Leaves get a layer too, so the whole canopy can be outlined.
+      const leafLayer = polish && polishOn('leaves') ? this.terrainLayer('_leafLayer') : null;
+      const leafCtx = leafLayer?.getContext('2d');
+      if (leafCtx) leafCtx.setTransform(ctx.getTransform());
+      this._splashes = [];
+      this._waterFrame = (this._waterFrame || 0) + 1;
+
+      perf.startPhase('renderBlocks');
+      let renderedBlocksCount = 0;
+      for (let x = startX; x <= endX; x++) {
+        if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
+        for (let y = startY; y <= endY; y++) {
+          const cell = world.getCell(x, y);
+          const t = this.registry.get(cell.id);
+          if (!t) continue;
+          // Anything that doesn't fill its cell (plants, slabs, stairs, trapdoors) shows the wall behind it.
+          if (!t.solid || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
+            // A background block placed behind this one (a torch on a planks wall...).
+            const bgType = cell.meta?.bgId ? this.registry.get(cell.meta.bgId) : null;
+            if (bgType) {
+              if (leafCtx && bgType.leaves) {
+                this.ctx = leafCtx;
+                this.drawBlock(x, y, bgType, { layer: 'bg' });
+                this.ctx = ctx;
+              } else {
+                this.drawBlock(x, y, bgType, { layer: 'bg' });
+                if (polish && bgType.solid && polishOn('seams')) this.seamTile(x, y);
+              }
+              renderedBlocksCount++;
+            }
+            // Lakes have a fixed sand backdrop where their water was generated; it stays put
+            // whatever the water in front of it does.
+            else if (cell.meta?.noWall) { /* the natural wall here was mined out */ }
+            else if (this.isLakeBackdrop(x, y)) { this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand'); renderedBlocksCount++; }
+            else if (!this.isOpenSky(x, y)) { this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast'); renderedBlocksCount++; }
+            if (cell.id === 'air') continue;
           }
-          // Lakes have a fixed sand backdrop where their water was generated; it stays put
-          // whatever the water in front of it does.
-          else if (cell.meta?.noWall) { /* the natural wall here was mined out */ }
-          else if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
-          else if (!this.isOpenSky(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
-          if (cell.id === 'air') continue;
-        }
-        // A block still sliding into its cell leaves the cell's bottom uncovered: fill it.
-        if (cell.meta?.fellAt && gameClock.now() - cell.meta.fellAt < (cell.meta.slideMs || FALL_SLIDE_MS) && gameClock.now() >= cell.meta.fellAt) {
-          if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
-          else if (y >= this.naturalSurfaceAt(x)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
-        }
-        // Water (still and moving) is drawn after the blocks, all at once (drawWaterLayer).
-        if (cell.id === 'water') continue;
-        if (leafCtx && this.registry.get(cell.id)?.leaves && cell.meta?.layer !== 'bg') {
-          this.ctx = leafCtx;
-          this.drawBlock(x, y, t, cell.meta || {});
-          this.ctx = ctx;
-        } else if (terrainCtx && isOutlined(t, cell.meta)) {
-          this.ctx = terrainCtx;
-          this.drawBlock(x, y, t, cell.meta || {});
-          this.ctx = ctx;
-        } else {
-          this.drawBlock(x, y, t, cell.meta || {});
+          // A block still sliding into its cell leaves the cell's bottom uncovered: fill it.
+          if (cell.meta?.fellAt && gameClock.now() - cell.meta.fellAt < (cell.meta.slideMs || FALL_SLIDE_MS) && gameClock.now() >= cell.meta.fellAt) {
+            if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
+            else if (y >= this.naturalSurfaceAt(x)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
+          }
+          // Water (still and moving) is drawn after the blocks, all at once (drawWaterLayer).
+          if (cell.id === 'water') continue;
+          if (leafCtx && this.registry.get(cell.id)?.leaves) {
+            this.ctx = leafCtx;
+            this.drawBlock(x, y, t, cell.meta || {});
+            this.ctx = ctx;
+            renderedBlocksCount++;
+          } else if (terrainCtx && isOutlined(t, cell.meta)) {
+            this.ctx = terrainCtx;
+            this.drawBlock(x, y, t, cell.meta || {});
+            this.ctx = ctx;
+            renderedBlocksCount++;
+          } else {
+            this.drawBlock(x, y, t, cell.meta || {});
+            renderedBlocksCount++;
+          }
         }
       }
-    }
-    if (polish && polishOn('connectedGrass')) this.drawGrassCorners(terrainCtx || ctx, startX, endX, startY, endY);
-    if (leafCtx) {
-      this.ctx = leafCtx;
-      this.drawLeafFringes(startX, endX, startY, endY);
-      this.ctx = ctx;
-      outlineLayer(leafLayer, camera.zoom);
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(leafLayer, 0, 0);
-      ctx.restore();
-    }
-    if (terrainCtx) {
-      edgePass(this, terrainCtx, ctx, startX, endX, startY, endY);
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(terrain, 0, 0);
-      ctx.restore();
-    }
-    if (polish && polishOn('rounding') && !(shake && (shake.x || shake.y))) this.roundWallCorners(startX, endX, startY, endY);
-    this.drawWaterLayer(startX, endX, startY, endY);
+      perf.endPhase('renderBlocks');
 
-    // Foam and bubbles go on top of the water cells around them.
-    this.drawSplashes();
-    if (!leafCtx) this.drawLeafFringes(startX, endX, startY, endY);
+      perf.startPhase('renderPolish');
+      if (polish && polishOn('connectedGrass')) {
+        perf.startPhase('renderGrassCorners');
+        this.drawGrassCorners(terrainCtx || ctx, startX, endX, startY, endY);
+        perf.endPhase('renderGrassCorners');
+      }
+      if (leafCtx) {
+        perf.startPhase('renderLeafFringes');
+        this.ctx = leafCtx;
+        this.drawLeafFringes(startX, endX, startY, endY);
+        this.ctx = ctx;
+        perf.endPhase('renderLeafFringes');
 
-    this.drawLightOverlay(startX, endX, startY, endY);
-    if (ui?.textureQuality !== 'fast') this.drawLightTint(startX, endX, startY, endY);
-    this.drawBreakingProgress();
-    // The player and dropped items are drawn on their own layer, so the water in front of
-    // them can tint just their pixels (they look submerged) before it goes on screen.
-    const layer = this.entityLayer();
-    const mainCtx = this.ctx;
-    this.ctx = layer.getContext('2d');
-    this.ctx.setTransform(mainCtx.getTransform());
-    const others = this.drawRemotePlayers();
-    this.drawPlayer();
-    this.drawHurtTint(this.player);
-    this.drawItems();
-    const p = this.player;
-    const rects = [[p.x - 8, p.y - 8, p.width + 16, p.height + 8]];
-    for (const rp of others) rects.push([rp.x - 8, rp.y - 8, rp.width + 16, rp.height + 8]);
-    for (const item of world.items || []) rects.push([item.x - 8, item.y - 8, 16, 16]);
-    if (polish && polishOn('entityOutlines')) outlineLayer(layer, camera.zoom);
-    this.ctx.globalCompositeOperation = 'source-atop';
-    this.drawWaterOver(rects);
-    this.ctx.globalCompositeOperation = 'source-over';
-    this.ctx = mainCtx;
-    mainCtx.save();
-    mainCtx.setTransform(1, 0, 0, 1, 0, 0);
-    if (layer.width && layer.height) mainCtx.drawImage(layer, 0, 0);
-    mainCtx.restore();
-    this.drawLeafParticles();
-    this.drawPrimedExplosives(ui?.primedExplosives);
-    this.drawHurtVignette();
-    if (ui?.explosionFX) ui.explosionFX.draw(ctx, camera);
-    this.drawHoveredBlockOutline();
-    this.drawPositionOutlines();
-    if (shake && (shake.x || shake.y)) ctx.restore();
-    if (polish && polishOn('vignette')) drawVignette(ctx, canvas);
+        perf.startPhase('renderLeafOutlines');
+        outlineLayer(leafLayer, camera.zoom);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(leafLayer, 0, 0);
+        ctx.restore();
+        perf.endPhase('renderLeafOutlines');
+      }
+      if (terrainCtx) {
+        perf.startPhase('renderEdgePass');
+        edgePass(this, terrainCtx, ctx, startX, endX, startY, endY);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(terrain, 0, 0);
+        ctx.restore();
+        perf.endPhase('renderEdgePass');
+      }
+      if (polish && polishOn('rounding') && !(shake && (shake.x || shake.y))) {
+        perf.startPhase('renderWallCorners');
+        this.roundWallCorners(startX, endX, startY, endY);
+        perf.endPhase('renderWallCorners');
+      }
+      perf.endPhase('renderPolish');
+
+      perf.startPhase('renderWater');
+      this.drawWaterLayer(startX, endX, startY, endY);
+
+      // Foam and bubbles go on top of the water cells around them.
+      perf.startPhase('renderSplashes');
+      this.drawSplashes();
+      perf.endPhase('renderSplashes');
+      perf.endPhase('renderWater');
+
+      if (!leafCtx) {
+        perf.startPhase('renderLeafFringes');
+        this.drawLeafFringes(startX, endX, startY, endY);
+        perf.endPhase('renderLeafFringes');
+      }
+
+      perf.startPhase('renderLightOverlay');
+      this.drawLightOverlay(startX, endX, startY, endY);
+      if (ui?.textureQuality !== 'fast') {
+        perf.startPhase('renderLightTint');
+        this.drawLightTint(startX, endX, startY, endY);
+        perf.endPhase('renderLightTint');
+      }
+      perf.endPhase('renderLightOverlay');
+
+      this.drawBreakingProgress();
+      // The player and dropped items are drawn on their own layer, so the water in front of
+      // them can tint just their pixels (they look submerged) before it goes on screen.
+      perf.startPhase('renderEntities');
+      const layer = this.entityLayer();
+      const mainCtx = this.ctx;
+      this.ctx = layer.getContext('2d');
+      this.ctx.setTransform(mainCtx.getTransform());
+      const others = this.drawRemotePlayers();
+      this.drawPlayer();
+      this.drawHurtTint(this.player);
+      this.drawItems();
+      const p = this.player;
+      const rects = [[p.x - 8, p.y - 8, p.width + 16, p.height + 8]];
+      for (const rp of others) rects.push([rp.x - 8, rp.y - 8, rp.width + 16, rp.height + 8]);
+      for (const item of world.items || []) rects.push([item.x - 8, item.y - 8, 16, 16]);
+      if (polish && polishOn('entityOutlines')) {
+        perf.startPhase('renderEntityOutlines');
+        outlineLayer(layer, camera.zoom);
+        perf.endPhase('renderEntityOutlines');
+      }
+      this.ctx.globalCompositeOperation = 'source-atop';
+      this.drawWaterOver(rects);
+      this.ctx.globalCompositeOperation = 'source-over';
+      this.ctx = mainCtx;
+      mainCtx.save();
+      mainCtx.setTransform(1, 0, 0, 1, 0, 0);
+      if (layer.width && layer.height) mainCtx.drawImage(layer, 0, 0);
+      mainCtx.restore();
+      perf.endPhase('renderEntities');
+
+      perf.startPhase('renderEffects');
+      this.drawLeafParticles();
+      this.drawPrimedExplosives(ui?.primedExplosives);
+      this.drawHurtVignette();
+      if (ui?.explosionFX) ui.explosionFX.draw(ctx, camera);
+      this.drawHoveredBlockOutline();
+      this.drawPositionOutlines();
+      if (shake && (shake.x || shake.y)) ctx.restore();
+      if (polish && polishOn('vignette')) drawVignette(ctx, canvas);
+      perf.endPhase('renderEffects');
+
+      perf.setCounts({
+        visibleTiles: (endX - startX + 1) * (endY - startY + 1),
+        renderedBlocks: renderedBlocksCount,
+        loadedChunks: world.chunks?.size || 0,
+        itemsCount: world.items?.length || 0,
+        particlesCount: this.leafParticles?.length || 0,
+        canvasW: canvas.width,
+        canvasH: canvas.height,
+        dpr: window.devicePixelRatio || 1
+      });
+    } finally {
+      perf.endPhase('renderTotal');
+    }
   }
 
   // A canvas the size of the screen, cleared, for the solid blocks.
@@ -330,28 +411,65 @@ export class Renderer {
   // Inner grass corners, worked out on the quarter-cell grid so slabs and stairs join too:
   // where two grassy quarters meet around a filled quarter's corner with the diagonal quarter
   // open, a grass patch is laid over that corner so the two bands join.
+  getOrientedCorner(tex, dx, dy) {
+    const idx = (dy > 0 ? 2 : 0) + (dx > 0 ? 1 : 0);
+    if (!tex._cornerSprites) tex._cornerSprites = [];
+    if (!tex._cornerSprites[idx]) {
+      const tw = tex.width || 16;
+      const th = tex.height || 16;
+      const qw = Math.floor(tw / 2);
+      const qh = Math.floor(th / 2);
+      const c = document.createElement('canvas');
+      c.width = qw;
+      c.height = qh;
+      const cctx = c.getContext('2d');
+      cctx.imageSmoothingEnabled = false;
+      cctx.translate(dx > 0 ? qw : 0, dy > 0 ? qh : 0);
+      cctx.scale(dx > 0 ? -1 : 1, dy > 0 ? -1 : 1);
+      cctx.drawImage(tex, 0, 0, tw, th);
+      tex._cornerSprites[idx] = c;
+    }
+    return tex._cornerSprites[idx];
+  }
+
+  // Inner grass corners, worked out on the quarter-cell grid so slabs and stairs join too:
+  // where two grassy quarters meet around a filled quarter's corner with the diagonal quarter
+  // open, a grass patch is laid over that corner so the two bands join.
   drawGrassCorners(target, startX, endX, startY, endY) {
     const { world, camera } = this;
     const base = this.textures.grass_corner;
     if (!base) return;
-    const quarters = new Map();
-    const quartersAt = (x, y) => {
-      const k = x + ',' + y;
-      let q = quarters.get(k);
-      if (q === undefined) {
-        const id = world.inBounds(x, y) ? world.getBlockId(x, y) : null;
-        const fill = this.blockQuarters(x, y);
-        q = fill | (isGrassyCell(world.getCell(x, y)) ? fill << 4 : 0);
-        quarters.set(k, q);
+
+    const spanX = endX - startX + 5;
+    const spanY = endY - startY + 5;
+    const ox = startX - 2, oy = startY - 2;
+    const totalCells = spanX * spanY;
+    if (!this._qCache || this._qCache.length < totalCells) {
+      this._qCache = new Int16Array(totalCells);
+    }
+    this._qCache.fill(-1, 0, totalCells);
+    const qCache = this._qCache;
+
+    const quartersAt = (bx, by) => {
+      const ix = bx - ox, iy = by - oy;
+      if (ix < 0 || ix >= spanX || iy < 0 || iy >= spanY) return 0;
+      const idx = iy * spanX + ix;
+      let q = qCache[idx];
+      if (q === -1) {
+        const fill = this.blockQuarters(bx, by);
+        q = fill | (isGrassyCell(world.getCell(bx, by)) ? fill << 4 : 0);
+        qCache[idx] = q;
       }
       return q;
     };
+
     // Quarter (gx, gy) on the half-cell grid: 1 filled, 2 filled and grassy.
     const at = (gx, gy) => {
       const q = quartersAt(Math.floor(gx / 2), Math.floor(gy / 2));
       const bit = 1 << ((gy & 1) * 2 + (gx & 1));
       return (q & (bit << 4)) ? 2 : (q & bit) ? 1 : 0;
     };
+
     target.imageSmoothingEnabled = false;
     for (let x = startX; x <= endX; x++) {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
@@ -369,15 +487,8 @@ export class Renderer {
               if (at(gx + dx, gy + dy) || at(gx + dx, gy) !== 2 || at(gx, gy + dy) !== 2) continue;
               const tex = this.biomeTexture('grass_corner', base, x);
               const qx = sx + (q & 1) * half, qy = sy + (q >> 1) * half;
-              // The texture is the top-left corner; mirror it for the others, kept inside the quarter.
-              target.save();
-              target.beginPath();
-              target.rect(qx, qy, half, half);
-              target.clip();
-              target.translate(dx > 0 ? qx + half : qx, dy > 0 ? qy + half : qy);
-              target.scale(dx > 0 ? -1 : 1, dy > 0 ? -1 : 1);
-              target.drawImage(tex, 0, 0, size, size);
-              target.restore();
+              const sprite = this.getOrientedCorner(tex, dx, dy);
+              target.drawImage(sprite, qx, qy, half, half);
             }
           }
         }
@@ -730,9 +841,14 @@ export class Renderer {
 
   isOpenSky(tileX, tileY) {
     const world = this.world;
+    if (!world.inBounds(tileX, tileY)) return false;
     // Blocks that don't fill their cell (slabs, trapdoors) don't hide the sky behind them.
-    const type = world.inBounds(tileX, tileY) ? world.getBlockType(tileX, tileY) : null;
-    if (!type || (type.solid && (!type.shape || type.shape === 'full'))) return false;
+    const type = world.getBlockType(tileX, tileY);
+    const cell = world.getCell(tileX, tileY);
+    if (type && type.solid && (!type.shape || type.shape === 'full') && cell.meta?.layer !== 'bg') return false;
+    if (cell.meta?.layer === 'bg' || cell.meta?.bgId) return false;
+    if (cell.meta?.noWall) return true;
+    if (this.isLakeBackdrop(tileX, tileY)) return false;
     return tileY < this.naturalSurfaceAt(tileX);
   }
 
@@ -802,9 +918,9 @@ export class Renderer {
     const world = this.world;
     if (!world.inBounds(tileX, tileY) || !world.isChunkLoaded(world.chunkXFor(tileX))) return true;
     const t = world.getBlockType(tileX, tileY);
-    if (t && t.solid && (!t.shape || t.shape === 'full')) return true;
     const cell = world.getCell(tileX, tileY);
-    if (cell.meta?.bgId) return true;
+    if (t && t.solid && (!t.shape || t.shape === 'full') && cell.meta?.layer !== 'bg') return true;
+    if (cell.meta?.bgId || cell.meta?.layer === 'bg') return true;
     return this.naturalWallId(tileX, tileY) !== null;
   }
 
@@ -1126,10 +1242,13 @@ drawStars() {
      const camera = this.camera;
      
      for (const item of items) {
-       const sx = Math.round(camera.worldToScreenX(item.x));
-       const sy = Math.round(camera.worldToScreenY(item.y));
-       
-       const size = Math.max(10, Math.round(10 * camera.zoom));
+       const size = Math.max(6, Math.round(7.5 * camera.zoom));
+       const itemW = item.width || 6;
+       const itemH = item.height || 6;
+       const screenCenterX = camera.worldToScreenX(item.x + itemW / 2);
+       const screenBottomY = camera.worldToScreenY(item.y + itemH);
+       const sx = Math.round(screenCenterX - size / 2);
+       const sy = Math.round(screenBottomY - size);
        
        const tileX = Math.floor(item.x / 16);
        const tileY = Math.floor(item.y / 16);
@@ -1139,7 +1258,7 @@ drawStars() {
        const texture = this.biomeTexture(itemId, this.textures[itemId], tileX);
        
        if (texture) {
-         this.drawBlockTexture(texture, sx - size/2, sy - size/2, size, combinedLightFactor);
+         this.drawBlockTexture(texture, sx, sy, size, combinedLightFactor);
        } else {
          const blockType = this.registry.get(itemId);
          const color = blockType?.color || '#ff0000';
@@ -1155,11 +1274,11 @@ drawStars() {
            ctx.fillStyle = `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
          }
          
-         ctx.fillRect(sx - size/2, sy - size/2, size, size);
+         ctx.fillRect(sx, sy, size, size);
          
          ctx.strokeStyle = '#000000';
          ctx.lineWidth = 1;
-         ctx.strokeRect(sx - size/2, sy - size/2, size, size);
+         ctx.strokeRect(sx, sy, size, size);
        }
      }
    }
@@ -1228,19 +1347,24 @@ drawStars() {
     for (let x = startX; x <= endX; x++) {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
       for (let y = startY; y <= endY; y++) {
-        const id = world.getCell(x, y).id;
-        if (!this.registry.get(id)?.leaves) continue;
+        const cell = world.getCell(x, y);
+        const isBg = cell.meta?.layer === 'bg' || (!this.registry.get(cell.id)?.leaves && cell.meta?.bgId);
+        const id = this.registry.get(cell.id)?.leaves ? cell.id : (cell.meta?.bgId && this.registry.get(cell.meta.bgId)?.leaves ? cell.meta.bgId : null);
+        if (!id) continue;
         let texture = this.textures[id];
         if (!texture) continue;
         if (biomeHasLeafTint(id)) texture = this.getBiomeTinted(id, texture, x);
         for (const [side, dx, dy] of LEAF_FRINGE_SIDES) {
           const nx = x + dx, ny = y + dy;
-          if (!world.inBounds(nx, ny) || world.getCell(nx, ny).id !== 'air') continue;
+          if (!world.inBounds(nx, ny)) continue;
+          const nCell = world.getCell(nx, ny);
+          const nType = world.getBlockType(nx, ny);
+          if (nType?.leaves || nType?.solid || (nCell.meta?.bgId && this.registry.get(nCell.meta.bgId)?.leaves)) continue;
           const fringe = this.getLeafFringe(id, texture, side, (x * 7 + y * 13) & 3);
           if (!fringe) continue;
           const sx = Math.round(camera.worldToScreenX(nx * TILE_SIZE)) + this.leafSwayOffset(x, y, size);
           const sy = Math.round(camera.worldToScreenY(ny * TILE_SIZE));
-          const light = this.isOpenSky(nx, ny) ? this.lightFactorAt(nx, ny, true) : 1.0;
+          const light = (this.isOpenSky(nx, ny) ? this.lightFactorAt(nx, ny, true) : 1.0) * (isBg ? BACKGROUND_WALL_SHADE : 1.0);
           this.drawBlockTexture(fringe, sx, sy, size, light);
         }
       }
@@ -2160,7 +2284,7 @@ drawStars() {
     }
     
     const isLightSource = type.lightLevel > 0;
-    const finalLightFactor = !isLightSource && this.isOpenSky(tileX, tileY)
+    const finalLightFactor = !isLightSource && (!type.solid || (type.shape && type.shape !== 'full')) && this.isOpenSky(tileX, tileY)
       ? this.lightFactorAt(tileX, tileY, true)
       : 1.0;
 
@@ -2218,23 +2342,29 @@ drawStars() {
       this.drawRock(texture, sx, sy, size, meta, finalLightFactor);
       return;
     }
-    if (type.leaves && texture && meta?.layer !== 'bg') {
+    if (type.leaves && texture) {
+      const isBg = meta?.layer === 'bg';
+      const leafLight = isBg ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor;
       const lx = sx + this.leafSwayOffset(tileX, tileY, size);
       // Solid shaded foliage behind the holey leaf texture, so canopies don't look see-through.
       if (!polishOn('leaves')) {
-        this.drawBlockTexture(texture, lx, sy, size, finalLightFactor);
+        this.drawBlockTexture(texture, lx, sy, size, leafLight);
         return;
       }
       const [r, g, b] = this.averageColor(texture);
-      const k = 0.62 * Math.max(MIN_BRIGHTNESS, Math.min(1, finalLightFactor));
+      const k = 0.62 * Math.max(MIN_BRIGHTNESS, Math.min(1, leafLight));
       ctx.fillStyle = `rgb(${Math.round(r * k)}, ${Math.round(g * k)}, ${Math.round(b * k)})`;
       // The backing stops short of open sides, so the canopy's outline stays ragged.
-      const leafy = (x, y) => { const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null; return !!t && (t.solid || !!t.leaves || t.id.endsWith('_log')); };
+      const leafy = (x, y) => {
+        const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null;
+        const c = world.getCell(x, y);
+        return !!t && (t.solid || !!t.leaves || (c?.meta?.bgId && this.registry.get(c.meta.bgId)?.leaves) || t.id.endsWith('_log'));
+      };
       const inset = Math.round(size * 4 / 16);
       const l0 = leafy(tileX - 1, tileY) ? 0 : inset, r0 = leafy(tileX + 1, tileY) ? 0 : inset;
       const t0 = leafy(tileX, tileY - 1) ? 0 : inset, b0 = leafy(tileX, tileY + 1) ? 0 : inset;
       ctx.fillRect(lx + l0, sy + t0, size - l0 - r0, size - t0 - b0);
-      this.drawBlockTexture(texture, lx, sy, size, finalLightFactor);
+      this.drawBlockTexture(texture, lx, sy, size, leafLight);
       return;
     }
     if (type.windSway && texture && meta?.layer !== 'bg') {
@@ -2862,7 +2992,7 @@ drawHeldItem(pose = null) {
     
     if (!world.inBounds(tileX, tileY)) return;
     // An empty cell gets a fainter outline when the held block can go there.
-    const empty = world.getBlockId(tileX, tileY) === 'air';
+    const empty = world.getBlockId(tileX, tileY) === 'air' || world.getCell(tileX, tileY)?.meta?.layer === 'bg';
     const placeable = empty && ui.canPlaceAt?.(tileX, tileY);
     if (!empty || placeable) {
       const playerCenterX = player.x + player.width / 2;

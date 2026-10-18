@@ -35,7 +35,7 @@ import { Preferences } from './core/preferences.js';
 import { ItemEntity } from './entities/item.js';
 import { Multiplayer } from './multiplayer.js';
 import { WorldSerializer } from './core/worldSerializer.js';
-import { waterPerf } from './core/waterPerf.js';
+import { perf as gamePerf, perf, waterPerf } from './core/perf.js';
 
 const GAME_VERSION = '0.5.7';
 checkForAppUpdate(GAME_VERSION);
@@ -1478,7 +1478,7 @@ class MenuManager {
     world.onLeafDecayed = (leafId, x, y) => {
       const centerX = (x + 0.5) * TILE_SIZE;
       const centerY = (y + 0.5) * TILE_SIZE;
-      spawnItemEntity(leafId, centerX, centerY);
+      spawnItemEntity(leafId, centerX, centerY, 1, (Math.random() - 0.5) * 1.5, -0.8 - Math.random() * 0.6);
       if (!renderFallingLeaves || leafParticles.length > 90) return;
       const n = registry.get(leafId)?.leaves?.fallOnDecay ?? 1;
       for (let i = 0; i < n; i++) leafParticles.push(new LeafParticle(leafId, centerX, centerY, world.time, 0.7 + Math.random() * 0.4));
@@ -2554,7 +2554,7 @@ const availableCommands = [
   { cmd: 'me', desc: 'Say what you are doing', args: [{ name: 'action' }] },
   { cmd: 'list', desc: 'List the players here', args: [] },
   { cmd: 'help', desc: 'Show the commands', args: [{ name: 'command', kind: 'command', optional: true }] },
-  { cmd: 'log', desc: 'Save the water performance report', args: [] }
+  { cmd: 'log', desc: 'Save comprehensive performance audit and bottleneck report', args: [{ name: 'reset', optional: true }] }
 ];
 
 // /giveall groups, picked out by each block's or item's own properties.
@@ -2942,7 +2942,8 @@ function escapeHtml(text) {
 
 // "/give [item] [amount]": each argument a pill showing its choices, the one being typed lit.
 // --- Command targets: a name, or @s (you), @p (nearest other player), @a (everyone), @r (random).
-const SELECTORS = ['@s', '@p', '@a', '@r'];
+// Who a command is for, besides a player's name.
+const SELECTORS = ['self', 'nearest', 'all', 'random'];
 function commandPlayers() {
   const self = { id: multiplayer.isGuest ? multiplayer.myId : 0, name: playerName(), self: true, x: player.x, y: player.y };
   const others = [...multiplayer.remotePlayers.values()].map(rp => ({ id: rp.id, name: rp.name, x: rp.x, y: rp.y }));
@@ -2958,11 +2959,11 @@ function isPlayerRef(sel) {
 }
 function resolvePlayers(sel) {
   const all = commandPlayers();
-  const s = (sel || '@s').toLowerCase();
-  if (s === '@s') return [all[0]];
-  if (s === '@a') return all;
-  if (s === '@r') return [all[Math.floor(Math.random() * all.length)]];
-  if (s === '@p') {
+  const s = (sel || 'self').toLowerCase();
+  if (s === 'self') return [all[0]];
+  if (s === 'all') return all;
+  if (s === 'random') return [all[Math.floor(Math.random() * all.length)]];
+  if (s === 'nearest') {
     const others = all.slice(1).sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y));
     return [others[0] || all[0]];
   }
@@ -3096,7 +3097,7 @@ function updateCommandSuggestions() {
     currentCommand = command;
     const typed = parts[parts.length - 1];
     // Commands that can act on another player start with the player, which can be left out:
-    // the first word is a player (or @selector) or it is already the first real argument.
+    // the first word is a player (or self, all, random, nearest) or it is already the first real argument.
     let active = [parts.length - 2];
     if (command.playerFirst) {
       // The first word is the player if anything fits it, otherwise it is already the first argument.
@@ -3234,7 +3235,7 @@ function processTextInputCommand(command) {
 
   const playerTileX = Math.floor(player.x / TILE_SIZE);
   const playerTileY = Math.floor(player.y / TILE_SIZE);
-  // Commands that can act on someone start with the player (or @selector); without one they act on you.
+  // Commands that can act on someone start with the player (or self, all, random, nearest); without one they act on you.
   const takePlayer = () => {
     const given = isPlayerRef(parts[1]);
     return { selector: given ? parts[1] : undefined, args: parts.slice(given ? 2 : 1) };
@@ -3609,13 +3610,24 @@ function processTextInputCommand(command) {
     }
 
     case 'log': {
-      const res = waterPerf.downloadReport();
+      const sub = (parts[1] || '').toLowerCase();
+      if (sub === 'reset' || sub === 'clear') {
+        gamePerf.reset();
+        commandOk('Reset performance profiling metrics history.');
+        return;
+      }
+      const res = gamePerf.downloadReport();
       if (res && res.success) {
-        console.log(`[Underwild] Water performance report downloaded: ${res.filename}`);
-        commandOk(`Saved the water report (${res.filename}).`);
+        console.log(`[Underwild] Performance report downloaded: ${res.filename}`);
+        const top = res.topBottleneck ? ` Top bottleneck: ${res.topBottleneck}.` : '';
+        commandOk(`Saved performance report (${res.filename}). Avg: ${res.avgFps} FPS (${res.avgFrameMs}ms).${top}`);
       } else {
-        console.warn('[Underwild] Failed to download water performance report:', res?.error);
-        commandFail('Could not save the water report.');
+        console.warn('[Underwild] Failed to download performance report:', res?.error);
+        if (res && res.avgFps) {
+          commandOk(`Performance report logged to console. Avg: ${res.avgFps} FPS (${res.avgFrameMs}ms). Top: ${res.topBottleneck}.`);
+        } else {
+          commandFail('Could not save performance report.');
+        }
       }
       return;
     }
@@ -3778,8 +3790,15 @@ function addStackToInventory(stack) {
     : inventory.addBlock(stack.blockId, stack.count);
 }
 
-function spawnItemEntity(id, x, y, count = 1, vx = 0, vy = 0, local = false) {
+function spawnItemEntity(id, x, y, count = 1, vx = null, vy = null, local = false) {
   if (!id || count <= 0) return null;
+  if (vx == null && vy == null) {
+    vx = (Math.random() - 0.5) * 1.8;
+    vy = -1.2 - Math.random() * 0.8;
+  } else {
+    vx = vx ?? 0;
+    vy = vy ?? 0;
+  }
   // In multiplayer the host runs every dropped item; a guest asks it to make one.
   if (multiplayer.isGuest && !local) {
     multiplayer.send({ t: 'spawnItem', id, x, y, count, vx, vy });
@@ -4137,8 +4156,14 @@ window.addEventListener('mousedown', (e) => {
   }
   if (e.target.closest?.('#chat, #chatSuggestions')) return;
   const hit = getUIHitFromElement(e.target);
+  const inCreativeUI = e.target && !!e.target.closest?.('#creativePanel, .creative-panel, .creative-tabs, #creativeTabs, #creativeTabsBottom, .creative-grid, .creative-header');
 
   if (!hit) {
+    if (creativeMode && draggingStack && inCreativeUI) {
+      draggingStack = null;
+      recomputeCraft();
+      return;
+    }
     // Clicking (or tapping) off the inventory with nothing in hand closes it.
     const outside = e.target.closest?.('.inventory-overlay') && !e.target.closest('.inventory-content, .inventory-frame, .creative-tabs');
     if (outside && !draggingStack && e.button === 0) {
@@ -4146,10 +4171,14 @@ window.addEventListener('mousedown', (e) => {
       return;
     }
     if (draggingStack && e.target.closest?.('.inventory-overlay') && !e.target.closest('.inventory-content')) {
-      const count = e.button === 2 ? 1 : draggingStack.count;
-      dropStackAtPlayer(draggingStack, count);
-      draggingStack.count -= count;
-      if (draggingStack.count <= 0) draggingStack = null;
+      if (creativeMode) {
+        draggingStack = null;
+      } else {
+        const count = e.button === 2 ? 1 : draggingStack.count;
+        dropStackAtPlayer(draggingStack, count);
+        draggingStack.count -= count;
+        if (draggingStack.count <= 0) draggingStack = null;
+      }
       recomputeCraft();
     }
     return;
@@ -4214,13 +4243,18 @@ window.addEventListener('mouseup', (e) => {
   // Only a real drag drops the stack on release; a plain click just picks it up, even if
   // the slots shift under the cursor or the release lands a hair over the border.
   const dragged = dragStartPos && Math.hypot(e.clientX - dragStartPos.x, e.clientY - dragStartPos.y) > 8;
-  if (draggingStack && (inventoryOpen || openContainer) && e.button === 0 && dragStartSlot && dragged) {
-    const hit = getUIHitFromElement(document.elementFromPoint(e.clientX, e.clientY));
-    if (hit && (hit.area === 'creative' || hit.area === 'creativeTab')) {
-      // Let go over the creative menu: the stack is thrown away.
-      if (creativeMode) draggingStack = null;
+  if (draggingStack && (inventoryOpen || openContainer) && e.button === 0 && (dragged || dragStartSlot)) {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const hit = getUIHitFromElement(el);
+    const inCreativeUI = el && !!el.closest?.('#creativePanel, .creative-panel, .creative-tabs, #creativeTabs, #creativeTabsBottom, .creative-grid, .creative-header');
+    if (creativeMode && (inCreativeUI || hit?.area === 'creative' || hit?.area === 'creativeTab')) {
+      // Let go anywhere over the creative menu: the stack is thrown away.
+      draggingStack = null;
     } else if (hit && `${hit.area}:${hit.index ?? hit.tabId}` !== dragStartSlot) {
       handleInventoryClick(hit, false);
+    } else if (creativeMode && dragged && !hit && !el?.closest?.('.inventory-slot, .hotbar-slot, .container-slot, .crafting-slot, .crafting-output-slot')) {
+      // Dragging and letting go outside slots in creative mode deletes the stack
+      draggingStack = null;
     }
   }
   dragStartSlot = null;
@@ -4384,13 +4418,25 @@ function tryPlaceBlockAt(screenX, screenY, isRepeat = false) {
   }
 
   // In creative, placing on a block swaps it for the held one.
+  const clickedType = registry.get(clickedId);
   const open = clickedId === 'air' || clickedId === 'water' || isPlantBlock(clickedId) || cell.meta?.layer === 'bg'
-    || (backgroundBuild && !registry.get(clickedId)?.solid);
+    || (backgroundBuild && (!clickedType?.solid || (clickedType?.shape && clickedType.shape !== 'full')));
   const replace = creativeMode && !backgroundBuild && !open && clickedId !== hotSlot.blockId;
   if (!open && !replace) return;
   if (replace && isRepeat) return;
 
-  if (rectsOverlap(tileX * TILE_SIZE, tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE, player.x, player.y, player.width, player.height) && !backgroundBuild && !registry.get(hotSlot.blockId)?.climbable) return;
+  const hotType = registry.get(hotSlot.blockId);
+  const isSolid = hotType && hotType.solid !== false && (typeof hotType.isSolid !== 'function' || hotType.isSolid());
+  if (isSolid && !backgroundBuild && !hotType?.climbable) {
+    if (hotType.shape === 'slab') {
+      const localY = worldY - tileY * TILE_SIZE;
+      const top = input.isKeyDown(keybinds.flip) ? localY >= TILE_SIZE / 2 : localY < TILE_SIZE / 2;
+      const slabY = top ? tileY * TILE_SIZE : tileY * TILE_SIZE + TILE_SIZE / 2;
+      if (rectsOverlap(tileX * TILE_SIZE, slabY, TILE_SIZE, TILE_SIZE / 2, player.x, player.y, player.width, player.height)) return;
+    } else if (rectsOverlap(tileX * TILE_SIZE, tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE, player.x, player.y, player.width, player.height)) {
+      return;
+    }
+  }
 
   const placed = placer.place(world, { type: 'block', blockId: hotSlot.blockId }, tileX, tileY, {
     mouseWorldX: worldX,
@@ -4399,7 +4445,7 @@ function tryPlaceBlockAt(screenX, screenY, isRepeat = false) {
     rotate: input.isKeyDown(keybinds.rotate),
     facing: worldX > player.x + player.width / 2 ? 1 : -1, // the way the player is drawn facing (toward the mouse)
     background: backgroundBuild,
-    hasWall: !!window.renderer?.naturalWallId(tileX, tileY),
+    hasWall: !!window.renderer?.naturalWallId(tileX, tileY) || cell?.meta?.layer === 'bg' || !!cell?.meta?.bgId,
     anywhere: creativeMode,
     replace
   });
@@ -4426,11 +4472,17 @@ function canPlaceAt(tileX, tileY) {
   const slot = inventory.getSlot(selectedIndex);
   if (!slot || slot.type !== 'block' || !inReach(tileX, tileY) || !multiplayer.canBuild()) return false;
   if (creativeMode || backgroundBuild) return true;
+  const cell = world.getCell(tileX, tileY);
+  const hasWall = !!window.renderer?.naturalWallId(tileX, tileY) || cell?.meta?.layer === 'bg' || !!cell?.meta?.bgId;
+  if (hasWall) return true;
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     if (world.inBounds(tileX + dx, tileY + dy) && world.isSolidAt(tileX + dx, tileY + dy)) return true;
   }
   const type = registry.get(slot.blockId);
-  return (type?.shape === 'torch' || type?.climbable) && !!window.renderer?.naturalWallId(tileX, tileY);
+  if (type?.kind === 'trapdoor') {
+    return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => world.inBounds(tileX + dx, tileY + dy) && world.getBlockId(tileX + dx, tileY + dy) !== 'air');
+  }
+  return false;
 }
 
 function updateHeldPlacement(uiOpen) {
@@ -5505,24 +5557,26 @@ function burstLeaves(leafId, x, y, count) {
 function handleBrokenBlock(broke) {
   const centerX = broke.x * TILE_SIZE + TILE_SIZE / 2;
   const centerY = (broke.y + 0.5) * TILE_SIZE;
-  spawnItemEntity(broke.drop, centerX, centerY, broke.dropCount ?? 1);
+  const randVx = (Math.random() - 0.5) * 2.0;
+  const randVy = -1.3 - Math.random() * 0.9;
+  spawnItemEntity(broke.drop, centerX, centerY, broke.dropCount ?? 1, randVx, randVy);
   if (registry.get(broke.id)?.leaves) burstLeaves(broke.id, broke.x, broke.y);
   // The leaves drawn in front of a trunk inside a tree's crown go with it.
   const cover = registry.get(broke.id)?.trunk && broke.meta?.axis !== 'x' ? (broke.meta?.leafCover || trunkLeafCover(world, broke.x, broke.y)) : null;
   if (cover) {
-    spawnItemEntity(cover, centerX, centerY);
+    spawnItemEntity(cover, centerX, centerY, 1, (Math.random() - 0.5) * 2.0, -1.3 - Math.random() * 0.9);
     burstLeaves(cover, broke.x, broke.y);
   }
 
   if (registry.get(broke.id)?.dropsContents && Array.isArray(broke.meta?.inv)) {
     for (const stack of broke.meta.inv) {
       if (!stack || stack.count <= 0) continue;
-      spawnItemEntity(stackId(stack), centerX + (Math.random() - 0.5) * TILE_SIZE * 0.6, centerY, stack.count, (Math.random() - 0.5) * 2, -1);
+      spawnItemEntity(stackId(stack), centerX + (Math.random() - 0.5) * TILE_SIZE * 0.6, centerY, stack.count, (Math.random() - 0.5) * 2.2, -1.2);
     }
   }
 
   for (const drop of broke.extraDrops) {
-    spawnItemEntity(drop.id, drop.x * TILE_SIZE + TILE_SIZE / 2, (drop.y + 0.5) * TILE_SIZE);
+    spawnItemEntity(drop.id, drop.x * TILE_SIZE + TILE_SIZE / 2, (drop.y + 0.5) * TILE_SIZE, 1, (Math.random() - 0.5) * 2.0, -1.3 - Math.random() * 0.9);
   }
 
   if (openContainer && openContainer.tileX === broke.x && openContainer.tileY === broke.y) {
@@ -5623,102 +5677,140 @@ function runGameTicks(dt) {
   for (let i = 0; i < n; i++) {
     gameClock.ms += GAME_TICK * 1000;
     if (!world.timeManuallySet) world.time += GAME_TICK;
+    perf.startPhase('tickEntities');
     updateEntities();
+    perf.endPhase('tickEntities');
+    perf.startPhase('tickWorld');
     world.tick(GAME_TICK);
+    perf.endPhase('tickWorld');
   }
 }
 
 function initializeGameEngine() {
   const updateFunction = (dt, time) => {
     if (!world || !player) return;
-    waterPerf.frameTick(dt);
-    if (gamePaused && !multiplayer.active) {
-      updateHTMLUI();
-      return;
-    }
-    // In multiplayer the world keeps going for everyone while your pause menu is open.
-    if (gamePaused) {
-      player.inputLocked = true;
+    perf.startPhase('updateTotal');
+    try {
+      if (gamePaused && !multiplayer.active) {
+        perf.startPhase('updateUI');
+        updateHTMLUI();
+        perf.endPhase('updateUI');
+        return;
+      }
+      // In multiplayer the world keeps going for everyone while your pause menu is open.
+      if (gamePaused) {
+        player.inputLocked = true;
+        perf.startPhase('updatePlayer');
+        player.update(input, dt, time, noClipMode, creativeMode);
+        perf.endPhase('updatePlayer');
+        if (noClipMode && !player.creativeFlying) noClipMode = false;
+        breaker.cancel();
+        perf.startPhase('updateTicks');
+        runGameTicks(dt);
+        perf.endPhase('updateTicks');
+        perf.startPhase('updateMultiplayer');
+        multiplayer.update(dt);
+        perf.endPhase('updateMultiplayer');
+        perf.startPhase('updateChunks');
+        preloadChunksAroundPlayer();
+        perf.endPhase('updateChunks');
+        perf.startPhase('updateUI');
+        updateHTMLUI();
+        perf.endPhase('updateUI');
+        return;
+      }
+
+      player.inputLocked = textInputMode;
+      player.autoJump = autoJump;
+      perf.startPhase('updatePlayer');
       player.update(input, dt, time, noClipMode, creativeMode);
+      perf.endPhase('updatePlayer');
       if (noClipMode && !player.creativeFlying) noClipMode = false;
-      breaker.cancel();
-      runGameTicks(dt);
-      multiplayer.update(dt);
-      preloadChunksAroundPlayer();
-      updateHTMLUI();
-      return;
-    }
 
-    player.inputLocked = textInputMode;
-    player.autoJump = autoJump;
-    player.update(input, dt, time, noClipMode, creativeMode);
-    if (noClipMode && !player.creativeFlying) noClipMode = false;
-
-    if (isDropKeyHeld && !inventoryOpen && !openContainer) {
-      const now = performance.now();
-      if (now - lastDropTime >= dropInterval) {
-        throwSelectedBlock();
-        lastDropTime = now;
+      if (isDropKeyHeld && !inventoryOpen && !openContainer) {
+        const now = performance.now();
+        if (now - lastDropTime >= dropInterval) {
+          throwSelectedBlock();
+          lastDropTime = now;
+        }
       }
-    }
 
-    const uiOpen = inventoryOpen || !!openContainer || textInputMode;
-    const mouseActive = (input.mouse.leftDown || input.mouse.rightDown) && !uiOpen;
-    updateHeldPlacement(uiOpen);
-    if (mouseActive) {
-      if (!player.swingAnimation.active || !player.swingAnimation.continuous) {
-        player.startContinuousSwing(world.time);
+      const uiOpen = inventoryOpen || !!openContainer || textInputMode;
+      const mouseActive = (input.mouse.leftDown || input.mouse.rightDown) && !uiOpen;
+      updateHeldPlacement(uiOpen);
+      if (mouseActive) {
+        if (!player.swingAnimation.active || !player.swingAnimation.continuous) {
+          player.startContinuousSwing(world.time);
+        }
+      } else if (player.swingAnimation.continuous) {
+        player.stopSwing();
       }
-    } else if (player.swingAnimation.continuous) {
-      player.stopSwing();
-    }
 
-    if (input.mouse.leftDown && !uiOpen && multiplayer.canBuild()) {
-      const tileX = Math.floor(camera.screenToWorldX(input.mouse.x) / TILE_SIZE);
-      const tileY = Math.floor(camera.screenToWorldY(input.mouse.y) / TILE_SIZE);
-      if (world.inBounds(tileX, tileY) && inReach(tileX, tileY)) {
-        // One press does one kind of thing: started on a block, it only breaks blocks;
-        // started on the background (a wall, or a background block you placed), it only
-        // breaks the background. Background build mode is always the background.
-        const id = world.getBlockId(tileX, tileY);
-        const cell = world.getCell(tileX, tileY);
-        const hasBg = cell.meta?.layer === 'bg' || !!cell.meta?.bgId;
-        const isBackground = id === 'air' || id === 'water' || hasBg;
-        const onBackground = backgroundBuild || wallPress;
-        if (isBackground !== onBackground) breaker.cancel();
-        else {
-          let wallId = null;
-          if (onBackground) {
-            wallId = cell.meta?.bgId || (cell.meta?.layer === 'bg' ? id : window.renderer?.naturalWallId(tileX, tileY));
+      perf.startPhase('updateBreaker');
+      if (input.mouse.leftDown && !uiOpen && multiplayer.canBuild()) {
+        const tileX = Math.floor(camera.screenToWorldX(input.mouse.x) / TILE_SIZE);
+        const tileY = Math.floor(camera.screenToWorldY(input.mouse.y) / TILE_SIZE);
+        if (world.inBounds(tileX, tileY) && inReach(tileX, tileY)) {
+          // One press does one kind of thing: started on a block, it only breaks blocks;
+          // started on the background (a wall, or a background block you placed), it only
+          // breaks the background. Background build mode is always the background.
+          const id = world.getBlockId(tileX, tileY);
+          const cell = world.getCell(tileX, tileY);
+          const hasForeground = id !== 'air' && id !== 'water' && cell.meta?.layer !== 'bg';
+          const onBackground = backgroundBuild || wallPress;
+          if (hasForeground && !onBackground) {
+            breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), null);
+          } else if (onBackground) {
+            const wallId = cell.meta?.bgId || (cell.meta?.layer === 'bg' ? id : window.renderer?.naturalWallId(tileX, tileY));
+            if (wallId) {
+              breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), wallId);
+            } else {
+              breaker.cancel();
+            }
+          } else {
+            breaker.cancel();
           }
-          breaker.begin(world, tileX, tileY, creativeMode, inventory.getSlot(selectedIndex), wallId);
+        } else {
+          breaker.cancel();
         }
       } else {
         breaker.cancel();
       }
-    } else {
-      breaker.cancel();
+
+      const broke = breaker.update(world, dt * gameSpeed);
+      if (broke && broke.id) handleBrokenBlock(broke);
+      perf.endPhase('updateBreaker');
+
+      perf.startPhase('updateTicks');
+      runGameTicks(dt);
+      perf.endPhase('updateTicks');
+
+      perf.startPhase('updateMultiplayer');
+      multiplayer.update(dt);
+      perf.endPhase('updateMultiplayer');
+
+      if (openContainer) {
+        const blockId = world.getBlockId(openContainer.tileX, openContainer.tileY);
+        if (!isChest(blockId) && blockId !== 'crafting_table' && blockId !== 'furnace' && blockId !== 'forging_table') closeInventory();
+        // Keep an open furnace's progress bars moving smoothly.
+        else if (openContainer.kind === 'furnace' && !multiplayer.isGuest) registry.get('furnace').tick(world, openContainer.tileX, openContainer.tileY, openContainer.meta);
+      }
+
+      perf.startPhase('updateChunks');
+      preloadChunksAroundPlayer();
+      perf.endPhase('updateChunks');
+
+      perf.startPhase('updateCamera');
+      const head = player.getHeadAnchor();
+      camera.followTo(head.x, head.y, canvas, world);
+      perf.endPhase('updateCamera');
+
+      perf.startPhase('updateUI');
+      updateHTMLUI();
+      perf.endPhase('updateUI');
+    } finally {
+      perf.endPhase('updateTotal');
     }
-
-    const broke = breaker.update(world, dt * gameSpeed);
-    if (broke && broke.id) handleBrokenBlock(broke);
-
-    runGameTicks(dt);
-    multiplayer.update(dt);
-
-    if (openContainer) {
-      const blockId = world.getBlockId(openContainer.tileX, openContainer.tileY);
-      if (!isChest(blockId) && blockId !== 'crafting_table' && blockId !== 'furnace' && blockId !== 'forging_table') closeInventory();
-      // Keep an open furnace's progress bars moving smoothly.
-      else if (openContainer.kind === 'furnace' && !multiplayer.isGuest) registry.get('furnace').tick(world, openContainer.tileX, openContainer.tileY, openContainer.meta);
-    }
-
-    preloadChunksAroundPlayer();
-
-    const head = player.getHeadAnchor();
-    camera.followTo(head.x, head.y, canvas, world);
-
-    updateHTMLUI();
   };
 
   const renderFunction = () => {

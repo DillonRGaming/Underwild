@@ -146,8 +146,39 @@ export class ItemEntity {
       return ITEM_CONFIG.maxLife > 0 && this.life > ITEM_CONFIG.maxLife;
     }
     
+    // Horizontal movement & wall collision
     this.x += this.vx;
+    const midY = this.y + this.height * 0.5;
+    const midTileY = Math.floor(midY / 16);
+    if (this.vx > 0) {
+      const rightTile = Math.floor((this.x + this.width) / 16);
+      if (solidAt(rightTile, midTileY)) {
+        this.x = rightTile * 16 - this.width - 0.01;
+        this.vx = -this.vx * 0.3;
+      }
+    } else if (this.vx < 0) {
+      const leftTile = Math.floor(this.x / 16);
+      if (solidAt(leftTile, midTileY)) {
+        this.x = (leftTile + 1) * 16 + 0.01;
+        this.vx = -this.vx * 0.3;
+      }
+    }
+
+    // Vertical movement & ground/ceiling collision
     this.y += this.vy;
+
+    if (this.vy < 0) {
+      const headTileY = Math.floor(this.y / 16);
+      const leftHeadX = Math.floor(this.x / 16);
+      const rightHeadX = Math.floor((this.x + this.width - 0.1) / 16);
+      for (let tileX = leftHeadX; tileX <= rightHeadX; tileX++) {
+        if (world.inBounds(tileX, headTileY) && solidAt(tileX, headTileY)) {
+          this.y = (headTileY + 1) * 16;
+          this.vy = 0;
+          break;
+        }
+      }
+    }
 
     if (this.y > world.height * 16) {
       this.y = world.height * 16 - this.height;
@@ -167,33 +198,22 @@ export class ItemEntity {
       if (world.inBounds(tileX, feetTileY)) {
         if (solidAt(tileX, feetTileY)) {
           this.y = feetTileY * 16 - this.height;
-          this.vy = 0;
-          this.onGround = true;
-          this.vx = 0;
+          if (this.vy > 1.2) {
+            this.vy = -this.vy * 0.25;
+          } else {
+            this.vy = 0;
+            this.onGround = true;
+          }
+          this.vx *= 0.65;
+          if (Math.abs(this.vx) < 0.05) this.vx = 0;
           break;
         }
       }
     }
 
-    const centerX = this.x + this.width / 2;
-    const centerY = this.y + this.height / 2;
-    const centerTileX = Math.floor(centerX / 16);
-    const centerTileY = Math.floor(centerY / 16);
-
-    if (world.inBounds(centerTileX, centerTileY)) {
-      if (solidAt(centerTileX, centerTileY)) {
-        const tileTop = centerTileY * 16;
-        const tileBottom = tileTop + 16;
-        
-        if (Math.abs(this.y - tileTop) < Math.abs(this.y + this.height - tileBottom)) {
-          this.y = tileTop - this.height;
-          this.vy = 0;
-          this.vx = 0;
-        } else {
-          this.y = tileBottom;
-          this.vy = 0;
-        }
-      }
+    if (this.onGround) {
+      this.vx *= 0.75;
+      if (Math.abs(this.vx) < 0.05) this.vx = 0;
     }
 
     if (ITEM_CONFIG.maxLife > 0 && this.life > ITEM_CONFIG.maxLife) {

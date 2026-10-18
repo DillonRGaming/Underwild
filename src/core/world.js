@@ -2,6 +2,7 @@ import { settleGrass } from '../../assets/blocks/grassSpread.js';
 import { sampleBlockAt } from '../logic/terrainGen.js';
 import { TILE_SIZE } from './utils.js';
 import { WaterSim, waterMass } from '../logic/water.js';
+import { perf } from './perf.js';
 
 const LIGHT_SCALE = 2;
 const MAX_LIGHT = 15 * LIGHT_SCALE;
@@ -402,13 +403,15 @@ export class World {
       // A block in front of a background block keeps it (meta.bgId); clearing the front
       // block puts the background block back. A mined-out natural wall stays gone.
       const keepBg = old?.meta?.bgId;
+      const keepBgMeta = old?.meta?.bgMeta;
       const keepNoWall = old?.meta?.noWall;
       if (old?.meta?.layer === 'bg' && meta?.layer !== 'bg') {
-        if (id !== 'air') meta = { ...(meta || {}), bgId: old.id };
+        if (id !== 'air') meta = { ...(meta || {}), bgId: old.id, bgMeta: old.meta };
       } else if (keepBg && meta?.layer !== 'bg') {
-        if (id === 'air') { id = keepBg; meta = { layer: 'bg' }; }
-        else if (!meta?.bgId) meta = { ...(meta || {}), bgId: keepBg };
-      } else if (keepNoWall && !meta?.noWall) {
+        if (id === 'air') { id = keepBg; meta = keepBgMeta || { layer: 'bg' }; }
+        else if (!meta?.bgId) meta = { ...(meta || {}), bgId: keepBg, ...(keepBgMeta ? { bgMeta: keepBgMeta } : {}) };
+      }
+      if (keepNoWall && !meta?.noWall) {
         meta = { ...(meta || {}), noWall: true };
       }
       chunk.cells[y * this.chunkSize + rx] = { id, meta };
@@ -550,12 +553,17 @@ export class World {
       for (let y = 0; y < height; y++) {
         const cell = chunk.cells[y * chunkSize + rx];
         const type = cell ? this.registry.get(cell.id) : null;
-        // Underground air dims the daylight coming down, unless its wall was dug out:
-        // then it's open to the sky, like outdoors.
-        if (sky > 0 && y > surface && !(type && type.solid) && !cell?.meta?.noWall) sky = Math.max(0, sky - 1);
+        const isFgSolid = type && type.solid && cell?.meta?.layer !== 'bg';
+        const isOpenBack = cell?.meta?.noWall && !cell?.meta?.bgId && cell?.meta?.layer !== 'bg';
+        // Open sky behind receives full daylight; underground air dims it unless the wall was dug out
+        if (isOpenBack && !isFgSolid) {
+          sky = MAX_LIGHT;
+        } else if (sky > 0 && y > surface && !isFgSolid && !cell?.meta?.noWall) {
+          sky = Math.max(0, sky - 1);
+        }
         lightMap[y * width + x] = sky;
         blockLightMap[y * width + x] = 0;
-        if (sky > 0 && type && type.solid) {
+        if (sky > 0 && isFgSolid) {
           sky = this._isOpaque(type) ? 0 : Math.max(0, sky - Math.floor(MAX_LIGHT * (type.opacity || 0)));
         }
       }
@@ -603,6 +611,7 @@ export class World {
     const cells = this._lightCellsFor(chunkX);
     if (!cells) return null;
     const cell = cells[y * this.chunkSize + (x - chunkX * this.chunkSize)];
+    if (cell?.meta?.layer === 'bg') return null;
     return cell ? this.registry.get(cell.id) : null;
   }
 
@@ -614,6 +623,7 @@ export class World {
     const rx = x - chunkX * this.chunkSize;
     for (let y = 0; y < this.height; y++) {
       const cell = cells[y * this.chunkSize + rx];
+      if (cell?.meta?.layer === 'bg') continue;
       if (this._isOpaque(cell ? this.registry.get(cell.id) : null)) return y;
     }
     return this.height;
@@ -635,7 +645,9 @@ export class World {
         if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
         if (!this.isChunkLoaded(Math.floor(nx / chunkSize))) continue;
         const type = this.getBlockType(nx, ny);
-        const opaque = this._isOpaque(type);
+        const cell = this.getCell(nx, ny);
+        const isBg = cell?.meta?.layer === 'bg';
+        const opaque = !isBg && this._isOpaque(type);
         const cost = sourceOpaque
           ? SOLID_LIGHT_COST
           : opaque ? airCost : Math.max(airCost, this._lightAttenuation(type) - LIGHT_SCALE + airCost);
@@ -754,11 +766,15 @@ export class World {
 
   tick(dt) {
     if (this.remote) {
+      perf.startPhase('tickLighting');
       this.flushLighting();
+      perf.endPhase('tickLighting');
       return;
     }
     // Water steps every game tick.
+    perf.startPhase('tickWater');
     this.water.step(dt);
+    perf.endPhase('tickWater');
     // Falling blocks tick on a fixed clock so they drop at a steady pace;
     // everything else keeps the old random ~10%-of-frames cadence.
     this._fallAccum = (this._fallAccum || 0) + dt;
@@ -766,7 +782,9 @@ export class World {
     if (fallDue) this._fallAccum = Math.min(this._fallAccum - FALL_TICK_INTERVAL, FALL_TICK_INTERVAL);
     const slowDue = Math.random() < 0.1;
     if (!fallDue && !slowDue) {
+      perf.startPhase('tickLighting');
       this.flushLighting();
+      perf.endPhase('tickLighting');
       return;
     }
 
@@ -774,11 +792,13 @@ export class World {
     const pending = [];
     for (const chunk of this.chunks.values()) {
       if (!chunk || !chunk.cells) continue;
-      for (let i = 0; i < chunk.cells.length; i++) {
-        const cell = chunk.cells[i];
-        if (!cell) continue;
-        const t = this.registry.get(cell.id);
-        if (t && typeof t.tick === 'function' && (t.falls ? fallDue : slowDue)) pending.push(chunk, i, cell, t);
+      const cells = chunk.cells;
+      const len = cells.length;
+      for (let i = 0; i < len; i++) {
+        const cell = cells[i];
+        if (!cell || cell.id === 'air' || cell.id === 'stone') continue;
+        const t = this._getTickDef(cell.id);
+        if (t && (t.falls ? fallDue : slowDue)) pending.push(chunk, i, cell, t);
       }
     }
 
@@ -792,6 +812,19 @@ export class World {
       if (!cell.meta) cell.meta = {};
       pending[p + 3].tick(this, chunk.chunkX * this.chunkSize + rx, y, cell.meta, time);
     }
+    perf.startPhase('tickLighting');
     this.flushLighting();
+    perf.endPhase('tickLighting');
+  }
+
+  _getTickDef(id) {
+    if (!this._tickCache) this._tickCache = new Map();
+    let def = this._tickCache.get(id);
+    if (def === undefined) {
+      const t = this.registry.get(id);
+      def = (t && typeof t.tick === 'function') ? t : null;
+      this._tickCache.set(id, def);
+    }
+    return def;
   }
 }

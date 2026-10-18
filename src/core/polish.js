@@ -59,7 +59,6 @@ export function drawHills(ctx, camera, canvas, seed, sky, light) {
     const first = Math.floor(off);
     const shift = (off - first) * u;
     const cols = Math.ceil(canvas.width / u) + 2;
-    ctx.fillStyle = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
     const tops = new Array(cols);
     for (let i = 0; i < cols; i++) {
       const wx = first + i;
@@ -74,10 +73,34 @@ export function drawHills(ctx, camera, canvas, seed, sky, light) {
       }
       const top = Math.round((base - h) / u) * u;
       tops[i] = top;
-      ctx.fillRect(Math.round(i * u - shift), top, u, canvas.height - top);
+    }
+
+    // Batched polygon fill for the hill body:
+    ctx.beginPath();
+    const xStart = Math.round(0 - shift);
+    ctx.moveTo(xStart, canvas.height);
+    for (let i = 0; i < cols; i++) {
+      const x0 = Math.round(i * u - shift);
+      const x1 = Math.round((i + 1) * u - shift);
+      const top = tops[i];
+      if (i === 0) ctx.lineTo(x0, top);
+      ctx.lineTo(x1, top);
+    }
+    const xEnd = Math.round(cols * u - shift);
+    ctx.lineTo(xEnd, canvas.height);
+    ctx.closePath();
+    ctx.fillStyle = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    ctx.fill();
+
+    // Batched path for hill rim:
+    ctx.beginPath();
+    for (let i = 0; i < cols; i++) {
+      const x0 = Math.round(i * u - shift);
+      const w = Math.round((i + 1) * u - shift) - x0;
+      ctx.rect(x0, tops[i], w, u);
     }
     ctx.fillStyle = `rgb(${rim[0]}, ${rim[1]}, ${rim[2]})`;
-    for (let i = 0; i < cols; i++) ctx.fillRect(Math.round(i * u - shift), tops[i], u, u);
+    ctx.fill();
   }
 }
 
@@ -93,36 +116,71 @@ export function isOutlined(type, meta) {
 // rounded open corners, and soft shadows cast onto the walls behind (on `main`).
 export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
   const { world, camera, registry } = r;
-  const solidAt = (x, y) => {
-    if (!world.inBounds(x, y)) return true;
-    if (!world.isChunkLoaded(world.chunkXFor(x))) return true;
-    const cell = world.getCell(x, y);
-    return isOutlined(registry.get(cell.id), cell.meta);
-  };
-  const getShape = (x, y) => {
-    if (!world.inBounds(x, y)) return 'full';
-    if (!world.isChunkLoaded(world.chunkXFor(x))) return 'full';
-    const cell = world.getCell(x, y);
-    const type = registry.get(cell.id);
-    if (!isOutlined(type, cell.meta)) return null;
-    return type?.shape || 'full';
-  };
-  const getSlabPos = (x, y) => {
-    if (!world.inBounds(x, y)) return 'bottom';
-    return world.getCell(x, y)?.meta?.slabPos || 'bottom';
-  };
 
   const u = Math.max(1, Math.round(camera.zoom));
   const sh = u * 2;
   const outlines = polishOn('outlines'), rounding = polishOn('rounding');
   const seams = polishOn('seams'), wallShadows = polishOn('wallShadows');
-  for (let x = startX; x <= endX; x++) {
-    if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
-    for (let y = startY; y <= endY; y++) {
+
+  const minX = startX - 1, maxX = endX + 1;
+  const minY = startY - 1, maxY = endY + 1;
+  const gridW = maxX - minX + 1;
+  const gridH = maxY - minY + 1;
+  const totalCells = gridW * gridH;
+
+  // 0: not outlined / open space
+  // 1: full solid block
+  // 2: slab bottom
+  // 3: slab top
+  // 4: leaves
+  if (!edgePass._shapeGrid || edgePass._shapeGrid.length < totalCells) {
+    edgePass._shapeGrid = new Uint8Array(totalCells);
+  }
+  const shapeGrid = edgePass._shapeGrid;
+
+  // Pre-pass: populate shapeGrid once for the visible viewport window
+  for (let x = minX; x <= maxX; x++) {
+    const chunkLoaded = world.inBounds(x, 0) && world.isChunkLoaded(world.chunkXFor(x));
+    const colOff = x - minX;
+    for (let y = minY; y <= maxY; y++) {
+      const idx = (y - minY) * gridW + colOff;
+      if (!chunkLoaded || !world.inBounds(x, y)) {
+        shapeGrid[idx] = 1; // full boundary
+        continue;
+      }
       const cell = world.getCell(x, y);
       const type = registry.get(cell.id);
-      if (!isOutlined(type, cell.meta)) continue;
-      if (cell.meta?.fellAt) continue;
+      if (!isOutlined(type, cell.meta) || cell.meta?.fellAt) {
+        shapeGrid[idx] = 0;
+      } else if (type?.leaves) {
+        shapeGrid[idx] = 4;
+      } else if (type?.shape === 'slab') {
+        shapeGrid[idx] = cell.meta?.slabPos === 'top' ? 3 : 2;
+      } else {
+        shapeGrid[idx] = 1;
+      }
+    }
+  }
+
+  // Batched path drawing to eliminate thousands of separate fillRect calls
+  const seamPath = seams ? new Path2D() : null;
+  const cornerPath = seams ? new Path2D() : null;
+  const outlinePath = outlines ? new Path2D() : null;
+  const shadowPath = wallShadows ? new Path2D() : null;
+  let hasSeams = false, hasCorners = false, hasOutlines = false, hasShadows = false;
+
+  // Reusable corner buffer for rounded corners: [cx, cy, dx, dy]
+  if (!edgePass._cornerBuf) {
+    edgePass._cornerBuf = new Int32Array(2048);
+  }
+  let cornerCount = 0;
+
+  for (let x = startX; x <= endX; x++) {
+    const colIdx = x - minX;
+    for (let y = startY; y <= endY; y++) {
+      const rowIdx = y - minY;
+      const selfShape = shapeGrid[rowIdx * gridW + colIdx];
+      if (selfShape === 0) continue;
 
       const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
       const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
@@ -130,41 +188,38 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
       const ey = Math.round(camera.worldToScreenY((y + 1) * TILE_SIZE));
       const w = ex - sx, h = ey - sy;
 
-      const isSlab = type?.shape === 'slab';
-      const slabPos = cell.meta?.slabPos || 'bottom';
+      const leftShape = shapeGrid[rowIdx * gridW + (colIdx - 1)];
+      const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
+      const upShape = shapeGrid[(rowIdx - 1) * gridW + colIdx];
+      const downShape = shapeGrid[(rowIdx + 1) * gridW + colIdx];
 
-      if (isSlab) {
-        // Slab occupies half the block
-        const slabY = slabPos === 'top' ? sy : sy + Math.floor(h * 0.5);
-        const slabH = slabPos === 'top' ? Math.floor(h * 0.5) : ey - slabY;
+      if (selfShape === 2 || selfShape === 3) {
+        // Slab
+        const isTopSlab = selfShape === 3;
+        const slabY = isTopSlab ? sy : sy + Math.floor(h * 0.5);
+        const slabH = isTopSlab ? Math.floor(h * 0.5) : ey - slabY;
 
-        const leftShape = getShape(x - 1, y);
-        const rightShape = getShape(x + 1, y);
-        const upShape = getShape(x, y - 1);
-        const downShape = getShape(x, y + 1);
+        const leftOpen = leftShape === 0 || ((leftShape === 2 || leftShape === 3) && (leftShape === 3) !== isTopSlab);
+        const rightOpen = rightShape === 0 || ((rightShape === 2 || rightShape === 3) && (rightShape === 3) !== isTopSlab);
+        const topOpen = isTopSlab ? (upShape === 0) : true;
+        const bottomOpen = isTopSlab ? true : (downShape === 0);
 
-        const leftOpen = !leftShape || (leftShape === 'slab' && getSlabPos(x - 1, y) !== slabPos);
-        const rightOpen = !rightShape || (rightShape === 'slab' && getSlabPos(x + 1, y) !== slabPos);
-        const topOpen = slabPos === 'top' ? !upShape : true;
-        const bottomOpen = slabPos === 'bottom' ? !downShape : true;
-
-        if (seams && !registry.get(cell.id)?.leaves) {
-          layerCtx.fillStyle = SEAM;
-          layerCtx.fillRect(sx, slabY, w, u);
-          layerCtx.fillRect(sx, slabY + slabH - u, w, u);
-          layerCtx.fillRect(sx, slabY + u, u, slabH - 2 * u);
-          layerCtx.fillRect(ex - u, slabY + u, u, slabH - 2 * u);
+        if (seamPath && selfShape !== 4) {
+          seamPath.rect(sx, slabY, w, u);
+          seamPath.rect(sx, slabY + slabH - u, w, u);
+          seamPath.rect(sx, slabY + u, u, slabH - 2 * u);
+          seamPath.rect(ex - u, slabY + u, u, slabH - 2 * u);
+          hasSeams = true;
         }
 
-        if (outlines) {
-          layerCtx.fillStyle = OUTLINE;
-          if (topOpen) layerCtx.fillRect(sx, slabY, w, u);
-          if (bottomOpen) layerCtx.fillRect(sx, slabY + slabH - u, w, u);
-          if (leftOpen) layerCtx.fillRect(sx, slabY, u, slabH);
-          if (rightOpen) layerCtx.fillRect(ex - u, slabY, u, slabH);
+        if (outlinePath) {
+          if (topOpen) outlinePath.rect(sx, slabY, w, u);
+          if (bottomOpen) outlinePath.rect(sx, slabY + slabH - u, w, u);
+          if (leftOpen) outlinePath.rect(sx, slabY, u, slabH);
+          if (rightOpen) outlinePath.rect(ex - u, slabY, u, slabH);
+          hasOutlines = true;
         }
 
-        // Round slab's open corners:
         if (rounding) {
           const slabCorners = [
             [topOpen && leftOpen, sx, slabY, 1, 1],
@@ -175,98 +230,151 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
           for (let i = 0; i < 4; i++) {
             const [openC, cx, cy, dx, dy] = slabCorners[i];
             if (!openC) continue;
-            layerCtx.clearRect(cx, cy, u, u);
-            if (outlines) {
-              layerCtx.fillStyle = OUTLINE;
-              layerCtx.fillRect(cx + dx * u, cy + dy * u, u, u);
+            if (cornerCount + 4 > edgePass._cornerBuf.length) {
+              const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+              newBuf.set(edgePass._cornerBuf);
+              edgePass._cornerBuf = newBuf;
             }
+            edgePass._cornerBuf[cornerCount++] = cx;
+            edgePass._cornerBuf[cornerCount++] = cy;
+            edgePass._cornerBuf[cornerCount++] = dx;
+            edgePass._cornerBuf[cornerCount++] = dy;
           }
         }
         continue;
       }
 
-      // Full blocks:
-      const leftShape = getShape(x - 1, y);
-      const rightShape = getShape(x + 1, y);
-      const upShape = getShape(x, y - 1);
-      const downShape = getShape(x, y + 1);
+      // Full blocks & leaves
+      const up = upShape === 0;
+      const down = downShape === 0;
+      const left = leftShape === 0;
+      const right = rightShape === 0;
 
-      const up = !upShape;
-      const down = !downShape;
-      const left = !leftShape;
-      const right = !rightShape;
+      if (seamPath && selfShape !== 4) {
+        seamPath.rect(sx, sy, w, u);
+        seamPath.rect(sx, ey - u, w, u);
+        seamPath.rect(sx, sy + u, u, h - 2 * u);
+        seamPath.rect(ex - u, sy + u, u, h - 2 * u);
+        hasSeams = true;
 
-      // Every block: a faint shadow around its edge and darker corner pixels, so blocks
-      // read as separate pieces with softened corners.
-      if (seams && !registry.get(cell.id)?.leaves) {
-        layerCtx.fillStyle = SEAM;
-        layerCtx.fillRect(sx, sy, w, u);
-        layerCtx.fillRect(sx, ey - u, w, u);
-        layerCtx.fillRect(sx, sy + u, u, h - 2 * u);
-        layerCtx.fillRect(ex - u, sy + u, u, h - 2 * u);
-        layerCtx.fillStyle = CORNER;
-        layerCtx.fillRect(sx, sy, u, u);
-        layerCtx.fillRect(ex - u, sy, u, u);
-        layerCtx.fillRect(sx, ey - u, u, u);
-        layerCtx.fillRect(ex - u, ey - u, u, u);
+        cornerPath.rect(sx, sy, u, u);
+        cornerPath.rect(ex - u, sy, u, u);
+        cornerPath.rect(sx, ey - u, u, u);
+        cornerPath.rect(ex - u, ey - u, u, u);
+        hasCorners = true;
       }
-      if (!up && !down && !left && !right && leftShape !== 'slab' && rightShape !== 'slab') continue;
-      if (registry.get(cell.id)?.leaves) continue; // leaves keep their own ragged edge
-      layerCtx.fillStyle = OUTLINE;
-      if (outlines) {
-        if (up) layerCtx.fillRect(sx, sy, w, u);
-        if (down) layerCtx.fillRect(sx, ey - u, w, u);
+
+      if (!up && !down && !left && !right && leftShape !== 2 && leftShape !== 3 && rightShape !== 2 && rightShape !== 3) continue;
+      if (selfShape === 4) continue; // leaves keep their own ragged edge
+
+      if (outlinePath) {
+        if (up) outlinePath.rect(sx, sy, w, u);
+        if (down) outlinePath.rect(sx, ey - u, w, u);
 
         const midH = Math.floor(h * 0.5);
         if (left) {
-          layerCtx.fillRect(sx, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
-        } else if (leftShape === 'slab') {
-          // If neighbour is a bottom slab, upper half is open to air!
-          if (getSlabPos(x - 1, y) === 'bottom') {
-            layerCtx.fillRect(sx, sy + (up ? u : 0), u, midH - (up ? u : 0));
-          } else {
-            layerCtx.fillRect(sx, sy + midH, u, h - midH - (down ? u : 0));
-          }
+          outlinePath.rect(sx, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
+        } else if (leftShape === 2) {
+          outlinePath.rect(sx, sy + (up ? u : 0), u, midH - (up ? u : 0));
+        } else if (leftShape === 3) {
+          outlinePath.rect(sx, sy + midH, u, h - midH - (down ? u : 0));
         }
 
         if (right) {
-          layerCtx.fillRect(ex - u, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
-        } else if (rightShape === 'slab') {
-          if (getSlabPos(x + 1, y) === 'bottom') {
-            layerCtx.fillRect(ex - u, sy + (up ? u : 0), u, midH - (up ? u : 0));
-          } else {
-            layerCtx.fillRect(ex - u, sy + midH, u, h - midH - (down ? u : 0));
+          outlinePath.rect(ex - u, sy + (up ? u : 0), u, h - (up ? u : 0) - (down ? u : 0));
+        } else if (rightShape === 2) {
+          outlinePath.rect(ex - u, sy + (up ? u : 0), u, midH - (up ? u : 0));
+        } else if (rightShape === 3) {
+          outlinePath.rect(ex - u, sy + midH, u, h - midH - (down ? u : 0));
+        }
+        hasOutlines = true;
+      }
+
+      // Round open corners
+      if (rounding) {
+        const leftTopOpen = left || leftShape === 2;
+        const rightTopOpen = right || rightShape === 2;
+        const corners = [
+          [up && leftTopOpen, sx, sy, 1, 1],
+          [up && rightTopOpen, ex - u, sy, -1, 1],
+          [down && left, sx, ey - u, 1, -1],
+          [down && right, ex - u, ey - u, -1, -1]
+        ];
+        let wallDrawn = false;
+        for (let i = 0; i < 4; i++) {
+          const [open, cx, cy, dx, dy] = corners[i];
+          if (!open) continue;
+          if (!wallDrawn) {
+            const ox = i % 2 === 0 ? -1 : 1;
+            const oy = i < 2 ? -1 : 1;
+            const skyDiag = !r.hasBackdrop(x + ox, y + oy) && !r.hasBackdrop(x, y + oy) && !r.hasBackdrop(x + ox, y);
+            if (!skyDiag) {
+              wallDrawn = true;
+              const prev = r.ctx;
+              r.ctx = mainCtx;
+              r.drawBackgroundWall(x, y);
+              r.ctx = prev;
+            }
           }
+          if (cornerCount + 4 > edgePass._cornerBuf.length) {
+            const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+            newBuf.set(edgePass._cornerBuf);
+            edgePass._cornerBuf = newBuf;
+          }
+          edgePass._cornerBuf[cornerCount++] = cx;
+          edgePass._cornerBuf[cornerCount++] = cy;
+          edgePass._cornerBuf[cornerCount++] = dx;
+          edgePass._cornerBuf[cornerCount++] = dy;
         }
       }
-      // Round the open corners: cut the corner pixel, darken the one inside it.
-      const leftTopOpen = left || (leftShape === 'slab' && getSlabPos(x - 1, y) === 'bottom');
-      const rightTopOpen = right || (rightShape === 'slab' && getSlabPos(x + 1, y) === 'bottom');
-      const corners = [[up && leftTopOpen, sx, sy, 1, 1], [up && rightTopOpen, ex - u, sy, -1, 1], [down && left, sx, ey - u, 1, -1], [down && right, ex - u, ey - u, -1, -1]];
-      const skyAt = (ox, oy) => !r.hasBackdrop(x + ox, y + oy);
-      const cornerSky = [skyAt(-1, -1) && skyAt(0, -1) && skyAt(-1, 0), skyAt(1, -1) && skyAt(0, -1) && skyAt(1, 0),
-        skyAt(-1, 1) && skyAt(0, 1) && skyAt(-1, 0), skyAt(1, 1) && skyAt(0, 1) && skyAt(1, 0)];
-      let wallDrawn = false;
-      for (let i = 0; i < 4; i++) {
-        const [open, cx, cy, dx, dy] = corners[i];
-        if (!open || !rounding) continue;
-        if (!cornerSky[i] && !wallDrawn) {
-          wallDrawn = true;
-          const prev = r.ctx;
-          r.ctx = mainCtx;
-          r.drawBackgroundWall(x, y);
-          r.ctx = prev;
-          layerCtx.fillStyle = OUTLINE;
+
+      if (shadowPath) {
+        if (down && !r.isOpenSky(x, y + 1) && r.hasBackdrop(x, y + 1)) {
+          shadowPath.rect(sx, ey, w, sh);
+          hasShadows = true;
         }
-        layerCtx.clearRect(cx, cy, u, u);
-        if (outlines) layerCtx.fillRect(cx + dx * u, cy + dy * u, u, u);
+        if (right && !r.isOpenSky(x + 1, y) && r.hasBackdrop(x + 1, y)) {
+          shadowPath.rect(ex, sy, sh, h);
+          hasShadows = true;
+        }
       }
-      // Shadows on the wall behind open neighbours below and to the right.
-      if (!wallShadows) continue;
-      mainCtx.fillStyle = WALL_SHADOW;
-      if (down && !r.isOpenSky(x, y + 1)) mainCtx.fillRect(sx, ey, w, sh);
-      if (right && !r.isOpenSky(x + 1, y)) mainCtx.fillRect(ex, sy, sh, h);
     }
+  }
+
+  // 1. Execute batched fills for block seams, corners, and straight edge outlines
+  if (hasSeams) {
+    layerCtx.fillStyle = SEAM;
+    layerCtx.fill(seamPath);
+  }
+  if (hasCorners) {
+    layerCtx.fillStyle = CORNER;
+    layerCtx.fill(cornerPath);
+  }
+  if (hasOutlines) {
+    layerCtx.fillStyle = OUTLINE;
+    layerCtx.fill(outlinePath);
+  }
+
+  // 2. Round the open corners: cut the corner pixel, darken the one inside it
+  if (rounding && cornerCount > 0) {
+    const cBuf = edgePass._cornerBuf;
+    for (let i = 0; i < cornerCount; i += 4) {
+      layerCtx.clearRect(cBuf[i], cBuf[i + 1], u, u);
+    }
+    if (outlines) {
+      const innerOutlinePath = new Path2D();
+      for (let i = 0; i < cornerCount; i += 4) {
+        innerOutlinePath.rect(cBuf[i] + cBuf[i + 2] * u, cBuf[i + 1] + cBuf[i + 3] * u, u, u);
+      }
+      layerCtx.fillStyle = OUTLINE;
+      layerCtx.fill(innerOutlinePath);
+    }
+  }
+
+  // 3. Wall shadows cast on mainCtx
+  if (hasShadows) {
+    mainCtx.fillStyle = WALL_SHADOW;
+    mainCtx.fill(shadowPath);
   }
 }
 

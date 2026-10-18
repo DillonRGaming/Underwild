@@ -28,13 +28,23 @@ export class Placer {
     if (!type) return false;
     // A background block sits behind whatever is in front: put one behind a torch, plant...
     const existingType = this.registry.get(existing);
-    if (background && existing !== 'air' && existing !== 'water' && existingType && !existingType.solid && type.solid && existingCell.meta?.layer !== 'bg' && !existingCell.meta?.bgId) {
+    if (background && existing !== 'air' && existing !== 'water' && existingType && (!existingType.solid || (existingType.shape && existingType.shape !== 'full')) && type.solid && existingCell.meta?.layer !== 'bg' && !existingCell.meta?.bgId) {
       world.setBlock(tileX, tileY, existing, { ...(existingCell.meta || {}), bgId: type.id });
       return true;
     }
     // Something placed in front of a background block keeps it behind (see World.setBlock).
     let behind = null;
-    if (!background && existingCell.meta?.layer === 'bg') { behind = existing; existing = 'air'; }
+    let behindMeta = null;
+    if (!background) {
+      if (existingCell.meta?.layer === 'bg') {
+        behind = existing;
+        behindMeta = existingCell.meta;
+        existing = 'air';
+      } else if (existingCell.meta?.bgId) {
+        behind = existingCell.meta.bgId;
+        behindMeta = existingCell.meta.bgMeta || { layer: 'bg' };
+      }
+    }
     // Placing into water pushes the water aside (World.setBlock / the water sim handle it).
     if (existing === 'water') existing = 'air';
     // Plants get replaced by whatever is put into them.
@@ -47,9 +57,9 @@ export class Placer {
     const touching = type.kind === 'trapdoor'
       ? [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => world.inBounds(tileX + dx, tileY + dy) && world.getBlockId(tileX + dx, tileY + dy) !== 'air')
       : hasSolidNeighbor(world, tileX, tileY);
-    // A torch or ladder can also hang on the wall behind it.
-    const hangs = wallBehind && (type.shape === 'torch' || type.climbable);
-    if (!touching && !isNatureBlock && !background && !hangs && !anywhere) return false;
+    // A background wall or block behind provides support for placing anything in front (slabs, torches, trapdoors, blocks...).
+    const supported = touching || wallBehind || isNatureBlock || background || anywhere;
+    if (!supported) return false;
     let meta = null;
     if (type.shape === 'slab') {
       const localY = mouseWorldY - tileY * TILE_SIZE;
@@ -69,7 +79,8 @@ export class Placer {
       else if (solid(tileX - 1, tileY)) meta = { wall: 'left' };
       else if (solid(tileX + 1, tileY)) meta = { wall: 'right' };
       // Hung on the wall behind it.
-      else if (!wallBehind && !anywhere) return false;
+      else if (wallBehind || anywhere) meta = { wall: 'back' };
+      else return false;
     } else if (type.climbable) {
       const solid = (x, y) => world.inBounds(x, y) && world.isSolidAt(x, y);
       const preferLeft = mouseWorldX - tileX * TILE_SIZE < TILE_SIZE / 2;
@@ -89,7 +100,7 @@ export class Placer {
       meta = type.placeMeta();
     }
     if (background) meta = { ...(meta || {}), layer: 'bg' };
-    if (behind) meta = { ...(meta || {}), bgId: behind };
+    if (behind) meta = { ...(meta || {}), bgId: behind, ...(behindMeta ? { bgMeta: behindMeta } : {}) };
     // Water here stays around plants and torches; a solid block pushes it aside (the water
     // sim does both when the block changes).
     world.setBlock(tileX, tileY, type.id, meta);

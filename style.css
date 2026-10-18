@@ -2712,3 +2712,8 @@ body.polish-ui-corners :is(
 
 /* A player's chosen colour: just the name's text. */
 .name-tag.colored { color: var(--tag-color); }
+
+/* On phones the chat log is only 3 messages tall. */
+body.touch-mode .chat-log {
+  max-height: calc(3 * var(--chat-line-height) + 2 * var(--hotbar-padding) + 4px);
+}

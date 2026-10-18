@@ -22,7 +22,7 @@ export class Breaker {
   begin(world, x, y, creativeMode = false, heldItem = null, wallId = null) {
     let id = world.getBlockId(x, y);
     const cell = world.getCell(x, y);
-    const wall = wallId || (cell.meta?.layer === 'bg' ? id : cell.meta?.bgId || null);
+    const wall = wallId || (cell.meta?.layer === 'bg' ? id : null);
     if (wall) id = wall;
     // Water can't be mined directly, but walls behind it can.
     if (!wall && (id === 'air' || id === 'water')) {
@@ -86,9 +86,10 @@ export class Breaker {
       if (cell.meta?.bgId) {
         const meta = { ...cell.meta };
         delete meta.bgId;
+        delete meta.bgMeta;
         world.setBlock(x, y, cell.id, meta);
       } else if (cell.meta?.layer === 'bg') {
-        world.setBlock(x, y, 'air', null);
+        world.setBlock(x, y, 'air', { noWall: true });
       } else {
         world.setBlock(x, y, cell.id === 'air' ? 'air' : cell.id, { ...(cell.meta || {}), noWall: true });
       }
@@ -115,7 +116,7 @@ export class Breaker {
         const aboveId = world.getBlockId(x, y - 1);
         const aboveType = this.registry.get(aboveId);
         const aboveMeta = world.getCell(x, y - 1).meta;
-        if (aboveType && ((aboveType.needsSupport && !aboveMeta?.wall) || aboveType.plant)) {
+        if (aboveType && ((aboveType.needsSupport && !aboveMeta?.wall && !aboveMeta?.bgId) || aboveType.plant)) {
           result.extraDrops.push({ id: aboveType.drop ?? aboveId, x, y: y - 1 });
           world.setBlock(x, y - 1, 'air', null);
         }
