@@ -23,6 +23,7 @@ public class LanDiscoveryPlugin extends Plugin {
 
     private DatagramSocket socket;
     private Thread thread;
+    private Thread askThread;
     private WifiManager.MulticastLock lock;
 
     @PluginMethod
@@ -65,6 +66,27 @@ public class LanDiscoveryPlugin extends Plugin {
             }
         }, "underwild-discovery");
         thread.start();
+        // Also ask hosts to answer directly (a phone host's own broadcasts can go missing).
+        final byte[] probe = "{\"game\":\"underwild\",\"query\":1}".getBytes(StandardCharsets.UTF_8);
+        askThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted() && !s.isClosed()) {
+                try {
+                    s.send(new DatagramPacket(probe, probe.length, java.net.InetAddress.getByName("255.255.255.255"), DISCOVERY_PORT));
+                    for (java.net.NetworkInterface nif : java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+                        if (!nif.isUp() || nif.isLoopback()) continue;
+                        for (java.net.InterfaceAddress ia : nif.getInterfaceAddresses()) {
+                            if (ia.getBroadcast() != null) s.send(new DatagramPacket(probe, probe.length, ia.getBroadcast(), DISCOVERY_PORT));
+                        }
+                    }
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    if (s.isClosed()) break;
+                }
+            }
+        }, "underwild-ask");
+        askThread.start();
         call.resolve();
     }
 
@@ -82,6 +104,8 @@ public class LanDiscoveryPlugin extends Plugin {
     private void stopAll() {
         if (thread != null) thread.interrupt();
         thread = null;
+        if (askThread != null) askThread.interrupt();
+        askThread = null;
         if (socket != null) socket.close();
         socket = null;
         if (lock != null && lock.isHeld()) lock.release();

@@ -638,7 +638,7 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   
   const waterLevel = BASE + WATER_DEPTH;
   // Only proper lakes hold water; ordinary valleys stay dry.
-  const underwater = h > waterLevel && !!lakeAt(x, seed, worldHeight, worldType);
+  const underwater = false; // TEMP: lakes disabled for mobile host testing (was: h > waterLevel && !!lakeAt(...))
   const sandy = underwater || onLakeShore(x, seed);
   const onTrail = !sandy && (y === h || y === h - 1) && isTrailAt(x, seed, worldHeight, worldType);
   // Grass slabs smooth the ground out: one at the foot of a one-block step where the ground

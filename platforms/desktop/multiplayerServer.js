@@ -190,6 +190,7 @@ function setBrowsing(on) {
   if (!on) {
     if (browser) {
       clearInterval(browser.timer);
+      clearInterval(browser.askTimer);
       try { browser.socket.close(); } catch (e) {}
       browser = null;
     }
@@ -214,7 +215,12 @@ function setBrowsing(on) {
     for (const [k, h] of hosts) if (now - h.seen > HOST_TIMEOUT_MS) hosts.delete(k);
     send('mp:event', { type: 'hosts', hosts: [...hosts.values()] });
   };
-  browser = { socket, hosts, timer: setInterval(push, 500) };
+  // Phones announce poorly on some networks, so also ask: hosts that hear this answer us directly.
+  const probe = Buffer.from(JSON.stringify({ game: 'underwild', query: 1 }));
+  const ask = () => { for (const addr of broadcastAddresses()) socket.send(probe, DISCOVERY_PORT, addr, () => {}); };
+  const askTimer = setInterval(ask, ANNOUNCE_MS);
+  setTimeout(ask, 300);
+  browser = { socket, hosts, timer: setInterval(push, 500), askTimer };
 }
 
 // --- Guest ---------------------------------------------------------------------------

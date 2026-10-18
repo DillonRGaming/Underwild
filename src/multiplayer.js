@@ -29,10 +29,14 @@ const PICKUP_RANGE = 12;
 const api = () => window.electronAPI?.mp;
 
 // Another player as seen on this screen: eased toward the latest position it sent.
+// A player's chosen colour: #rrggbb, or null for the default.
+const validColor = (c) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : null);
+
 class RemotePlayer {
   constructor(id, info) {
     this.id = id;
     this.name = info.name || 'Player';
+    this.color = validColor(info.color);
     this.setSkin(info.skin, info.skinData);
     this.width = 12;
     this.height = 32;
@@ -64,7 +68,51 @@ class RemotePlayer {
     }
   }
 
+  // A dummy has no one steering it: it is knocked about, falls and lands.
+  dummyPhysics(dt, world) {
+    // Sideways: slide with the knockback, stopped by blocks, slowing down on the ground.
+    if (this.vx) {
+      const nx = this.x + this.vx * dt;
+      const edge = Math.floor((this.vx > 0 ? nx + this.width : nx) / TILE_SIZE);
+      let blocked = false;
+      for (let ty = Math.floor(this.y / TILE_SIZE); ty <= Math.floor((this.y + this.height - 1) / TILE_SIZE); ty++) {
+        if (world.isSolidAt(edge, ty)) blocked = true;
+      }
+      if (blocked) this.vx = 0; else this.x = nx;
+      this.vx *= Math.exp(-(this.onGround ? 8 : 1) * dt);
+      if (Math.abs(this.vx) < 4) this.vx = 0;
+    }
+    this.onGround = false;
+    this.vy = Math.min(500, this.vy + 800 * dt);
+    this.y += this.vy * dt;
+    const bottomRow = Math.floor((this.y + this.height) / TILE_SIZE);
+    const left = Math.floor(this.x / TILE_SIZE);
+    const right = Math.floor((this.x + this.width) / TILE_SIZE);
+    if (this.vy >= 0 && (world.isSolidAt(left, bottomRow) || world.isSolidAt(right, bottomRow))) {
+      this.y = bottomRow * TILE_SIZE - this.height;
+      this.vy = 0;
+      this.onGround = true;
+    }
+  }
+
+  // Hit by the player: knocked back and hurt; at zero health it is put back where it was spawned.
+  dummyHit(dmg, vx, vy, game) {
+    this.health -= dmg;
+    this.hurtAt = performance.now();
+    this.vx = vx || 0;
+    this.vy = vy || 0;
+    if (this.health <= 0) {
+      game.toast(`${this.name} was knocked out`);
+      this.health = 20;
+      this.x = this.home.x;
+      this.y = this.home.y;
+      this.vx = 0;
+      this.vy = 0;
+    }
+  }
+
   update(dt) {
+    if (this.dummy) return;
     const t = this.target;
     if (!t) return;
     const k = Math.min(1, dt * 15);
@@ -138,6 +186,26 @@ export class Multiplayer {
     this.unsubscribe = api().onEvent((ev) => this.onEvent(ev));
   }
 
+  // A chat message from this player: shown here, and passed around when in a game with others.
+  sendChat(text, me = false) {
+    const name = this.game.playerName();
+    if (this.isHost) {
+      const col = this.game.playerColor();
+      this.send({ t: 'chat', name, text, me: me ? 1 : 0, col });
+      this.game.chat(name, text, me, col);
+    } else if (this.isGuest) {
+      this.send({ t: 'chat', text, me: me ? 1 : 0 });   // the host sends it back to everyone, us included
+    } else {
+      this.game.chat(name, text, me, this.game.playerColor());
+    }
+  }
+
+  // Our own colour changed: tell the others.
+  sendColor(c) {
+    if (this.isHost) this.send({ t: 'color', id: 0, c });
+    else if (this.isGuest) this.send({ t: 'color', c });
+  }
+
   // --- Discovery ---------------------------------------------------------------------
 
   startBrowsing(onChange) {
@@ -200,7 +268,7 @@ export class Multiplayer {
     return new Promise((resolve) => {
       this.joinResolve = resolve;
       const skin = this.game.playerSkin();
-      this.send({ t: 'hello', v: MP_VERSION, name: this.game.playerName(), skin: skin.skin, skinData: skin.skinData });
+      this.send({ t: 'hello', v: MP_VERSION, name: this.game.playerName(), skin: skin.skin, skinData: skin.skinData, color: this.game.playerColor() });
       this.joinTimer = setTimeout(() => this.finishJoin({ ok: false, error: 'The host did not answer.' }), 15000);
     });
   }
@@ -287,11 +355,11 @@ export class Multiplayer {
         if (msg.v !== MP_VERSION) return this.reject(id, 'Your game is a different version from the host\'s.');
         if (this.peers.size + 1 > this.settings.maxPlayers) return this.reject(id, 'The game is full.');
         if (taken) return this.reject(id, `Someone called "${name}" is already playing.`);
-        Object.assign(peer, { name, skin: msg.skin, skinData: msg.skinData, ready: true });
+        Object.assign(peer, { name, skin: msg.skin, skinData: msg.skinData, color: validColor(msg.color), ready: true });
         const saved = world.mpPlayers?.[name] || null;
-        const others = [{ id: 0, name: this.game.playerName(), ...this.game.playerSkin(), state: this.game.localState() }];
+        const others = [{ id: 0, name: this.game.playerName(), ...this.game.playerSkin(), color: this.game.playerColor(), state: this.game.localState() }];
         for (const p of this.peers.values()) {
-          if (p.ready && p.id !== id) others.push({ id: p.id, name: p.name, skin: p.skin, skinData: p.skinData, state: this.remotePlayers.get(p.id)?.target });
+          if (p.ready && p.id !== id) others.push({ id: p.id, name: p.name, skin: p.skin, skinData: p.skinData, color: p.color, state: this.remotePlayers.get(p.id)?.target });
         }
         this.send({
           t: 'welcome',
@@ -302,10 +370,27 @@ export class Multiplayer {
           saved,
           spawn: this.game.spawnPoint()
         }, id);
-        this.remotePlayers.set(id, new RemotePlayer(id, { name, skin: msg.skin, skinData: msg.skinData, state: saved ? { x: saved.x, y: saved.y } : null }));
-        this.send({ t: 'join', id, name, skin: msg.skin, skinData: msg.skinData }, { except: id });
+        this.remotePlayers.set(id, new RemotePlayer(id, { name, skin: msg.skin, skinData: msg.skinData, color: peer.color, state: saved ? { x: saved.x, y: saved.y } : null }));
+        this.send({ t: 'join', id, name, skin: msg.skin, skinData: msg.skinData, color: peer.color }, { except: id });
         this.game.toast(`${name} joined the game`);
         this.updateAnnounce();
+        break;
+      }
+      case 'chat': {
+        if (!peer.ready) break;
+        const text = String(msg.text || '').slice(0, 128);
+        if (!text) break;
+        this.send({ t: 'chat', name: peer.name, text, me: msg.me ? 1 : 0, col: peer.color });
+        this.game.chat(peer.name, text, msg.me, peer.color);
+        break;
+      }
+      case 'color': {
+        // A guest changed their colour: remember it and tell everyone else.
+        if (!peer.ready) break;
+        peer.color = validColor(msg.c);
+        const rp = this.remotePlayers.get(id);
+        if (rp) rp.color = peer.color;
+        this.send({ t: 'color', id, c: peer.color }, { except: id });
         break;
       }
       case 'state': {
@@ -367,7 +452,41 @@ export class Multiplayer {
   }
 
   // Do something to another player (a command's target, or a hit): id 0 is the host.
+  // A fake player for testing: it only exists on this screen and stands where it was put.
+  spawnDummy(name, x, y) {
+    let rp = [...this.remotePlayers.values()].find(r => r.dummy && r.name === name);
+    if (!rp) {
+      this.dummies = (this.dummies || 0) + 1;
+      rp = new RemotePlayer(-this.dummies, { name });
+      rp.dummy = true;
+      this.remotePlayers.set(rp.id, rp);
+    }
+    rp.x = x;
+    rp.y = y;
+    rp.vy = 0;
+    rp.home = { x, y };
+    rp.health = 20;
+    return rp;
+  }
+
+  findDummy(name) {
+    return [...this.remotePlayers.values()].find(r => r.dummy && r.name === name) || null;
+  }
+
+  removeDummy(name) {
+    const rp = [...this.remotePlayers.values()].find(r => r.dummy && r.name === name);
+    if (rp) this.remotePlayers.delete(rp.id);
+    return !!rp;
+  }
+
   sendAction(to, a) {
+    const dummy = this.remotePlayers.get(to);
+    if (dummy?.dummy) {
+      if (a.k === 'tp') { dummy.x = a.x; dummy.y = a.y; dummy.vy = 0; dummy.home = { x: a.x, y: a.y }; }
+      else if (a.k === 'hit') dummy.dummyHit(a.dmg, a.vx, a.vy, this.game);
+      else if (a.k === 'color') dummy.color = validColor(a.c);
+      return;
+    }
     if (this.isHost) this.send({ t: 'act', a }, to);
     else if (this.isGuest) this.send({ t: 'act', to, a });
   }
@@ -479,6 +598,15 @@ export class Multiplayer {
         if (rp) this.game.toast(`${rp.name} left the game`);
         break;
       }
+      case 'chat':
+        this.game.chat(String(msg.name || '?').slice(0, 20), String(msg.text || '').slice(0, 128), msg.me, validColor(msg.col));
+        break;
+      case 'color': {
+        const rp = this.remotePlayers.get(msg.id);
+        if (rp) rp.color = validColor(msg.c);
+        break;
+      }
+        break;
       case 'state': {
         const rp = this.remotePlayers.get(msg.id);
         if (rp) rp.target = msg.s;
@@ -593,6 +721,8 @@ export class Multiplayer {
   // --- Every frame -------------------------------------------------------------------
 
   update(dt) {
+    const w = this.game.world;
+    if (w) for (const rp of this.remotePlayers.values()) if (rp.dummy) rp.dummyPhysics(dt, w);
     if (!this.active || !this.game.world || !this.game.player) return;
     if (this.isGuest && this.guestQueue) return;
     const now = performance.now();

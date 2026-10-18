@@ -1,6 +1,8 @@
 package com.dillonrgaming.underwild;
 
+import android.content.Context;
 import android.content.Intent;
+import android.net.wifi.WifiManager;
 import android.view.WindowManager;
 
 import androidx.core.content.ContextCompat;
@@ -47,6 +49,9 @@ public class LanHostPlugin extends Plugin {
     private final AtomicInteger nextId = new AtomicInteger(1);
 
     private Thread announceThread;
+    private Thread listenThread;
+    private DatagramSocket listenSocket;
+    private WifiManager.MulticastLock multicastLock;
     private volatile String announceInfo;
 
     @PluginMethod
@@ -258,11 +263,60 @@ public class LanHostPlugin extends Plugin {
             }
         }, "underwild-announce");
         announceThread.start();
+        startListening();
+    }
+
+    // Browsing computers ask "who is hosting?" with a broadcast; answer them directly.
+    private void startListening() {
+        try {
+            WifiManager wifi = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi != null) {
+                multicastLock = wifi.createMulticastLock("underwild-host");
+                multicastLock.setReferenceCounted(false);
+                multicastLock.acquire();
+            }
+            listenSocket = new DatagramSocket(null);
+            listenSocket.setReuseAddress(true);
+            listenSocket.setBroadcast(true);
+            listenSocket.bind(new InetSocketAddress(DISCOVERY_PORT));
+        } catch (Exception e) {
+            stopListening();
+            return;
+        }
+        final DatagramSocket s = listenSocket;
+        listenThread = new Thread(() -> {
+            byte[] buf = new byte[2048];
+            while (!Thread.currentThread().isInterrupted() && !s.isClosed()) {
+                try {
+                    DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                    s.receive(packet);
+                    String msg = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+                    String info = announceInfo;
+                    if (info != null && msg.contains("\"query\"")) {
+                        byte[] bytes = info.getBytes(StandardCharsets.UTF_8);
+                        s.send(new DatagramPacket(bytes, bytes.length, packet.getAddress(), DISCOVERY_PORT));
+                    }
+                } catch (Exception e) {
+                    if (s.isClosed()) break;
+                }
+            }
+        }, "underwild-answer");
+        listenThread.start();
+    }
+
+    private synchronized void stopListening() {
+        if (listenThread != null) listenThread.interrupt();
+        listenThread = null;
+        if (listenSocket != null) listenSocket.close();
+        listenSocket = null;
+        if (multicastLock != null && multicastLock.isHeld()) multicastLock.release();
+        multicastLock = null;
     }
 
     private synchronized void stopAnnounce() {
         announceInfo = null;
         if (announceThread != null) announceThread.interrupt();
         announceThread = null;
+        stopListening();
     }
 }

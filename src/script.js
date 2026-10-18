@@ -167,6 +167,8 @@ const multiplayer = new Multiplayer({
     if (message) menuManager.showNotice(message);
   },
   toast: (text) => showToast(text),
+  chat: (name, text, me, color) => (me ? addChatLine(`* ${name} ${text}`, null, '', color) : addChatLine(text, name, '', color)),
+  playerColor: () => playerColor(),
   applyAction: (a) => applyPlayerAction(a),
   setTimeFromGuest: (time, manual) => {
     if (!world) return;
@@ -177,6 +179,24 @@ const multiplayer = new Multiplayer({
   primed: (x, y, fuse, vx, vy, blockId) => primedExplosives.push(Object.assign(new PrimedExplosive(x, y, TILE_SIZE, fuse), { vx: vx || 0, vy: vy || 0, blockId: blockId || 'explosive', remote: true }))
 });
 window.multiplayer = multiplayer;
+
+// Your colour for chat and your name tag: the eight named ones, or any #rrggbb. null = default.
+const NAMED_COLORS = { red: '#ff5555', orange: '#ffaa33', yellow: '#ffe74d', green: '#5ee05e', cyan: '#4dd9e6', blue: '#5b8cff', purple: '#b366ff', pink: '#ff7ad9' };
+function parseColor(text) {
+  const t = String(text || '').toLowerCase();
+  if (t in NAMED_COLORS) return NAMED_COLORS[t];
+  let hex = t.replace(/^#/, '');
+  if (/^[0-9a-f]{3}$/.test(hex)) hex = hex.split('').map(ch => ch + ch).join('');
+  return /^[0-9a-f]{6}$/.test(hex) ? `#${hex}` : null;
+}
+function playerColor() {
+  const c = prefs.get('chatColor');
+  return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : null;
+}
+function setPlayerColor(c) {
+  prefs.set('chatColor', c);
+  multiplayer.sendColor(c);
+}
 
 function playerName() {
   return String(prefs.get('playerUsername') || 'Player').slice(0, 20);
@@ -276,7 +296,88 @@ function setAppIcon(img) {
   window.electronAPI?.app?.setIcon(data);
 }
 
+// Messages (a player's chat, someone joining...) go in the chat log, top left. System lines
+// have no name. Each line fades a few seconds after it appears; opening the chat shows them all.
+const CHAT_LINES_KEPT = 100;
+const CHAT_FADE_MS = 8000;
+
+// A line fades out `delay` ms from now, then folds away so the ones below slide up.
+function scheduleChatFade(line, delay) {
+  line.fadeTimers?.forEach(clearTimeout);
+  line.classList.remove('fading', 'faded', 'gone');
+  line.style.maxHeight = '';
+  line.fadeTimers = [
+    setTimeout(() => {
+      // Fading and folding start together: the lines below begin sliding up straight away.
+      line.classList.add('fading');
+      line.style.maxHeight = `${line.offsetHeight}px`;
+      void line.offsetHeight;
+      line.style.maxHeight = '0px';
+      line.classList.add('faded');
+    }, delay),
+    setTimeout(() => line.classList.add('gone'), delay + 700)
+  ];
+}
+
+// When the chat closes, the older lines it was showing don't all vanish at once: the ones that
+// fit in the log fade away one after another, oldest first.
+function collapseChatHistory() {
+  const log = document.getElementById('chatLog');
+  if (!log) return;
+  const lines = Array.from(log.children).slice(-8);
+  lines.forEach((line, i) => {
+    if (line.classList.contains('faded') || line.classList.contains('fading')) scheduleChatFade(line, 1500 + i * 450);
+  });
+}
+
+function addChatLine(text, name = null, kind = '', color = null) {
+  const log = document.getElementById('chatLog');
+  if (!log) return;
+  const line = document.createElement('div');
+  line.className = kind ? `chat-line ${kind}` : 'chat-line';
+  const body = document.createElement('span');
+  body.className = 'chat-text';
+  if (color) body.style.color = color;
+  if (name) {
+    const tag = document.createElement('span');
+    tag.className = 'chat-name';
+    tag.textContent = `<${name}> `;
+    if (color) tag.style.color = color;
+    body.appendChild(tag);
+  }
+  body.appendChild(document.createTextNode(text));
+  const time = document.createElement('span');
+  time.className = 'chat-time';
+  const now = new Date();
+  time.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  line.append(body, time);
+  // Keep following the newest line, unless you've scrolled up in the open chat to read back.
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
+  log.appendChild(line);
+  while (log.childElementCount > CHAT_LINES_KEPT) log.firstChild.remove();
+  if (atBottom || !document.getElementById('chatArea')?.classList.contains('chat-open')) log.scrollTop = log.scrollHeight;
+  scheduleChatFade(line, CHAT_FADE_MS);
+}
+
+// Scrolling the wheel over the log while you're not typing scrolls what is showing. It doesn't
+// bring faded messages back; only opening the chat does that.
+window.addEventListener('wheel', (e) => {
+  const log = document.getElementById('chatLog');
+  const area = document.getElementById('chatArea');
+  if (!log || !area || textInputMode || area.classList.contains('hidden')) return;
+  const r = log.getBoundingClientRect();
+  if (!r.width || e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  log.scrollTop += e.deltaY;
+}, { capture: true, passive: false });
+
 function showToast(text) {
+  addChatLine(text);
+}
+
+// The zoom level isn't a chat message: it flashes in the old corner spot.
+function showHudNote(text) {
   const el = document.getElementById('mpToast');
   if (!el) return;
   const line = document.createElement('div');
@@ -322,7 +423,7 @@ function changeZoom(direction) {
   camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, camera.zoom + direction * ZOOM_STEP));
   prefs.set('cameraZoom', camera.zoom);
   lastPreloadChunk = null; // load more chunks if the wider view needs them
-  showToast(`Zoom: ${Math.round(camera.zoom / 3 * 100)}%`);
+  showHudNote(`Zoom: ${Math.round(camera.zoom / 3 * 100)}%`);
 }
 window.changeZoom = changeZoom;
 
@@ -2429,25 +2530,31 @@ let chatHistoryIndex = -1;
 const TIME_NAMES = { dawn: 0.25, day: 0.5, noon: 0.5, sunset: 0.75, night: 0, midnight: 0 };
 const ITEM_CONFIG_KEYS = ['pickuprange', 'attractionrange', 'attractionforce', 'pickupdelay', 'gravity', 'maxlife'];
 const availableCommands = [
-  { cmd: 'give', args: [{ name: 'item', kind: 'item' }, { name: 'amount', optional: true }, { name: 'player', kind: 'player', optional: true }] },
-  { cmd: 'giveall', args: [{ name: 'category', kind: 'category' }] },
-  { cmd: 'giverandom', args: [{ name: 'count', optional: true }] },
-  { cmd: 'clear', args: [{ name: 'player', kind: 'player', optional: true }] },
-  { cmd: 'mode', args: [{ options: ['survival', 'creative'], optional: true }, { name: 'player', kind: 'player', optional: true }] },
-  { cmd: 'time', args: [{ options: ['set', 'add', 'auto'] }, { options: ['dawn', 'day', 'sunset', 'night'], name: 'HH:MM', optional: true }] },
-  { cmd: 'tick', args: [{ options: ['0.5', '1', '2', '5', '10', '20'], optional: true }] },
-  { cmd: 'tp', args: [{ options: ['fallen', 'water'], kind: 'biome', players: true, name: 'x' }, { name: 'y', kind: 'player', optional: true }] },
-  { cmd: 'fly', args: [{ options: ['on', 'off'], optional: true }] },
-  { cmd: 'noclip', args: [{ options: ['on', 'off'], optional: true }] },
-  { cmd: 'setpos1', args: [] },
-  { cmd: 'setpos2', args: [] },
-  { cmd: 'setposclear', args: [] },
-  { cmd: 'fill', args: [{ name: 'block', kind: 'block' }, { options: ['solid', 'hollow', 'replace'], optional: true }, { name: 'block', kind: 'block', optional: true }] },
-  { cmd: 'seed', args: [{ name: 'seed', optional: true }] },
-  { cmd: 'itemconfig', args: [{ options: ITEM_CONFIG_KEYS }, { name: 'value' }] },
-  { cmd: 'lighting', args: [{ options: ['recalc'] }] },
-  { cmd: 'effect', args: [{ options: ['light', 'clear'] }] },
-  { cmd: 'log', args: [] }
+  { cmd: 'give', playerFirst: true, desc: 'Give items to a player', args: [{ name: 'player', kind: 'player', optional: true }, { name: 'item', kind: 'item' }, { name: 'amount', optional: true }] },
+  { cmd: 'giveall', playerFirst: true, desc: 'Give one of everything in a group', args: [{ name: 'player', kind: 'player', optional: true }, { name: 'group', kind: 'category' }] },
+  { cmd: 'giverandom', playerFirst: true, desc: 'Give random items', args: [{ name: 'player', kind: 'player', optional: true }, { name: 'count', optional: true }] },
+  { cmd: 'clear', playerFirst: true, desc: 'Empty a player\'s inventory', args: [{ name: 'player', kind: 'player', optional: true }] },
+  { cmd: 'mode', playerFirst: true, desc: 'Switch between Survival and Creative', args: [{ name: 'player', kind: 'player', optional: true }, { options: ['survival', 'creative'], optional: true }] },
+  { cmd: 'time', desc: 'Set the time of day, move it on, or let it run', args: [{ options: ['set', 'add', 'auto'] }, { options: ['dawn', 'day', 'sunset', 'night'], name: 'HH:MM', optional: true }] },
+  { cmd: 'tick', desc: 'Change the game speed', args: [{ options: ['0.5', '1', '2', '5', '10', '20'], name: 'speed', optional: true }] },
+  { cmd: 'tp', desc: 'Teleport to a player, a spot or a place', args: [{ options: ['fallen', 'water'], kind: 'biome', players: true, name: 'x' }, { name: 'y', kind: 'player', optional: true }, { name: 'y', optional: true }] },
+  { cmd: 'fly', playerFirst: true, desc: 'Fly around (turns on Creative)', args: [{ name: 'player', kind: 'player', optional: true }, { options: ['on', 'off'], optional: true }] },
+  { cmd: 'noclip', playerFirst: true, desc: 'Fly through blocks', args: [{ name: 'player', kind: 'player', optional: true }, { options: ['on', 'off'], optional: true }] },
+  { cmd: 'setpos1', desc: 'Mark the first corner for /fill', args: [] },
+  { cmd: 'setpos2', desc: 'Mark the second corner for /fill', args: [] },
+  { cmd: 'setposclear', desc: 'Forget both /fill corners', args: [] },
+  { cmd: 'fill', desc: 'Fill the marked area (or x1 y1 x2 y2 block) with a block', args: [{ name: 'block', kind: 'block' }, { options: ['solid', 'hollow', 'replace'], optional: true }, { name: 'block', kind: 'block', optional: true }] },
+  { cmd: 'seed', desc: 'Regenerate the world from a seed', args: [{ name: 'seed', optional: true }] },
+  { cmd: 'itemconfig', desc: 'Tune how dropped items behave', args: [{ options: ITEM_CONFIG_KEYS }, { name: 'value' }] },
+  { cmd: 'lighting', desc: 'Recalculate the lighting', args: [{ options: ['recalc'], optional: true }] },
+  { cmd: 'effect', playerFirst: true, desc: 'Give or clear effects', args: [{ name: 'player', kind: 'player', optional: true }, { options: ['light', 'clear'] }] },
+  { cmd: 'color', playerFirst: true, desc: 'Colour a player\'s chat text and name tag', args: [{ name: 'player', kind: 'player', optional: true }, { name: 'color', kind: 'color' }] },
+  { cmd: 'dummy', desc: 'Spawn a fake player for testing', args: [{ name: 'name' }, { options: ['remove', 'crouch'], name: 'x', optional: true }, { name: 'y', optional: true }] },
+  { cmd: 'say', desc: 'Send a chat message', args: [{ name: 'message' }] },
+  { cmd: 'me', desc: 'Say what you are doing', args: [{ name: 'action' }] },
+  { cmd: 'list', desc: 'List the players here', args: [] },
+  { cmd: 'help', desc: 'Show the commands', args: [{ name: 'command', kind: 'command', optional: true }] },
+  { cmd: 'log', desc: 'Save the water performance report', args: [] }
 ];
 
 // /giveall groups, picked out by each block's or item's own properties.
@@ -2880,9 +2987,31 @@ function applyPlayerAction(a) {
     case 'give': giveById(a.id, a.n); break;
     case 'mode': setCreativeMode(a.c == null ? !creativeMode : !!a.c); break;
     case 'tp': teleportPlayerTo(a.x, a.y); break;
+    case 'fly': setFlying(a.on); break;
+    case 'noclip': setNoClip(a.on); break;
+    case 'effect': setEffect(a.name); break;
+    case 'color': setPlayerColor(a.c); break;
     case 'hit': hurtPlayer(a.dmg, a.vx, a.vy); break;
   }
 }
+// on: true / false, or null to flip.
+function setFlying(on) {
+  const flying = on == null ? !player.creativeFlying : !!on;
+  if (flying && !creativeMode) setCreativeMode(true);
+  player.creativeFlying = flying;
+  player.isFlying = flying;
+  if (!flying) player.vy = 0;
+}
+function setNoClip(on) {
+  noClipMode = on == null ? !noClipMode : !!on;
+  if (noClipMode && !creativeMode) setCreativeMode(true);
+  if (noClipMode) { player.creativeFlying = true; player.isFlying = true; }
+}
+function setEffect(name) {
+  if (name === 'clear') renderer.effects = {};
+  else if (name === 'light') (renderer.effects ??= {}).light = true;
+}
+
 function teleportPlayerTo(px, py) {
   player.x = px;
   player.y = py;
@@ -2899,7 +3028,8 @@ function commandSignature(command, activeArg = -1) {
     const choices = [...(arg.options || [])];
     if (arg.kind === 'biome') choices.push('biome');
     if (arg.name) choices.push(arg.name);
-    const cls = `cmd-arg${arg.optional ? ' optional' : ''}${i === activeArg ? ' active' : ''}`;
+    const active = Array.isArray(activeArg) ? activeArg.includes(i) : i === activeArg;
+    const cls = `cmd-arg${arg.optional ? ' optional' : ''}${active ? ' active' : ''}`;
     return `<span class="${cls}">${choices.map(escapeHtml).join('<span class="cmd-sep">|</span>')}</span>`;
   }).join('');
   return `<strong>/${command.cmd}</strong>${pills}`;
@@ -2918,6 +3048,10 @@ function argumentChoices(arg, typed) {
     }
   } else if (arg.kind === 'player') {
     for (const p of commandPlayerChoices()) if (match(p)) out.push({ id: p, displayName: p });
+  } else if (arg.kind === 'color') {
+    for (const id of [...Object.keys(NAMED_COLORS), 'reset']) if (match(id)) out.push({ id, displayName: id });
+  } else if (arg.kind === 'command') {
+    for (const c of availableCommands) if (match(c.cmd)) out.push({ id: c.cmd, displayName: c.cmd });
   } else if (arg.kind === 'category') {
     for (const id of Object.keys(itemCategories)) if (match(id)) out.push({ id, displayName: id });
   } else if (arg.kind === 'biome') {
@@ -2955,15 +3089,28 @@ function updateCommandSuggestions() {
   if (!command) {
     commandSuggestions = availableCommands.filter(c => c.cmd.startsWith(commandPart));
     for (const c of commandSuggestions) {
-      const row = addRow('suggestion-item', `<div class="suggestion-text">${commandSignature(c)}</div>`, applySuggestion);
+      const row = addRow('suggestion-item', `<div class="suggestion-text">${commandSignature(c)}</div><span class="suggestion-id">${escapeHtml(c.desc || '')}</span>`, applySuggestion);
       row.dataset.cmd = c.cmd;
     }
   } else {
     currentCommand = command;
-    currentArgIndex = parts.length - 2;
-    addRow('suggestion-head', `<div class="suggestion-text">${commandSignature(command, currentArgIndex)}</div>`);
-    const arg = command.args[currentArgIndex];
-    itemSuggestions = arg ? argumentChoices(arg, parts[parts.length - 1]) : [];
+    const typed = parts[parts.length - 1];
+    // Commands that can act on another player start with the player, which can be left out:
+    // the first word is a player (or @selector) or it is already the first real argument.
+    let active = [parts.length - 2];
+    if (command.playerFirst) {
+      // The first word is the player if anything fits it, otherwise it is already the first argument.
+      if (parts.length === 2) active = [!typed || argumentChoices(command.args[0], typed).length ? 0 : 1];
+      else active = [parts.length - 2 + (isPlayerRef(parts[1]) ? 0 : 1)];
+    }
+    currentArgIndex = active[0];
+    addRow('suggestion-head', `<div class="suggestion-text">${commandSignature(command, active)}</div><span class="suggestion-id">${escapeHtml(command.desc || '')}</span>`);
+    itemSuggestions = [];
+    for (const i of active) {
+      const arg = command.args[i];
+      if (arg) for (const c of argumentChoices(arg, typed)) if (!itemSuggestions.some(x => x.id === c.id)) itemSuggestions.push(c);
+    }
+    itemSuggestions = itemSuggestions.slice(0, 10);
     for (const choice of itemSuggestions) {
       const icon = choice.icon ? `<img src="assets/textures/${choice.id}.png" alt="" class="suggestion-icon" onerror="this.src='assets/textures/stone.png';">` : '';
       const id = choice.displayName !== choice.id ? ` <span class="suggestion-id">${escapeHtml(choice.id)}</span>` : '';
@@ -3012,58 +3159,177 @@ function commandsAllowed() {
   return !!(creativeMode || worldGameMode === 'creative' || world?.allowCommands || world?.cheatsEnabled);
 }
 
+// --- Command feedback: every command says what it did (or what was wrong) in the chat log.
+function commandOk(text) { addChatLine(text); }
+function commandFail(text) { addChatLine(text, null, 'error'); }
+function commandInfo(text) { addChatLine(text, null, 'info'); }
+
+// "/give <item> [amount] [player]": the plain-text form of a command's arguments.
+function commandUsage(command) {
+  const args = command.args.map(arg => {
+    const label = (arg.options?.length && !arg.name) ? arg.options.join('|') : [...(arg.options || []), arg.name].filter(Boolean).join('|');
+    return arg.optional ? `[${label}]` : `<${label}>`;
+  });
+  return `/${[command.cmd, ...args].join(' ')}`;
+}
+function usageFail(cmd) {
+  const command = availableCommands.find(c => c.cmd === cmd);
+  commandFail(command ? `Usage: ${commandUsage(command)}` : `Unknown command "/${cmd}". Type /help for the list.`);
+}
+
+const itemLabel = (id) => registry.get(id)?.displayName || id;
+const playerLabel = (targets) => targets.length === 1 ? (targets[0].self ? 'you' : targets[0].name) : `${targets.length} players`;
+const clockText = (fraction) => {
+  const minutes = Math.round((((fraction % 1) + 1) % 1) * 24 * 60) % (24 * 60);
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+};
+
 function processTextInputCommand(command) {
   const trimmed = command.trim();
-  if (!trimmed || !world || !player || !commandsAllowed()) return;
+  if (!trimmed || !world || !player) return;
 
+  // Anything that isn't a /command is a chat message.
   if (!trimmed.startsWith('/')) {
-    const parts = trimmed.split(/\s+/);
-    const count = parts.length > 1 ? parseInt(parts[1], 10) : 1;
-    if (!Number.isNaN(count) && count > 0) giveById(parts[0], count);
+    multiplayer.sendChat(trimmed);
     return;
   }
 
   const parts = trimmed.slice(1).split(/\s+/);
   const cmd = parts[0].toLowerCase();
+
+  // Chatting commands work everywhere; the rest need commands turned on for the world.
+  if (cmd === 'say') {
+    const text = trimmed.slice(1 + parts[0].length).trim();
+    if (!text) return usageFail('say');
+    multiplayer.sendChat(text);
+    return;
+  }
+  if (cmd === 'me') {
+    const text = trimmed.slice(1 + parts[0].length).trim();
+    if (!text) return usageFail('me');
+    multiplayer.sendChat(text, true);
+    return;
+  }
+  if (cmd === 'help' || cmd === '?') {
+    const asked = (parts[1] || '').toLowerCase().replace(/^\//, '');
+    if (asked) {
+      const found = availableCommands.find(c => c.cmd === asked);
+      if (!found) return commandFail(`Unknown command "/${asked}".`);
+      commandInfo(commandUsage(found));
+      if (found.desc) commandInfo(found.desc);
+    } else {
+      commandInfo('Commands: ' + availableCommands.map(c => '/' + c.cmd).join(' '));
+      commandInfo('Type /help <command> for how to use one.');
+    }
+    return;
+  }
+  if (cmd === 'list') {
+    const names = commandPlayers().map(p => p.name);
+    commandInfo(`${names.length} player${names.length === 1 ? '' : 's'} here: ${names.join(', ')}`);
+    return;
+  }
+
+  if (!commandsAllowed()) return commandFail('Commands are turned off in this world.');
+  if (!availableCommands.some(c => c.cmd === cmd) && cmd !== 'gamemode') return usageFail(cmd);
+
   const playerTileX = Math.floor(player.x / TILE_SIZE);
   const playerTileY = Math.floor(player.y / TILE_SIZE);
+  // Commands that can act on someone start with the player (or @selector); without one they act on you.
+  const takePlayer = () => {
+    const given = isPlayerRef(parts[1]);
+    return { selector: given ? parts[1] : undefined, args: parts.slice(given ? 2 : 1) };
+  };
+  const needPlayers = (selector) => {
+    const found = resolvePlayers(selector);
+    if (!found.length || !found[0]) commandFail(`No player called "${selector}" is here.`);
+    return found.length && found[0] ? found : null;
+  };
 
   switch (cmd) {
     case 'give': {
-      // /give <item> [amount] [player]; the amount can be left out: /give <item> <player>.
-      let target = parts[3];
-      let amountText = parts[2];
-      if (amountText && Number.isNaN(parseInt(amountText, 10)) && isPlayerRef(amountText)) { target = amountText; amountText = undefined; }
+      // /give [player] <item> [amount]
+      const { selector, args } = takePlayer();
+      const [item, amountText] = args;
       const amount = amountText ? parseInt(amountText, 10) : 1;
-      if (!parts[1] || Number.isNaN(amount) || amount <= 0 || !registry.has(parts[1])) return;
-      for (const t of resolvePlayers(target)) actOnPlayer(t, { k: 'give', id: parts[1], n: amount });
+      if (!item) return usageFail('give');
+      if (!registry.has(item) || item === 'air' || item === 'water') return commandFail(`Unknown item "${item}".`);
+      if (Number.isNaN(amount) || amount <= 0) return commandFail(`"${amountText}" isn't a valid amount.`);
+      const targets = needPlayers(selector);
+      if (!targets) return;
+      for (const t of targets) actOnPlayer(t, { k: 'give', id: item, n: amount });
+      commandOk(`Gave ${amount} ${itemLabel(item)} to ${playerLabel(targets)}.`);
       return;
     }
 
     case 'giveall': {
-      const category = itemCategoryIds((parts[1] || '').toLowerCase());
-      if (!category) return;
-      for (const id of category) giveById(id, registry.isItem(id) ? 1 : 24);
+      // /giveall [player] <group>
+      const { selector, args } = takePlayer();
+      const name = (args[0] || '').toLowerCase();
+      if (!name) return usageFail('giveall');
+      const category = itemCategoryIds(name);
+      if (!category) return commandFail(`Unknown group "${name}". Groups: ${Object.keys(itemCategories).join(', ')}.`);
+      const targets = needPlayers(selector);
+      if (!targets) return;
+      for (const t of targets) for (const id of category) actOnPlayer(t, { k: 'give', id, n: registry.isItem(id) ? 1 : 24 });
+      commandOk(`Gave ${playerLabel(targets)} everything in ${name} (${category.length} kinds).`);
       return;
     }
 
-    case 'clear':
-      for (const t of resolvePlayers(parts[1])) actOnPlayer(t, { k: 'clear' });
+    case 'giverandom': {
+      // /giverandom [player] [count]
+      const { selector, args } = takePlayer();
+      const count = args[0] ? parseInt(args[0], 10) : 1;
+      if (Number.isNaN(count) || count <= 0 || count > 100) return commandFail('The count must be from 1 to 100.');
+      const targets = needPlayers(selector);
+      if (!targets) return;
+      const ids = Array.from(registry.map.keys()).filter(id => id !== 'air' && id !== 'water');
+      for (const t of targets) for (let i = 0; i < count; i++) actOnPlayer(t, { k: 'give', id: ids[Math.floor(Math.random() * ids.length)], n: 1 });
+      commandOk(`Gave ${playerLabel(targets)} ${count} random item${count === 1 ? '' : 's'}.`);
       return;
+    }
 
+    case 'clear': {
+      // /clear [player]
+      const { selector } = takePlayer();
+      const targets = needPlayers(selector);
+      if (!targets) return;
+      for (const t of targets) actOnPlayer(t, { k: 'clear' });
+      commandOk(`Cleared ${playerLabel(targets) === 'you' ? 'your' : playerLabel(targets) + "'s"} inventory.`);
+      return;
+    }
+
+    case 'gamemode':
     case 'mode': {
-      let mode = (parts[1] || '').toLowerCase();
-      let target = parts[2];
-      if (!target && isPlayerRef(parts[1]) && !['s', 'c', 'survival', 'creative', 'toggle'].includes(mode)) { target = parts[1]; mode = ''; }
-      const targets = resolvePlayers(target);
+      // /mode [player] [survival|creative]
+      const { selector, args } = takePlayer();
+      const mode = (args[0] || '').toLowerCase();
+      if (mode && !['s', 'c', 'survival', 'creative', 'toggle'].includes(mode)) return usageFail('mode');
+      const targets = needPlayers(selector);
+      if (!targets) return;
       for (const t of targets) {
         let c;
         if (mode === 's' || mode === 'survival') c = false;
         else if (mode === 'c' || mode === 'creative') c = true;
-        else if (mode === '' || mode === 'toggle') c = t.self ? !creativeMode : null;
-        else continue;
+        else c = t.self ? !creativeMode : null;
         actOnPlayer(t, { k: 'mode', c });
       }
+      const word = mode === 's' || mode === 'survival' ? 'Survival' : mode === 'c' || mode === 'creative' ? 'Creative' : null;
+      commandOk(word ? `Set ${playerLabel(targets)} to ${word} mode.` : `Switched ${playerLabel(targets)} between Survival and Creative.`);
+      return;
+    }
+
+    case 'color': {
+      // /color [player] <color|#hex|reset>
+      const { selector, args } = takePlayer();
+      const text = (args[0] || '').toLowerCase();
+      if (!text) return usageFail('color');
+      const reset = text === 'reset' || text === 'default';
+      const c = reset ? null : parseColor(text);
+      if (!reset && !c) return commandFail(`"${args[0]}" isn't a colour. Use ${Object.keys(NAMED_COLORS).join(', ')}, reset, or a hex like #ff8800.`);
+      const targets = needPlayers(selector);
+      if (!targets) return;
+      for (const t of targets) actOnPlayer(t, { k: 'color', c });
+      commandOk(reset ? `Reset the colour of ${playerLabel(targets)}.` : `Set the colour of ${playerLabel(targets)} to ${text}.`);
       return;
     }
 
@@ -3072,12 +3338,15 @@ function processTextInputCommand(command) {
       // A bare /time <value> still sets it.
       let action = (parts[1] || '').toLowerCase();
       let value = (parts[2] || '').toLowerCase();
+      if (!action) return usageFail('time');
       if (action !== 'set' && action !== 'add' && action !== 'auto') { value = action; action = 'set'; }
       if (action === 'auto') {
         world.timeManuallySet = false;
         multiplayer.sendTime(false);
+        commandOk('The time now passes on its own.');
         return;
       }
+      if (!value) return usageFail('time');
       const hhmm = text => {
         const [hours, minutes] = text.split(':').map(v => parseInt(v, 10));
         if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 0 || minutes < 0 || minutes > 59) return null;
@@ -3086,96 +3355,116 @@ function processTextInputCommand(command) {
       const day = world.dayLength;
       if (action === 'add') {
         const hours = value.includes(':') ? hhmm(value) : parseFloat(value);
-        if (hours === null || Number.isNaN(hours)) return;
+        if (hours === null || Number.isNaN(hours)) return commandFail(`"${value}" isn't an amount of time.`);
         world.time = (((world.time + hours / 24 * day) % day) + day) % day;
         multiplayer.sendTime(world.timeManuallySet);
+        commandOk(`Moved the time on to ${clockText(world.time / day)}.`);
         return;
       }
       let time;
       if (value in TIME_NAMES) time = TIME_NAMES[value];
       else if (value.includes(':')) {
         const hours = hhmm(value);
-        if (hours === null || hours >= 24) return;
+        if (hours === null || hours >= 24) return commandFail(`"${value}" isn't a time of day (use HH:MM).`);
         time = hours / 24;
       } else {
         time = parseFloat(value);
-        if (Number.isNaN(time) || time < 0 || time > 1) return;
+        if (Number.isNaN(time) || time < 0 || time > 1) return commandFail(`"${value}" isn't a time of day.`);
       }
       world.time = time * day;
       world.timeManuallySet = true;
       multiplayer.sendTime(true);
-      return;
-    }
-
-    case 'giverandom': {
-      const count = parts[1] ? parseInt(parts[1], 10) : 1;
-      if (Number.isNaN(count) || count <= 0 || count > 100) return;
-      const ids = Array.from(registry.map.keys()).filter(id => id !== 'air');
-      for (let i = 0; i < count; i++) giveById(ids[Math.floor(Math.random() * ids.length)], 1);
-      return;
-    }
-
-    case 'setpos1':
-      setPosition1 = { x: playerTileX, y: Math.floor((player.y + player.height) / TILE_SIZE) };
-      return;
-
-    case 'setpos2':
-      setPosition2 = { x: playerTileX, y: Math.floor((player.y + player.height) / TILE_SIZE) };
-      return;
-
-    case 'setposclear':
-      setPosition1 = null;
-      setPosition2 = null;
-      return;
-
-    case 'fill': {
-      if (parts.length >= 6) {
-        const blockId = parts[5];
-        if (!registry.isBlock(blockId)) return;
-        const { fillType, replaceBlock } = parseFillMode(parts[6], parts[7]);
-        fillArea(parseCoord(parts[1], playerTileX), parseCoord(parts[2], playerTileY),
-          parseCoord(parts[3], playerTileX), parseCoord(parts[4], playerTileY), blockId, fillType, replaceBlock);
-        return;
-      }
-      const blockId = parts[1];
-      if (!registry.isBlock(blockId) || !setPosition1) return;
-      const end = setPosition2 || { x: playerTileX, y: playerTileY };
-      const { fillType, replaceBlock } = parseFillMode(parts[2], parts[3]);
-      fillArea(setPosition1.x, setPosition1.y, end.x, end.y, blockId, fillType, replaceBlock);
+      commandOk(`Set the time to ${clockText(time)}.`);
       return;
     }
 
     case 'tick': {
       const val = parts[1] === undefined ? 1 : parseFloat(parts[1]);
-      if (!Number.isNaN(val) && val > 0) gameSpeed = Math.min(val, 1000);
+      if (Number.isNaN(val) || val <= 0) return commandFail(`"${parts[1]}" isn't a valid speed.`);
+      gameSpeed = Math.min(val, 1000);
+      commandOk(`Game speed is now ${gameSpeed}x.`);
       return;
     }
 
-    case 'tp':
+    case 'dummy': {
+      // /dummy <name> [x] [y]: a fake player for testing, here on your screen only.
+      // /dummy <name> remove takes it away again.
+      const name = (parts[1] || '').slice(0, 20);
+      if (!name) return usageFail('dummy');
+      if ((parts[2] || '').toLowerCase() === 'crouch') {
+        const dummy = multiplayer.findDummy(name);
+        if (!dummy) return commandFail(`There's no dummy called ${name}.`);
+        dummy.crouching = !dummy.crouching;
+        commandOk(`${name} is ${dummy.crouching ? 'crouching' : 'standing'}.`);
+        return;
+      }
+      if ((parts[2] || '').toLowerCase() === 'remove') {
+        commandOk(multiplayer.removeDummy(name) ? `Removed dummy ${name}.` : `There's no dummy called ${name}.`);
+        return;
+      }
+      if (parts[2] !== undefined && Number.isNaN(Number(parts[2].replace(/^~/, '') || 0))) return usageFail('dummy');
+      let x, y;
+      if (parts[2] === undefined) {
+        // No position: 3 to 5 blocks to one side of you, lifted out of the ground if it's inside it.
+        const bodyFree = (px, py) => {
+          for (let tx = Math.floor(px / TILE_SIZE); tx <= Math.floor((px + 11) / TILE_SIZE); tx++) {
+            for (let ty = Math.floor(py / TILE_SIZE); ty <= Math.floor((py + 31) / TILE_SIZE); ty++) {
+              if (world.isSolidAt(tx, ty)) return false;
+            }
+          }
+          return true;
+        };
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const distance = 3 + Math.floor(Math.random() * 3);
+        for (const dir of [side, -side]) {
+          const px = player.x + dir * distance * TILE_SIZE;
+          let py = player.y;
+          for (let i = 0; i < 16 && !bodyFree(px, py); i++) py -= TILE_SIZE;
+          if (bodyFree(px, py)) { x = px; y = py; break; }
+        }
+        if (x === undefined) { x = player.x; y = player.y - 3 * TILE_SIZE; }
+      } else {
+        x = parseCoord(parts[2], playerTileX) * TILE_SIZE;
+        y = parseCoord(parts[3], playerTileY) * TILE_SIZE;
+      }
+      multiplayer.spawnDummy(name, x, y);
+      commandOk(`Spawned dummy ${name}.`);
+      return;
+    }
+
+    case 'tp': {
       // /tp <player>: go to them. /tp <player> <player>: send the first to the second.
+      if (!parts[1]) return usageFail('tp');
       if (isPlayerRef(parts[1])) {
         const dest = parts[2] && isPlayerRef(parts[2]) ? resolvePlayers(parts[2])[0] : null;
+        const who = needPlayers(parts[1]);
+        if (!who) return;
         if (dest) {
-          for (const t of resolvePlayers(parts[1])) if (t.id !== dest.id || t.self !== dest.self) actOnPlayer(t, { k: 'tp', x: dest.x, y: dest.y });
+          for (const t of who) if (t.id !== dest.id || t.self !== dest.self) actOnPlayer(t, { k: 'tp', x: dest.x, y: dest.y });
+          commandOk(`Teleported ${playerLabel(who)} to ${dest.self ? 'you' : dest.name}.`);
         } else if (parts[2] !== undefined) {
           // /tp <player> <x> <y>
+          if (Number.isNaN(Number(String(parts[2]).replace(/^~/, '') || 0))) return commandFail(`"${parts[2]}" isn't a player or a coordinate.`);
           const x = parseCoord(parts[2], playerTileX) * TILE_SIZE;
           const y = parseCoord(parts[3], playerTileY) * TILE_SIZE;
-          for (const t of resolvePlayers(parts[1])) actOnPlayer(t, { k: 'tp', x, y });
+          for (const t of who) actOnPlayer(t, { k: 'tp', x, y });
+          commandOk(`Teleported ${playerLabel(who)} to ${Math.floor(x / TILE_SIZE)}, ${Math.floor(y / TILE_SIZE)}.`);
         } else {
-          const to = resolvePlayers(parts[1])[0];
-          if (to && !to.self) teleportPlayerTo(to.x, to.y);
+          const to = who[0];
+          if (to.self) return commandFail("That's you.");
+          teleportPlayerTo(to.x, to.y);
+          commandOk(`Teleported you to ${to.name}.`);
         }
         return;
       }
-      if (parts[1] && Number.isNaN(Number(parts[1])) && !parts[1].startsWith('~')) {
+      if (Number.isNaN(Number(parts[1])) && !parts[1].startsWith('~')) {
         // /tp fallen: jump next to the nearest fallen tree.
         // /tp <biome>: jump to the nearest edge of the closest zone of that biome.
         const query = parts.slice(1).join(' ').toLowerCase();
         const wantsFallen = ['fallen', 'fallen_tree', 'fallen tree', 'fallen_log', 'fallen log', 'log'].includes(query);
         const wantsWater = ['water', 'lake', 'beach'].includes(query);
         const biomeId = wantsFallen || wantsWater ? null : findBiomeId(query);
-        if (!wantsFallen && !wantsWater && !biomeId) return;
+        if (!wantsFallen && !wantsWater && !biomeId) return commandFail(`"${parts[1]}" isn't a player, a coordinate or a place.`);
         // Each repeat goes somewhere new: skip spots already teleported to (and the one you're in).
         const visitKey = wantsFallen ? 'fallen' : wantsWater ? 'water' : biomeId;
         const visited = tpVisited.get(visitKey) || new Set();
@@ -3195,48 +3484,79 @@ function processTextInputCommand(command) {
           edgeX = nearestBiomeEdge(playerTileX, world.seed ?? 0, biomeId, 400, zone => visited.has(zone) || zone === here || outsideWorld(zone));
           if (edgeX !== null) visited.add(Math.floor(edgeX / BIOME_ZONE));
         }
-        if (edgeX === null) return;
+        if (edgeX === null) return commandFail(`Couldn't find any ${query} nearby.`);
         player.vx = 0;
         player.vy = 0;
         player.cancelFall();
         lastPreloadChunk = null;
         loadInitialChunks(edgeX).then(() => placePlayerAtSurface(edgeX));
+        commandOk(`Teleported you to the ${query}.`);
         return;
       }
-      teleportPlayerTo(parseCoord(parts[1], playerTileX) * TILE_SIZE, parseCoord(parts[2], playerTileY) * TILE_SIZE);
-      return;
-
-    case 'fly': {
-      const val = (parts[1] || '').toLowerCase();
-      let flying = !player.creativeFlying;
-      if (val === 'on' || val === 'true') flying = true;
-      else if (val === 'off' || val === 'false') flying = false;
-      if (flying && !creativeMode) setCreativeMode(true);
-      player.creativeFlying = flying;
-      player.isFlying = flying;
-      if (!flying) player.vy = 0;
+      const tx = parseCoord(parts[1], playerTileX);
+      const ty = parseCoord(parts[2], playerTileY);
+      teleportPlayerTo(tx * TILE_SIZE, ty * TILE_SIZE);
+      commandOk(`Teleported you to ${tx}, ${ty}.`);
       return;
     }
 
+    case 'fly':
     case 'noclip': {
-      const val = (parts[1] || '').toLowerCase();
-      noClipMode = val === 'on' || val === 'true' ? true : val === 'off' || val === 'false' ? false : !noClipMode;
-      if (noClipMode && !creativeMode) setCreativeMode(true);
-      if (noClipMode) { player.creativeFlying = true; player.isFlying = true; }
+      // /fly [player] [on|off], /noclip [player] [on|off]
+      const { selector, args } = takePlayer();
+      const val = (args[0] || '').toLowerCase();
+      if (val && !['on', 'off', 'true', 'false'].includes(val)) return usageFail(cmd);
+      const on = val === 'on' || val === 'true' ? true : val === 'off' || val === 'false' ? false : null;
+      const targets = needPlayers(selector);
+      if (!targets) return;
+      for (const t of targets) actOnPlayer(t, { k: cmd, on });
+      const label = cmd === 'fly' ? 'Flying' : 'No-clip';
+      commandOk(on === null ? `Toggled ${label.toLowerCase()} for ${playerLabel(targets)}.` : `${label} is ${on ? 'on' : 'off'} for ${playerLabel(targets)}.`);
       return;
     }
 
-    case 'effect': {
-      // /effect <name> gives an effect (light = see in the dark); /effect clear removes them all.
-      const name = (parts[1] || '').toLowerCase();
-      if (name === 'clear') renderer.effects = {};
-      else if (name === 'light') (renderer.effects ??= {}).light = true;
+    case 'setpos1':
+    case 'setpos2': {
+      const spot = { x: playerTileX, y: Math.floor((player.y + player.height) / TILE_SIZE) };
+      if (cmd === 'setpos1') setPosition1 = spot; else setPosition2 = spot;
+      commandOk(`Position ${cmd === 'setpos1' ? 1 : 2} set to ${spot.x}, ${spot.y}.`);
+      return;
+    }
+
+    case 'setposclear':
+      setPosition1 = null;
+      setPosition2 = null;
+      commandOk('Both positions cleared.');
+      return;
+
+    case 'fill': {
+      // /fill <block> [solid|hollow|replace] [block] between /setpos1 and /setpos2 (or you),
+      // or /fill <x1> <y1> <x2> <y2> <block> [solid|hollow|replace] [block].
+      if (parts.length >= 6) {
+        const blockId = parts[5];
+        if (!registry.isBlock(blockId)) return commandFail(`"${blockId}" isn't a block.`);
+        if (parts[6] && !['solid', 'hollow', 'replace'].includes(parts[6])) return usageFail('fill');
+        const { fillType, replaceBlock } = parseFillMode(parts[6], parts[7]);
+        fillArea(parseCoord(parts[1], playerTileX), parseCoord(parts[2], playerTileY),
+          parseCoord(parts[3], playerTileX), parseCoord(parts[4], playerTileY), blockId, fillType, replaceBlock);
+        commandOk(`Filled the area with ${itemLabel(blockId)}.`);
+        return;
+      }
+      const blockId = parts[1];
+      if (!blockId) return usageFail('fill');
+      if (!registry.isBlock(blockId)) return commandFail(`"${blockId}" isn't a block.`);
+      if (!setPosition1) return commandFail('Set a corner first with /setpos1 (and /setpos2), or give coordinates.');
+      if (parts[2] && !['solid', 'hollow', 'replace'].includes(parts[2])) return usageFail('fill');
+      const end = setPosition2 || { x: playerTileX, y: playerTileY };
+      const { fillType, replaceBlock } = parseFillMode(parts[2], parts[3]);
+      fillArea(setPosition1.x, setPosition1.y, end.x, end.y, blockId, fillType, replaceBlock);
+      commandOk(`Filled the area with ${itemLabel(blockId)}.`);
       return;
     }
 
     case 'seed': {
       const newSeed = parts[1] === undefined ? Math.floor(Math.random() * 2147483647) : parseInt(parts[1], 10);
-      if (Number.isNaN(newSeed)) return;
+      if (Number.isNaN(newSeed)) return commandFail(`"${parts[1]}" isn't a valid seed.`);
       currentSeed = newSeed;
       world.seed = newSeed;
       tpVisited.clear();
@@ -3247,13 +3567,14 @@ function processTextInputCommand(command) {
       loadInitialChunks(centerX).then(() => {
         placePlayerAtSurface(centerX);
       });
+      commandOk(`New world from seed ${newSeed}.`);
       return;
     }
 
     case 'itemconfig': {
-      if (parts.length < 3) return;
+      if (parts.length < 3) return usageFail('itemconfig');
       const value = parseFloat(parts[2]);
-      if (Number.isNaN(value)) return;
+      if (Number.isNaN(value)) return commandFail(`"${parts[2]}" isn't a number.`);
       const keys = {
         pickuprange: ['pickupRange', v => v],
         attractionrange: ['attractionRange', v => v],
@@ -3263,26 +3584,44 @@ function processTextInputCommand(command) {
         maxlife: ['maxLife', v => Math.max(0, Math.floor(v))]
       };
       const entry = keys[parts[1].toLowerCase()];
-      if (entry) ItemEntity.updateConfig({ [entry[0]]: entry[1](value) });
+      if (!entry) return commandFail(`Unknown setting "${parts[1]}". Settings: ${ITEM_CONFIG_KEYS.join(', ')}.`);
+      ItemEntity.updateConfig({ [entry[0]]: entry[1](value) });
+      commandOk(`Set ${parts[1].toLowerCase()} to ${entry[1](value)}.`);
       return;
     }
 
     case 'lighting':
-      if (!parts[1] || parts[1] === 'recalc') world.initializeLighting();
+      if (parts[1] && parts[1] !== 'recalc') return usageFail('lighting');
+      world.initializeLighting();
+      commandOk('Recalculated the lighting.');
       return;
+
+    case 'effect': {
+      // /effect [player] <light|clear>
+      const { selector, args } = takePlayer();
+      const name = (args[0] || '').toLowerCase();
+      if (name !== 'light' && name !== 'clear') return usageFail('effect');
+      const targets = needPlayers(selector);
+      if (!targets) return;
+      for (const t of targets) actOnPlayer(t, { k: 'effect', name });
+      commandOk(name === 'clear' ? `Cleared the effects on ${playerLabel(targets)}.` : `${playerLabel(targets) === 'you' ? 'You can' : playerLabel(targets) + ' can'} see in the dark now.`);
+      return;
+    }
 
     case 'log': {
       const res = waterPerf.downloadReport();
       if (res && res.success) {
         console.log(`[Underwild] Water performance report downloaded: ${res.filename}`);
+        commandOk(`Saved the water report (${res.filename}).`);
       } else {
         console.warn('[Underwild] Failed to download water performance report:', res?.error);
+        commandFail('Could not save the water report.');
       }
       return;
     }
 
     default:
-      return;
+      return usageFail(cmd);
   }
 }
 
@@ -3796,7 +4135,7 @@ window.addEventListener('mousedown', (e) => {
     draggingDiv.style.left = e.clientX + 'px';
     draggingDiv.style.top = e.clientY + 'px';
   }
-  if (e.target.closest?.('#chat')) return;
+  if (e.target.closest?.('#chat, #chatSuggestions')) return;
   const hit = getUIHitFromElement(e.target);
 
   if (!hit) {
@@ -3906,7 +4245,7 @@ const HIT_REACH = 4;          // blocks
 const HIT_COOLDOWN_MS = 400;
 // Multiplayer: a left click on another player hits them (harder with a sword).
 function tryHitPlayer(screenX, screenY) {
-  if (!multiplayer.active || multiplayer.remotePlayers.size === 0) return false;
+  if (multiplayer.remotePlayers.size === 0) return false;
   const wx = camera.screenToWorldX(screenX);
   const wy = camera.screenToWorldY(screenY);
   const now = performance.now();
@@ -4128,6 +4467,8 @@ function closeChat() {
   if (player) player.inputLocked = false;
   const chat = document.getElementById('chat');
   if (chat) chat.classList.add('hidden');
+  document.getElementById('chatArea')?.classList.remove('chat-open');
+  collapseChatHistory();
   const suggestions = document.getElementById('chatSuggestions');
   if (suggestions) suggestions.classList.add('hidden');
   const chatInput = document.getElementById('chatInput');
@@ -4139,6 +4480,9 @@ function openChat(initialValue) {
   if (player) player.inputLocked = true;
   const chat = document.getElementById('chat');
   if (chat) chat.classList.remove('hidden');
+  document.getElementById('chatArea')?.classList.add('chat-open');
+  const chatLog = document.getElementById('chatLog');
+  if (chatLog) chatLog.scrollTop = chatLog.scrollHeight;
   setChatValue(initialValue);
   updateCommandSuggestions();
   const chatInput = document.getElementById('chatInput');
@@ -4965,6 +5309,7 @@ function updateHTMLUI() {
 
   const coordinates = document.getElementById('coordinates');
   if (coordinates) coordinates.classList.toggle('hidden', !inGame);
+  document.getElementById('chatArea')?.classList.toggle('hidden', !inGame);
   const coordText = document.getElementById('coordText');
   if (coordText && inGame) {
     const px = Math.floor((player.x + player.width / 2) / TILE_SIZE);

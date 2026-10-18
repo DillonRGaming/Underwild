@@ -11,6 +11,9 @@ import { waterLevel, waterMass, WATER_LEVELS, SQ as WATER_SQ } from '../logic/wa
 import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
 import { waterPerf } from './waterPerf.js';
 
+const NAME_TAG_NEAR = 15;   // blocks: name tags are fully shown up to here
+const NAME_TAG_FAR = 20;    // and have faded away completely by here
+
 const MIN_BRIGHTNESS = 0.04;
 const _rawSplat = [];
 for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx * dx + dy * dy <= 2) _rawSplat.push(dx, dy);
@@ -2390,7 +2393,7 @@ drawStars() {
   // hotbar), then a name tag above their head. Returns who was drawn.
   drawRemotePlayers() {
     const mp = typeof window !== 'undefined' ? window.multiplayer : null;
-    if (!mp?.active || !mp.remotePlayers.size) return [];
+    if (!mp?.remotePlayers.size) { this.pruneNameTags([]); return []; }
     const saved = { player: this.player, input: this.input, inventory: this.inventory, getUI: this.getUI, breaker: this.breaker };
     const drawn = [];
     const { camera, ctx } = this;
@@ -2409,21 +2412,57 @@ drawStars() {
         Object.assign(this, saved);
       }
       drawn.push(rp);
-      // Name tag
-      const tx = Math.round(camera.worldToScreenX(rp.x + rp.width / 2));
-      const ty = Math.round(camera.worldToScreenY(rp.y)) - 34;
-      ctx.save();
-      ctx.font = '14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const w = ctx.measureText(rp.name).width + 10;
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-      ctx.fillRect(tx - w / 2, ty - 10, w, 20);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(rp.name, tx, ty + 1);
-      ctx.restore();
+      // Blocks between you and them, centre to centre.
+      const me = saved.player;
+      const dist = me ? Math.hypot((rp.x + rp.width / 2) - (me.x + me.width / 2), (rp.y + rp.height / 2) - (me.y + me.height / 2)) / TILE_SIZE : 0;
+      this.placeNameTag(rp, camera.worldToScreenX(rp.x + rp.width / 2), camera.worldToScreenY(rp.y), dist);
     }
+    this.pruneNameTags(drawn);
     return drawn;
+  }
+
+  // Name tags are page elements (not canvas drawing) so they use the same container style as the
+  // hotbar and chat, whatever the theme. (sx, sy) is the top-centre of the player in canvas pixels.
+  placeNameTag(rp, sx, sy, dist = 0) {
+    if (!this.nameTags) {
+      this.nameTags = new Map();
+      this.nameTagLayer = document.createElement('div');
+      this.nameTagLayer.className = 'name-tag-layer';
+      document.body.appendChild(this.nameTagLayer);
+    }
+    let el = this.nameTags.get(rp.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'name-tag';
+      el.appendChild(document.createElement('span')).className = 'name-tag-text';
+      this.nameTagLayer.appendChild(el);
+      this.nameTags.set(rp.id, el);
+    }
+    // Crouching hides the tag. Full strength within 15 blocks, fading to nothing by 20.
+    const fade = rp.crouching ? 0 : Math.max(0, Math.min(1, (NAME_TAG_FAR - dist) / (NAME_TAG_FAR - NAME_TAG_NEAR)));
+    el.style.opacity = fade;
+    el.style.visibility = fade > 0 ? 'visible' : 'hidden';
+    if (rp.color) {
+      el.style.setProperty('--tag-color', rp.color);
+      el.classList.add('colored');
+    } else {
+      el.style.removeProperty('--tag-color');
+      el.classList.remove('colored');
+    }
+    const label = el.firstChild;
+    if (label.textContent !== rp.name) label.textContent = rp.name;
+    const box = this.canvas.getBoundingClientRect();
+    const px = box.left + sx * (box.width / this.canvas.width);
+    const py = box.top + sy * (box.height / this.canvas.height);
+    el.style.transform = `translate(${Math.round(px)}px, ${Math.round(py)}px) translate(-50%, -100%)`;
+  }
+
+  pruneNameTags(drawn) {
+    if (!this.nameTags?.size) return;
+    const keep = new Set(drawn.map(rp => rp.id));
+    for (const [id, el] of this.nameTags) {
+      if (!keep.has(id)) { el.remove(); this.nameTags.delete(id); }
+    }
   }
 
   // Red edges on the screen for a moment after you're hurt.

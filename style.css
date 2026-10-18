@@ -91,7 +91,9 @@
   --coords-right: auto;
   --coords-font-size: 15px;
   --chat-top: 16px;
-  --chat-width: 320px;
+  --chat-left: 16px;
+  --chat-width: 480px;
+  --chat-line-height: 24px;
 }
 
 html,
@@ -917,6 +919,9 @@ body.game-paused .menu-background,
 
 /* HUD */
 
+/* TEMP: the coordinates and FPS box is hidden for now. */
+.coordinates { display: none !important; }
+
 .coordinates {
   position: absolute;
   top: var(--coords-top);
@@ -1012,17 +1017,105 @@ body.game-paused .menu-background,
 .stat-icon.hunger.half { background-image: var(--icon-hunger-half); }
 .stat-icon.hunger.empty { background-image: var(--icon-hunger-empty); }
 
-.chat-container {
+.chat-area {
   position: absolute;
   top: var(--chat-top);
-  left: 50%;
-  transform: translateX(-50%);
+  left: var(--chat-left);
+  width: var(--chat-width);
   z-index: 10;
-  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.chat-area.hidden { display: none; }
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  /* 8 messages tall, then it scrolls. */
+  max-height: calc(8 * var(--chat-line-height) + 2 * var(--hotbar-padding) + 4px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  padding: var(--hotbar-padding);
   color: var(--hud-text);
-  background: var(--panel-bg);
-  border: var(--panel-border);
-  box-shadow: var(--panel-shadow);
+  background: var(--hotbar-bg);
+  border: var(--hotbar-border);
+  box-shadow: var(--hotbar-shadow);
+  border-radius: var(--radius);
+}
+
+.chat-area.chat-open .chat-log { pointer-events: auto; }
+/* Short logs sit at the bottom, next to the input, and still scroll properly when long. */
+.chat-log::before { content: ''; margin-top: auto; }
+.chat-log::-webkit-scrollbar { display: none; }
+/* The container fades out along with its last line, then goes away. */
+.chat-log { transition: opacity 0.6s; }
+.chat-area:not(.chat-open) .chat-log:not(:has(.chat-line:not(.fading))) { opacity: 0; }
+/* The log's container only shows while there is something in it to read. */
+.chat-area:not(.chat-open) .chat-log:not(:has(.chat-line:not(.gone))),
+.chat-area.chat-open .chat-log:not(:has(.chat-line)) { display: none; }
+
+.chat-line {
+  box-sizing: border-box;
+  min-height: var(--chat-line-height);
+  padding: 2px 6px;
+  font-size: 15px;
+  line-height: calc(var(--chat-line-height) - 4px);
+  overflow-wrap: anywhere;
+  color: var(--hud-text);
+  transition: opacity 0.6s, max-height 0.6s, padding 0.6s;
+}
+
+.chat-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.chat-line .chat-text { flex: 1; min-width: 0; }
+
+.chat-line .chat-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--panel-text-muted);
+  opacity: 0.8;
+}
+
+.chat-line .chat-name { color: var(--panel-text-muted); }
+.chat-line.error { color: #ff7b7b; }
+.chat-line.info { color: var(--panel-text-muted); }
+.chat-line.fading { opacity: 0; }
+.chat-line.faded {
+  opacity: 0;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+.chat-area.chat-open .chat-line.fading,
+.chat-area.chat-open .chat-line.faded,
+.chat-area.chat-open .chat-line.gone {
+  opacity: 1;
+  max-height: none !important;
+  min-height: var(--chat-line-height);
+  padding-top: 2px;
+  padding-bottom: 2px;
+  overflow: visible;
+}
+
+/* The input is a normal UI container, like the hotbar's. */
+.chat-container {
+  position: relative;
+  pointer-events: auto;
+  padding: var(--hotbar-padding);
+  color: var(--hud-text);
+  background: var(--hotbar-bg);
+  border: var(--hotbar-border);
+  box-shadow: var(--hotbar-shadow);
   border-radius: var(--radius);
 }
 
@@ -1053,8 +1146,8 @@ body.game-paused .menu-background,
   width: 100%;
   outline: none;
   color: var(--input-text);
-  background: var(--input-bg);
-  border: var(--input-border);
+  background: var(--hotbar-slot-bg);
+  border: var(--hotbar-slot-border);
   border-radius: var(--radius);
 }
 
@@ -1986,46 +2079,51 @@ img {
   white-space: nowrap;
 }
 
-/* The chat dropdown is a second box styled exactly like the chat text bar, just below it */
-.chat-container .suggestions-dropdown {
-  left: 0;
-  right: 0;
-  top: calc(100% + 6px);
-  padding: 4px;
+/* The command list is another container like the hotbar's, just below the input */
+.chat-area .suggestions-dropdown {
+  position: relative;
+  top: auto;
+  pointer-events: auto;
+  max-height: calc(10 * 36px);
+  padding: var(--hotbar-padding);
   color: var(--input-text);
-  background: var(--input-bg);
-  border: var(--input-border);
+  background: var(--hotbar-bg);
+  border: var(--hotbar-border);
   border-radius: var(--radius);
-  box-shadow: none;
+  box-shadow: var(--hotbar-shadow);
   font-size: 16px;
 }
 
-.chat-container .suggestion-item,
-.chat-container .suggestion-head {
+.chat-area .suggestion-item,
+.chat-area .suggestion-head {
   color: var(--input-text);
   padding: 4px 6px;
 }
 
-.chat-container .suggestion-item:hover,
-.chat-container .suggestion-item.selected {
+.chat-area .suggestion-item:hover,
+.chat-area .suggestion-item.selected {
   background: rgba(255, 255, 255, 0.08);
   border-color: transparent;
 }
 
-.chat-container .suggestion-head {
-  border-bottom: var(--input-border);
+.chat-area .suggestion-head {
+  /* Same box as a list row, so nothing shifts when the list turns into the argument view. */
+  border: 2px solid transparent;
+  margin: 0;
+  padding: 4px 6px;
+  cursor: default;
 }
 
-.chat-container .suggestion-text .cmd-arg {
+.chat-area .suggestion-text .cmd-arg {
   background: rgba(255, 255, 255, 0.06);
   color: var(--input-text);
 }
 
-.chat-container .suggestion-text .cmd-arg.optional {
+.chat-area .suggestion-text .cmd-arg.optional {
   color: var(--panel-text-muted);
 }
 
-.chat-container .suggestion-text .cmd-arg.active {
+.chat-area .suggestion-text .cmd-arg.active {
   background: rgba(255, 255, 255, 0.16);
   outline: none;
 }
@@ -2429,7 +2527,7 @@ body.touch-mode .touch-only { display: block; }
 #hotbar { scale: var(--gui-scale, 1); transform-origin: left bottom; }
 .ui-health { scale: var(--gui-scale, 1); transform-origin: left bottom; }
 .ui-hunger { scale: var(--gui-scale, 1); transform-origin: right bottom; }
-.chat-container { scale: var(--gui-scale, 1); transform-origin: left top; }
+.chat-area { scale: var(--gui-scale, 1); transform-origin: left top; }
 .inventory-overlay > .inventory-frame,
 .inventory-overlay > .inventory-content,
 .menu-content { scale: var(--gui-scale, 1); }
@@ -2523,7 +2621,7 @@ body.touch-mode #inventory .inventory-header .recipe-panel { flex: 1 1 0; min-wi
 
 /* Polish > UI Corners: every bordered box gets pixel-cut corners, like the blocks in game. */
 body.polish-ui-corners :is(
-  .minecraft-button, .win-btn, .keybind-button, .minecraft-input, .chat-input,
+  .chat-log, .name-tag, .minecraft-button, .win-btn, .keybind-button, .minecraft-input, .chat-input,
   .suggestions-dropdown, .suggestion-icon, .background-blocks, .bg-block-remove,
   .info-panel, .chat-container, .inventory-content, .inventory-slot, .crafting-slot,
   .crafting-output-slot, .hotbar-slot, #hotbar, .recipe-row, .forge-panel, .forge-choice,
@@ -2536,3 +2634,81 @@ body.polish-ui-corners :is(
     var(--notch) 100%, 0 calc(100% - var(--notch)), 0 var(--notch)
   );
 }
+
+/* Names above other players: the same container as the hotbar and chat. */
+.name-tag-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.name-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin-top: -6px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--hud-text);
+  background: var(--hotbar-bg);
+  border: var(--hotbar-border);
+  box-shadow: var(--hotbar-shadow);
+  border-radius: var(--radius);
+}
+
+/* Chat command list: each row is one line, the signature then a short description. */
+.chat-area .suggestion-item,
+.chat-area .suggestion-head {
+  flex-wrap: nowrap;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.chat-area .suggestion-item .suggestion-text:has(.cmd-arg),
+.chat-area .suggestion-head .suggestion-text {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+.chat-area .suggestion-text .cmd-arg { margin-left: 4px; }
+
+.chat-area .suggestion-item .suggestion-id,
+.chat-area .suggestion-head .suggestion-id {
+  flex: 0 100 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  text-align: right;
+}
+
+/* The argument being typed is white; the others are dimmer. */
+.chat-area .suggestion-text .cmd-arg,
+.chat-area .suggestion-text .cmd-arg.optional {
+  color: var(--panel-text-muted);
+}
+
+.chat-area .suggestion-text .cmd-arg.active {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* This font draws its letters above the middle of the line, so nudge them down to look centred. */
+.name-tag-text { display: block; transform: translateY(3px); }
+
+/* A player's chosen colour: just the name's text. */
+.name-tag.colored { color: var(--tag-color); }
