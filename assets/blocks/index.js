@@ -46,7 +46,6 @@ import mapleOrangeLeaves from './maple_orange_leaves.js';
 import mapleRedLeaves from './maple_red_leaves.js';
 import maplePlanks from './maple_planks.js';
 import mapleStairs from './maple_stairs.js';
-import glass from './glass.js';
 import torch from './torch.js';
 import coalOre from './coal_ore.js';
 import coalOreRich from './coal_ore_rich.js';
@@ -58,6 +57,21 @@ import steelBlock from './steel_block.js';
 import goldBlock from './gold_block.js';
 import craftingTable from './crafting_table.js';
 import bedrock from './bedrock.js';
+import lunarRock from './lunar_rock.js';
+import lunarRockDecor from './lunar_rock_decor.js';
+import lunarPebble from './lunar_pebble.js';
+import lunarRockSlab from './lunar_rock_slab.js';
+import lunarRockStairs from './lunar_rock_stairs.js';
+import marsSandstone from './mars_sandstone.js';
+import marsSmoothSandstone from './mars_smooth_sandstone.js';
+import marsCutSandstone from './mars_cut_sandstone.js';
+import marsChiseledSandstone from './mars_chiseled_sandstone.js';
+import marsSandstoneSlab from './mars_sandstone_slab.js';
+import marsSandstoneStairs from './mars_sandstone_stairs.js';
+import marsSand from './mars_sand.js';
+import marsRippledSand from './mars_rippled_sand.js';
+import marsRockDecor from './mars_rock_decor.js';
+import marsPebble from './mars_pebble.js';
 import gravel from './gravel.js';
 import oakChest from './oak_chest.js';
 import birchChest from './birch_chest.js';
@@ -140,7 +154,6 @@ export function registerAllBlocks(registry) {
     mapleRedLeaves,
     maplePlanks,
     mapleStairs,
-    glass,
     torch,
     coalOre,
     coalOreRich,
@@ -188,8 +201,27 @@ export function registerAllBlocks(registry) {
     greenTorch,
     blueTorch,
     purpleTorch,
-    cyanTorch
-  ].forEach(b => registry.register(b));
-  sandTypes.forEach(b => registry.register(b));
+    cyanTorch,
+    lunarRock,
+    { ...lunarRock, id: 'lunarstone' },
+    lunarRockDecor,
+    lunarPebble,
+    { ...lunarPebble, id: 'lunarstone_pebble' },
+    lunarRockSlab,
+    { ...lunarRockSlab, id: 'lunarstone_slab' },
+    lunarRockStairs,
+    { ...lunarRockStairs, id: 'lunarstone_stairs' },
+    marsSandstone,
+    marsSmoothSandstone,
+    marsCutSandstone,
+    marsChiseledSandstone,
+    marsSandstoneSlab,
+    marsSandstoneStairs,
+    marsSand,
+    marsRippledSand,
+    marsRockDecor,
+    marsPebble
+  ].forEach((b) => registry.register(b));
+  sandTypes.forEach((b) => registry.register(b));
   useGrassRegistry(registry);
 }

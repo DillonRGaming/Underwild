@@ -12,13 +12,8 @@ class ModManager {
     this.world = world;
   }
 
-  loadMods() {
-    try {
-      
-    } catch (error) {
-      
-    }
-  }
+  // Mods register themselves with registerMod(); none ship with the game yet.
+  loadMods() {}
 
   registerMod(mod) {
     this.mods.set(mod.id, mod);
@@ -49,7 +44,7 @@ class ModManager {
   }
 
   getEnabledMods() {
-    return Array.from(this.enabledMods).map(id => this.mods.get(id));
+    return Array.from(this.enabledMods).map((id) => this.mods.get(id));
   }
 
   isModEnabled(modId) {

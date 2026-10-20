@@ -7,17 +7,15 @@
 //
 // 1 block = 1 metre in the particle world, y pointing down like the game.
 
-const RADIUS = 0.15;              // particle radius in blocks (~30 particles/block at equilibrium)
-const MAX_PARTICLES = 12000;      // max active particles for real-time 60 FPS physics
-const MAX_BODY = 3000;            // most blocks of water woken up at once
-const SAFETY_SPEED = 9;           // blocks/s: prevents supersonic launch explosions
-const SWEEP_TICKS = 20;           // how often block-amount water is looked for and woken
-const SETTLE_TICKS = 90;          // ticks after waking water: extra damping while it settles
-const COLLIDE_MARGIN = 3;         // blocks around the water given collision shapes
+const RADIUS = 0.15; // particle radius in blocks (~30 particles/block at equilibrium)
+const MAX_PARTICLES = 12000; // max active particles for real-time 60 FPS physics
+const MAX_BODY = 3000; // most blocks of water woken up at once
+const SAFETY_SPEED = 9; // blocks/s: prevents supersonic launch explosions
+const SWEEP_TICKS = 20; // how often block-amount water is looked for and woken
+const SETTLE_TICKS = 90; // ticks after waking water: extra damping while it settles
 
 import { waterPerf } from '../core/waterPerf.js';
 
-let Box2D = null;
 let loading = null;
 
 // Load LiquidFun once (it's a WebAssembly module); until it's ready, water stays as blocks.
@@ -25,8 +23,10 @@ export function loadParticleEngine() {
   if (!loading) {
     loading = import('../lib/liquidfun/entry.js')
       .then((m) => m.default({ locateFile: (f) => new URL(`../lib/liquidfun/${f}`, import.meta.url).href }))
-      .then((b) => { Box2D = b; return b; })
-      .catch((e) => { console.warn('Particle water unavailable:', e); return null; });
+      .catch((e) => {
+        console.warn('Particle water unavailable:', e);
+        return null;
+      });
   }
   return loading;
 }
@@ -34,12 +34,14 @@ export function loadParticleEngine() {
 export class ParticleWater {
   constructor(world, sim) {
     this.world = world;
-    this.sim = sim;                // the block-amount water (water.js)
+    this.sim = sim; // the block-amount water (water.js)
     this.ready = false;
-    this.count = new Map();        // block key -> particles in it (refreshed every tick)
+    this.count = new Map(); // block key -> particles in it (refreshed every tick)
     this.tick = 0;
-    this.fixtures = new Map();     // chunk x -> its collision fixtures
-    loadParticleEngine().then((b) => { if (b) this.init(b); });
+    this.fixtures = new Map(); // chunk x -> its collision fixtures
+    loadParticleEngine().then((b) => {
+      if (b) this.init(b);
+    });
   }
 
   init(B) {
@@ -49,8 +51,8 @@ export class ParticleWater {
     const def = new B.b2ParticleSystemDef();
     def.radius = RADIUS;
     def.dampingStrength = 1.2;
-    def.viscousStrength = 0.20;
-    def.pressureStrength = 0.60;
+    def.viscousStrength = 0.2;
+    def.pressureStrength = 0.6;
     def.maxCount = 0;
     this.ps = this.pw.CreateParticleSystem(def);
     this.shape = new B.b2PolygonShape();
@@ -71,12 +73,15 @@ export class ParticleWater {
     return this.ready && !this.world.remote;
   }
 
-  key(tx, ty) { return tx * 4096 + ty; }
+  key(tx, ty) {
+    return tx * 4096 + ty;
+  }
 
   // Create a box of water particles using LiquidFun's native particle group generator
   createWaterBox(x0, y0, x1, y1) {
     if (x0 >= x1 || y0 >= y1) return 0;
-    const hx = (x1 - x0) / 2, hy = (y1 - y0) / 2;
+    const hx = (x1 - x0) / 2,
+      hy = (y1 - y0) / 2;
     this.vec.set_x(x0 + hx);
     this.vec.set_y(y0 + hy);
     this.shape.SetAsBox(hx, hy, this.vec, 0);
@@ -88,7 +93,8 @@ export class ParticleWater {
   }
 
   clearAll() {
-    this.vec.set_x(0); this.vec.set_y(0);
+    this.vec.set_x(0);
+    this.vec.set_y(0);
     this.shape.SetAsBox(1e6, 1e6, this.vec, 0);
     this.ps.DestroyParticlesInShape(this.shape, this.ground.GetTransform());
     this.zombies = true;
@@ -136,8 +142,17 @@ export class ParticleWater {
   disturb(tx, ty) {
     this.wakeUp();
     if (!this.enabled) return;
-    for (const [dx, dy] of [[0, 0], [0, -1], [-1, 0], [1, 0], [0, 1]]) {
-      if (this.sim.blockMass(tx + dx, ty + dy) > 0.01) { this.wake(tx + dx, ty + dy); return; }
+    for (const [dx, dy] of [
+      [0, 0],
+      [0, -1],
+      [-1, 0],
+      [1, 0],
+      [0, 1]
+    ]) {
+      if (this.sim.blockMass(tx + dx, ty + dy) > 0.01) {
+        this.wake(tx + dx, ty + dy);
+        return;
+      }
     }
   }
 
@@ -148,9 +163,17 @@ export class ParticleWater {
     const seen = new Set([this.key(tx, ty)]);
     const queue = [tx, ty];
     for (let q = 0; q < queue.length && q < MAX_BODY * 2; q += 2) {
-      const x = queue[q], y = queue[q + 1];
-      for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) {
-        const nx = x + dx, ny = y + dy, k = this.key(nx, ny);
+      const x = queue[q],
+        y = queue[q + 1];
+      for (const [dx, dy] of [
+        [0, -1],
+        [-1, 0],
+        [1, 0],
+        [0, 1]
+      ]) {
+        const nx = x + dx,
+          ny = y + dy,
+          k = this.key(nx, ny);
         if (seen.has(k)) continue;
         seen.add(k);
         if (this.sim.blockMass(nx, ny) > 0.01) queue.push(nx, ny);
@@ -163,13 +186,17 @@ export class ParticleWater {
     const byCol = new Map();
     let count = 0;
     for (let q = 0; q < queue.length && q < MAX_BODY * 2 && count < budget; q += 2) {
-      const x = queue[q], y = queue[q + 1];
+      const x = queue[q],
+        y = queue[q + 1];
       const all = this.sim.takeBlockMass(x, y);
       const m = Math.min(1, all);
       if (m <= 0.01) continue;
       count++;
       let col = byCol.get(x);
-      if (!col) { col = []; byCol.set(x, col); }
+      if (!col) {
+        col = [];
+        byCol.set(x, col);
+      }
       col.push({ y, m });
     }
 
@@ -239,9 +266,11 @@ export class ParticleWater {
 
     for (let i = 0; i < n; i++) {
       if (!this.alive(i)) continue;
-      const px = pos[i * 2], py = pos[i * 2 + 1];
+      const px = pos[i * 2],
+        py = pos[i * 2 + 1];
       if (onlyChunk !== null && (px < minX || px >= maxX)) continue;
-      const tx = Math.floor(px), ty = Math.floor(py);
+      const tx = Math.floor(px),
+        ty = Math.floor(py);
       const k = `${tx},${ty}`;
       amounts.set(k, (amounts.get(k) || 0) + 1);
       doomed.push(i);
@@ -266,7 +295,10 @@ export class ParticleWater {
     if (!this.ready) return;
     waterPerf.startSim();
     try {
-      if (!this.enabled) { if (this.ps.GetParticleCount()) this.settle(); return; }
+      if (!this.enabled) {
+        if (this.ps.GetParticleCount()) this.settle();
+        return;
+      }
       this.tick++;
       // All water in loaded chunks is particles: any held as block amounts (just loaded, set
       // by a command, pushed out by a block...) is woken up.
@@ -278,7 +310,10 @@ export class ParticleWater {
       });
       if (!n) {
         this.count.clear();
-        if (this.wallsDirty) { this.wallsDirty = false; this.updateWalls(); }
+        if (this.wallsDirty) {
+          this.wallsDirty = false;
+          this.updateWalls();
+        }
         return;
       }
 
@@ -375,13 +410,21 @@ export class ParticleWater {
 
       // Destroy out-of-bounds particles and update block count map every 5 ticks
       waterPerf.time('simOobCleanup', () => {
-        const needCount = (this.tick % 5 === 0);
+        const needCount = this.tick % 5 === 0;
         if (needCount) this.count.clear();
         const count = this.count;
         for (let i = this.ps.GetParticleCount() - 1; i >= 0; i--) {
-          const x = pos[i * 2], y = pos[i * 2 + 1];
-          const tx = Math.floor(x), ty = Math.floor(y);
-          if (!Number.isFinite(x) || !Number.isFinite(y) || ty >= this.world.height || ty < -50 || !this.world.isChunkLoaded(this.world.chunkXFor(Math.max(0, tx)))) {
+          const x = pos[i * 2],
+            y = pos[i * 2 + 1];
+          const tx = Math.floor(x),
+            ty = Math.floor(y);
+          if (
+            !Number.isFinite(x) ||
+            !Number.isFinite(y) ||
+            ty >= this.world.height ||
+            ty < -50 ||
+            !this.world.isChunkLoaded(this.world.chunkXFor(Math.max(0, tx)))
+          ) {
             this.ps.DestroyParticle(i);
             continue;
           }
@@ -412,7 +455,7 @@ export class ParticleWater {
     if (!slot) return;
     const cs = this.world.chunkSize;
     for (let i = 0; i < slot.mass.length; i++) {
-      if (slot.mass[i] > 0.01 && !slot.solid[i]) this.wake(cx * cs + i % cs, Math.floor(i / cs));
+      if (slot.mass[i] > 0.01 && !slot.solid[i]) this.wake(cx * cs + (i % cs), Math.floor(i / cs));
     }
   }
 
@@ -425,7 +468,9 @@ export class ParticleWater {
   buildChunk(cx) {
     waterPerf.time('simTerrainFixtures', () => {
       this.dropChunk(cx);
-      const cs = this.world.chunkSize, h = this.world.height, x0 = cx * cs;
+      const cs = this.world.chunkSize,
+        h = this.world.height,
+        x0 = cx * cs;
       if (!this.world.isChunkLoaded(cx)) return;
       const solid = new Uint8Array(cs * h);
       for (let y = 0; y < h; y++) for (let x = 0; x < cs; x++) solid[y * cs + x] = this.sim.closed(x0 + x, y) ? 1 : 0;
@@ -442,7 +487,8 @@ export class ParticleWater {
             ye++;
           }
           for (let yy = y; yy <= ye; yy++) for (let k = x; k <= xe; k++) used[yy * cs + k] = 1;
-          const hx = (xe - x + 1) / 2, hy = (ye - y + 1) / 2;
+          const hx = (xe - x + 1) / 2,
+            hy = (ye - y + 1) / 2;
           this.vec.set_x(x0 + x + hx);
           this.vec.set_y(y + hy);
           this.shape.SetAsBox(hx, hy, this.vec, 0);
@@ -482,7 +528,7 @@ export class ParticleWater {
       this.walls ??= new Map();
       if (!this.particleCount()) {
         if (this.walls.size) {
-          for (const [cx, f] of this.walls) this.ground.DestroyFixture(f);
+          for (const f of this.walls.values()) this.ground.DestroyFixture(f);
           this.walls.clear();
         }
         return;
@@ -490,19 +536,19 @@ export class ParticleWater {
       const loaded = (cx) => this.sim.slots.has(cx);
       const want = new Set();
       for (const cx of this.sim.slots.keys()) for (const n of [cx - 1, cx + 1]) if (!loaded(n)) want.add(n);
-      const removed = [], added = [];
-      for (const [cx, f] of this.walls) if (!want.has(cx)) { this.ground.DestroyFixture(f); this.walls.delete(cx); removed.push(cx); }
-      const cs = this.world.chunkSize, h = this.world.height;
+      for (const [cx, f] of this.walls)
+        if (!want.has(cx)) {
+          this.ground.DestroyFixture(f);
+          this.walls.delete(cx);
+        }
+      const cs = this.world.chunkSize,
+        h = this.world.height;
       for (const cx of want) {
         if (this.walls.has(cx)) continue;
         this.vec.set_x(cx * cs + cs / 2);
         this.vec.set_y(h / 2);
         this.shape.SetAsBox(cs / 2, h / 2 + 50, this.vec, 0);
         this.walls.set(cx, this.ground.CreateFixture(this.shape, 0));
-        added.push(cx);
-      }
-      if (added.length || removed.length) {
-        console.log(`[ParticleWater] updateWalls added:[${added}] removed:[${removed}] activeWalls:[${[...this.walls.keys()]}]`);
       }
     });
   }
@@ -514,7 +560,8 @@ export class ParticleWater {
     if (!this.ready) return;
     if (this.ps.GetParticleCount() && this.sim.closed(tx, ty)) {
       const inside = this.count.get(this.key(tx, ty)) || 0;
-      this.vec.set_x(tx + 0.5); this.vec.set_y(ty + 0.5);
+      this.vec.set_x(tx + 0.5);
+      this.vec.set_y(ty + 0.5);
       this.shape.SetAsBox(0.5, 0.5, this.vec, 0);
       this.ps.DestroyParticlesInShape(this.shape, this.ground.GetTransform());
       this.zombies = true;

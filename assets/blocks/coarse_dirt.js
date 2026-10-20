@@ -6,7 +6,8 @@ export default {
   material: 'dirt',
   kind: 'block',
   tab: 'nature',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shapeless: { dirt: 1, gravel: 1 }, count: 2 }
   ],
   tool: 'shovel', // mined fastest with this

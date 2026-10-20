@@ -4,7 +4,8 @@ export default {
   material: 'iron',
   kind: 'tool',
   tab: 'tools',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['i i', ' i '], ingredients: { i: 'steel_ingot' }, count: 1 }
   ],
   type: 'item',

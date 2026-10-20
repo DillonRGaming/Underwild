@@ -1,5 +1,5 @@
 // npm run set-version 0.5.1 — sets the game's version everywhere it's written
-// (package.json and GAME_VERSION in src/script.js). Then tag v0.5.1 to release it.
+// (package.json and GAME_VERSION in src/game/version.js). Then tag v0.5.1 to release it.
 import fs from 'node:fs';
 
 const version = process.argv[2];
@@ -10,6 +10,7 @@ if (!/^\d+\.\d+\.\d+$/.test(version || '')) {
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 pkg.version = version;
 fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-const script = fs.readFileSync('src/script.js', 'utf8').replace(/const GAME_VERSION = '[^']*';/, `const GAME_VERSION = '${version}';`);
-fs.writeFileSync('src/script.js', script);
+const versionFile = 'src/game/version.js';
+const script = fs.readFileSync(versionFile, 'utf8').replace(/const GAME_VERSION = '[^']*';/, `const GAME_VERSION = '${version}';`);
+fs.writeFileSync(versionFile, script);
 console.log(`Version set to ${version}`);

@@ -385,6 +385,13 @@
             <button class="minecraft-button small" data-action="leaves-off">OFF</button>
           </div>
         </div>
+        <div class="option-group">
+          <label>Performance Overlay (F3):</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="perf-overlay-on">ON</button>
+            <button class="minecraft-button small" data-action="perf-overlay-off" data-selected="true">OFF</button>
+          </div>
+        </div>
         <h2 class="polish-heading">Polish</h2>
         <div id="polishOptions"></div>
       </div>
@@ -611,13 +618,6 @@
               <button class="minecraft-button small" data-action="time-dawn">Dawn</button>
             </div>
           </div>
-          <div class="option-group">
-            <label>Generate Structures:</label>
-            <div class="button-group">
-              <button class="minecraft-button small" data-action="structures-on" data-selected="true">ON</button>
-              <button class="minecraft-button small" data-action="structures-off">OFF</button>
-            </div>
-          </div>
         </div>
         <div class="grid-column">
           <div class="option-group">
@@ -692,7 +692,24 @@
       <div class="menu-buttons">
         <button class="minecraft-button" data-action="resume-game">Resume Game</button>
         <button class="minecraft-button" data-action="pause-options">Options</button>
+        <button class="minecraft-button hidden" data-action="pause-players" id="pausePlayersButton">Players</button>
         <button class="minecraft-button" data-action="pause-exit">Exit World</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hosting: who's in the game, what they may do, and who's banned. -->
+  <div id="playersMenu" class="menu-container hidden">
+    <div class="menu-background pause-bg"></div>
+    <div class="menu-content mp-wide">
+      <h1 class="menu-title">Players</h1>
+      <div class="form-section">
+        <div class="mp-list" id="mpPlayerList"></div>
+        <label>Banned:</label>
+        <div class="mp-list" id="mpBanList"></div>
+      </div>
+      <div class="menu-buttons">
+        <button class="minecraft-button" data-action="exit-back">Back</button>
       </div>
     </div>
   </div>
@@ -768,69 +785,6 @@
       </div>
       <div class="info-panel" data-panel="changelog">
         <div class="info-scroll">
-          <div class="info-section">
-            <div class="info-section-header">v0.1.0 — The Underwild Update</div>
-            <ul>
-              <li>Complete world generator rewrite — new biome distribution system</li>
-              <li>Added 6 ambient music tracks by man-o-valor</li>
-              <li>MovType font integration — custom pixel font across all UI</li>
-              <li>New block types: copper (and all its oxidation stages), mud, maple wood</li>
-              <li>Multiplayer support with dedicated server executable</li>
-              <li>Background block customization system</li>
-              <li>Falling leaf particles for birch and maple trees</li>
-              <li>Mod support framework with enable/disable toggling</li>
-              <li>Controls remapping — all keybinds are now customizable</li>
-              <li>Skin selection menu with multiple character skins</li>
-              <li>Fixed chunk loading stuttering when moving fast</li>
-              <li>Fixed lighting engine not updating after block placement</li>
-              <li>Fixed inventory desync in multiplayer sessions</li>
-              <li>Optimized render distance scaling for larger worlds</li>
-            </ul>
-          </div>
-          <div class="info-section">
-            <div class="info-section-header">v0.0.9 — Crafting & Copper</div>
-            <ul>
-              <li>Introduced crafting table UI with 3x3 grid</li>
-              <li>Added copper tools: sword, pickaxe, axe, shovel</li>
-              <li>Implemented tool durability and breaking</li>
-              <li>Added UI overlay effects for health, hunger, and status effects</li>
-              <li>New world generation option: superflat and mountains world types</li>
-              <li>Advanced world options menu with difficulty, time, and structure toggles</li>
-              <li>Background blocks now support custom block IDs</li>
-              <li>Improved chunk loading — reduced memory usage by 40%</li>
-              <li>Fixed crash when generating large worlds with structures</li>
-              <li>Added /spawn and /tp command support</li>
-            </ul>
-          </div>
-          <div class="info-section">
-            <div class="info-section-header">v0.0.8 — Multiplayer Alpha</div>
-            <ul>
-              <li>Multiplayer support via WebSocket connections</li>
-              <li>Dedicated server UI with world management</li>
-              <li>Player position syncing across clients</li>
-              <li>Block breaking and placement synced in real-time</li>
-              <li>Server-side world saving every 30 seconds</li>
-              <li>UPnP router tunneling support for easy hosting</li>
-              <li>Added player name tags above heads</li>
-              <li>Chat system with /command support</li>
-              <li>Fixed multiple memory leaks in the networking layer</li>
-              <li>Added server console with command input</li>
-            </ul>
-          </div>
-          <div class="info-section">
-            <div class="info-section-header">v0.0.7 — Worlds Take Shape</div>
-            <ul>
-              <li>Persistent world saving and loading to local files</li>
-              <li>Player health and hunger systems with UI indicators</li>
-              <li>Day/night cycle with smooth lighting transitions</li>
-              <li>Chunk-based world generation with trees and flowers</li>
-              <li>First-person block placing and breaking with raycasting</li>
-              <li>Hotbar selection and inventory management</li>
-              <li>Basic audio system with placeholder sound effects</li>
-              <li>Framerate-independent game loop</li>
-              <li>Window controls for Electron desktop mode</li>
-            </ul>
-          </div>
         </div>
       </div>
       <div class="info-panel hidden" data-panel="credits">
@@ -1002,26 +956,6 @@
   </div>
 
    <div id="mpToast" class="mp-toast"></div>
-
-   <!-- Skin Selection UI -->
-   <div id="skinMenu" class="menu-container hidden">
-    <div class="menu-background"></div>
-    <div class="menu-content">
-      <h1 class="menu-title">Skins</h1>
-      <div class="form-section">
-        <div class="option-group">
-          <label>Select Skin:</label>
-          <div class="skins-grid" id="skinsGrid">
-            <!-- Skin selection buttons will be added dynamically -->
-          </div>
-        </div>
-      </div>
-      <div class="menu-buttons">
-        <button class="minecraft-button" data-action="apply-skin">Apply Skin</button>
-        <button class="minecraft-button" data-action="back-to-main-from-skin">Back</button>
-      </div>
-    </div>
-  </div>
 
    <div id="dragging-item" class="dragging-item hidden"></div>
    <script>

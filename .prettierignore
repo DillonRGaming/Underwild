@@ -1,0 +1,7 @@
+node_modules
+build
+data
+platforms/android
+src/lib
+*.html
+package-lock.json

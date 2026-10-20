@@ -5,8 +5,11 @@ export class Engine {
     this.update = update;
     this.render = render;
     this._last = 0;
-    this._accum = 1;
     this._running = false;
+  }
+
+  get running() {
+    return this._running;
   }
   start() {
     if (this._running) return;

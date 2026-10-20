@@ -2,24 +2,12 @@
 // soft shadows on walls, entity outlines and a vignette.
 import { TILE_SIZE } from './utils.js';
 import { polishOn } from './polishSettings.js';
+import { naturalHeightAt } from '../logic/terrainGen.js';
 
 const OUTLINE = 'rgba(14, 12, 12, 0.8)';
 const SEAM = 'rgba(14, 12, 12, 0.13)';
 const CORNER = 'rgba(14, 12, 12, 0.3)';
 const WALL_SHADOW = 'rgba(10, 9, 9, 0.32)';
-const SURFACE_Y = 50 * TILE_SIZE;
-
-function hash1(n, seed) {
-  let h = (n * 374761393 + seed * 668265263) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-function noise1(x, seed) {
-  const i = Math.floor(x), f = x - i;
-  const s = f * f * (3 - 2 * f);
-  return hash1(i, seed) * (1 - s) + hash1(i + 1, seed) * s;
-}
 
 const mix = (a, b, t) => Math.round(a + (b - a) * t);
 
@@ -27,7 +15,7 @@ const mix = (a, b, t) => Math.round(a + (b - a) * t);
 export function drawSkyGradient(ctx, canvas, r, g, b, light = 1) {
   // The pale horizon fades out at night, so it never glows brighter than the land.
   const k = Math.max(0, Math.min(1, light));
-  const key = `${r},${g},${b},${canvas.height},${k.toFixed(2)}`;
+  const key = `${r},${g},${b},${canvas.height},${k.toFixed(3)}`;
   if (drawSkyGradient._key !== key) {
     const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
     grad.addColorStop(0, `rgb(${mix(r, 20 * k, 0.28)}, ${mix(g, 40 * k, 0.28)}, ${mix(b, 110 * k, 0.22)})`);
@@ -40,71 +28,147 @@ export function drawSkyGradient(ctx, canvas, r, g, b, light = 1) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
-// Far to near: rolling hills fading into the sky, the nearest with little pines.
-const HILLS = [
-  { par: 0.12, y: 0.42, amp: 70, freq: 1 / 90, color: [92, 132, 150], haze: 0.62, seed: 11, trees: 0 },
-  { par: 0.22, y: 0.52, amp: 60, freq: 1 / 70, color: [70, 118, 112], haze: 0.42, seed: 22, trees: 0.06 },
-  { par: 0.36, y: 0.62, amp: 50, freq: 1 / 55, color: [52, 98, 78], haze: 0.22, seed: 33, trees: 0.12 },
+// The far land: two more layers of the world further back, each seen as one flat silhouette.
+// They're the same blocky terrain the world is made of (each on its own seed, so they aren't
+// copies of the ground in front), drawn smaller and moving slower the further back they are,
+// in one hazy colour each. One shape and one fill per layer, so they cost next to nothing.
+const FAR_LAYERS = [
+  // scale: size relative to the world in front; speed: how fast it slides sideways as you
+  // walk (relative to the world in front); ground: where its average ground
+  // sits (share of the screen height, when you're standing on the surface); haze: how much
+  // of the sky colour shows through; flat: how much of the terrain's ups and downs it keeps.
+  { scale: 0.22, speed: 0.1, ground: 0.47, haze: 0.6, flat: 0.45, seed: 4242 },
+  { scale: 0.34, speed: 0.17, ground: 0.57, haze: 0.4, flat: 0.45, seed: 7331 }
+];
+const FAR_COLOR = { regular: [44, 80, 68], mars: [112, 50, 28] };
+const SNOWY_FAR = [190, 200, 214];
+const FAR_RISE = 0.75; // how much the far land moves up and down as you climb and dig
+const FAR_GROUND = 55; // blocks: about where the surface is, the middle of the ups and downs
+const farHeights = new Map(); // `${seed}|${type}|${column}` -> surface height in blocks
+const TREE_GAP = 6; // trees are at least this many far blocks apart
+const TREE_MIN = 0.9; // a column's hash has to be this high to hold a tree (about 6% of columns)
+const TREE_UNIT = 0.8; // a tree "pixel", in far blocks
+// Tree silhouettes, as rows of [width, height] in tree pixels from the top down, then a trunk.
+const TREE_SHAPES = [
+  {
+    rows: [
+      [1, 1],
+      [3, 1],
+      [3, 1],
+      [5, 1],
+      [5, 1]
+    ],
+    trunk: [1, 1]
+  }, // pine
+  {
+    rows: [
+      [1, 1],
+      [3, 1],
+      [3, 1],
+      [5, 1],
+      [5, 1],
+      [7, 1]
+    ],
+    trunk: [1, 1]
+  }, // tall pine
+  {
+    rows: [
+      [3, 1],
+      [5, 3]
+    ],
+    trunk: [1, 2]
+  } // round tree
 ];
 
-export function drawHills(ctx, camera, canvas, seed, sky, light) {
-  const u = Math.max(2, Math.round(camera.zoom)); // one hill "pixel"
+function hashCol(column, seed) {
+  let h = (column * 374761393 + seed * 668265263) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// A column has a tree when its hash is the highest of the columns within TREE_GAP - 1 either side
+// (so two trees can never be closer than TREE_GAP) and is high enough to be picked at all. It only
+// looks at the hashes, not at what's on screen, so the trees stay put as the camera moves.
+function hasTree(column, seed) {
+  const h = hashCol(column, seed);
+  if (h < TREE_MIN) return false;
+  for (let d = 1; d < TREE_GAP; d++) {
+    if (hashCol(column - d, seed) >= h || hashCol(column + d, seed) >= h) return false;
+  }
+  return true;
+}
+
+// Adds a tree silhouette standing on (cx, ground) to the current path.
+function addTree(ctx, cx, ground, unit, shape) {
+  const [tw, th] = shape.trunk;
+  let y = ground - th * unit;
+  ctx.rect(Math.round(cx - (tw * unit) / 2), Math.round(y), Math.round(tw * unit), Math.round(th * unit) + 1);
+  for (let i = shape.rows.length - 1; i >= 0; i--) {
+    const [w, h] = shape.rows[i];
+    y -= h * unit;
+    ctx.rect(Math.round(cx - (w * unit) / 2), Math.round(y), Math.round(w * unit), Math.round(h * unit) + 1);
+  }
+}
+
+function farHeightAt(column, seed, worldHeight, worldType) {
+  const key = `${seed}|${worldType}|${column}`;
+  let h = farHeights.get(key);
+  if (h === undefined) {
+    h = naturalHeightAt(column, seed, worldHeight, worldType);
+    if (farHeights.size > 8000) farHeights.clear();
+    farHeights.set(key, h);
+  }
+  return h;
+}
+
+export function drawHills(ctx, camera, canvas, seed, sky, light, worldType = 'regular', worldHeight = 200, snow = 0) {
+  const type = worldType === 'mars' ? 'mars' : 'regular';
   const l = 0.06 + 0.94 * Math.max(0, Math.min(1, light));
-  for (const H of HILLS) {
-    const c = H.color.map((v, i) => mix(v * l, sky[i], H.haze));
-    const rim = c.map((v) => Math.min(255, v + 18));
-    const base = canvas.height * H.y - (camera.y - SURFACE_Y) * H.par * camera.zoom;
-    if (base - H.amp * 2 > canvas.height) continue;
-    const off = camera.x * H.par * camera.zoom / u;
-    const first = Math.floor(off);
-    const shift = (off - first) * u;
-    const cols = Math.ceil(canvas.width / u) + 2;
-    const tops = new Array(cols);
-    for (let i = 0; i < cols; i++) {
-      const wx = first + i;
-      let h = noise1(wx * H.freq * u, seed + H.seed) * H.amp + noise1(wx * H.freq * u * 3.1, seed + H.seed + 5) * H.amp * 0.3;
-      // A small pine: a stepped triangle poking out of the ridge.
-      if (H.trees) {
-        const t = wx % 7, cell = Math.floor(wx / 7);
-        if (hash1(cell, seed + H.seed + 9) < H.trees * 4) {
-          const peak = 3 - Math.abs(t - 3);
-          if (peak > 0) h += peak * u * (2 + hash1(cell, seed + 3) * 2);
-        }
+  // Snow lying on the land whitens the far land too.
+  const land = FAR_COLOR[type].map((v, i) => mix(v, SNOWY_FAR[i], 0.55 * snow));
+  // Where the camera is relative to standing on the surface, so the layers rise and sink a
+  // little (less the further back) as you climb and dig.
+  const fromSurface = camera.y + canvas.height / camera.zoom / 2 - FAR_GROUND * TILE_SIZE;
+  for (const L of FAR_LAYERS) {
+    const zoom = camera.zoom * L.scale;
+    // One far block on screen, in whole pixels, so every column (and every tree) lands on the same grid.
+    const block = Math.max(1, Math.round(TILE_SIZE * zoom));
+    const c = land.map((v, i) => mix(v * l, sky[i], L.haze));
+    const groundY = canvas.height * L.ground - fromSurface * zoom * FAR_RISE;
+    // Slides sideways at its own (slow) speed, whatever its size. Snapped to whole pixels too.
+    const shift = Math.round(camera.x * camera.zoom * L.speed);
+    const first = Math.floor(shift / block) - 1;
+    const toScreenX = (column) => column * block - shift;
+    const trees = []; // column, middle x, ground y
+    ctx.beginPath();
+    ctx.moveTo(toScreenX(first), canvas.height);
+    for (let column = first; ; column++) {
+      const x0 = toScreenX(column);
+      if (x0 > canvas.width) {
+        ctx.lineTo(x0, canvas.height);
+        break;
       }
-      const top = Math.round((base - h) / u) * u;
-      tops[i] = top;
+      const h = (farHeightAt(column, seed + L.seed, worldHeight, type) - FAR_GROUND) * L.flat;
+      const top = Math.round(groundY + h * TILE_SIZE * zoom);
+      ctx.lineTo(x0, top);
+      ctx.lineTo(x0 + block, top);
+      if (type === 'regular') trees.push(column, x0 + block / 2, top);
     }
-
-    // Batched polygon fill for the hill body:
-    ctx.beginPath();
-    const xStart = Math.round(0 - shift);
-    ctx.moveTo(xStart, canvas.height);
-    for (let i = 0; i < cols; i++) {
-      const x0 = Math.round(i * u - shift);
-      const x1 = Math.round((i + 1) * u - shift);
-      const top = tops[i];
-      if (i === 0) ctx.lineTo(x0, top);
-      ctx.lineTo(x1, top);
-    }
-    const xEnd = Math.round(cols * u - shift);
-    ctx.lineTo(xEnd, canvas.height);
     ctx.closePath();
-    ctx.fillStyle = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-    ctx.fill();
-
-    // Batched path for hill rim:
-    ctx.beginPath();
-    for (let i = 0; i < cols; i++) {
-      const x0 = Math.round(i * u - shift);
-      const w = Math.round((i + 1) * u - shift) - x0;
-      ctx.rect(x0, tops[i], w, u);
+    // Trees on the far land, in the same colour (part of the same shape).
+    for (let i = 0; i < trees.length; i += 3) {
+      const column = trees[i];
+      const treeSeed = seed + L.seed + 99;
+      if (!hasTree(column, treeSeed)) continue;
+      const shape = TREE_SHAPES[Math.floor(hashCol(column, treeSeed + 1) * TREE_SHAPES.length)];
+      addTree(ctx, trees[i + 1], trees[i + 2], Math.max(1, Math.round(block * TREE_UNIT)), shape);
     }
-    ctx.fillStyle = `rgb(${rim[0]}, ${rim[1]}, ${rim[2]})`;
+    ctx.fillStyle = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
     ctx.fill();
   }
 }
 
-// Solid, full, foreground blocks get outlines; slabs get half-block outlines; leaves and glass keep their own look.
+// Solid, full, foreground blocks get outlines; slabs get half-block outlines; leaves keep their own look.
 export function isOutlined(type, meta) {
   if (!type || !type.solid) return false;
   if (type.shape && type.shape !== 'full' && type.shape !== 'slab') return false;
@@ -119,11 +183,15 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
 
   const u = Math.max(1, Math.round(camera.zoom));
   const sh = u * 2;
-  const outlines = polishOn('outlines'), rounding = polishOn('rounding');
-  const seams = polishOn('seams'), wallShadows = polishOn('wallShadows');
+  const outlines = polishOn('outlines'),
+    rounding = polishOn('rounding');
+  const seams = polishOn('seams'),
+    wallShadows = polishOn('wallShadows');
 
-  const minX = startX - 1, maxX = endX + 1;
-  const minY = startY - 1, maxY = endY + 1;
+  const minX = startX - 1,
+    maxX = endX + 1;
+  const minY = startY - 1,
+    maxY = endY + 1;
   const gridW = maxX - minX + 1;
   const gridH = maxY - minY + 1;
   const totalCells = gridW * gridH;
@@ -162,14 +230,173 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     }
   }
 
-  // Batched path drawing to eliminate thousands of separate fillRect calls
-  const seamPath = seams ? new Path2D() : null;
-  const cornerPath = seams ? new Path2D() : null;
+  // Precompute screen coordinates per column and row to eliminate thousands of worldToScreen calls
+  const cols = endX - startX + 1;
+  const rows = endY - startY + 1;
+  if (!edgePass._colSx || edgePass._colSx.length < cols) edgePass._colSx = new Int32Array(cols + 64);
+  if (!edgePass._colEx || edgePass._colEx.length < cols) edgePass._colEx = new Int32Array(cols + 64);
+  if (!edgePass._rowSy || edgePass._rowSy.length < rows) edgePass._rowSy = new Int32Array(rows + 64);
+  if (!edgePass._rowEy || edgePass._rowEy.length < rows) edgePass._rowEy = new Int32Array(rows + 64);
+  const colSx = edgePass._colSx;
+  const colEx = edgePass._colEx;
+  const rowSy = edgePass._rowSy;
+  const rowEy = edgePass._rowEy;
+
+  for (let x = startX; x <= endX; x++) {
+    const i = x - startX;
+    colSx[i] = Math.round(camera.worldToScreenX(x * TILE_SIZE));
+    colEx[i] = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE));
+  }
+  for (let y = startY; y <= endY; y++) {
+    const j = y - startY;
+    rowSy[j] = Math.round(camera.worldToScreenY(y * TILE_SIZE));
+    rowEy[j] = Math.round(camera.worldToScreenY((y + 1) * TILE_SIZE));
+  }
+
+  // 1. Efficient batched seams: horizontal spans, vertical spans, and intersection corners
+  if (seams) {
+    layerCtx.fillStyle = SEAM;
+
+    // Horizontal seam spans between solid full blocks
+    for (let y = startY; y <= endY; y++) {
+      const rowIdx = y - minY;
+      const ey = rowEy[y - startY];
+      let inSpan = false,
+        spanStart = 0;
+      for (let x = startX; x <= endX; x++) {
+        const colIdx = x - minX;
+        const selfShape = shapeGrid[rowIdx * gridW + colIdx];
+        const downShape = shapeGrid[(rowIdx + 1) * gridW + colIdx];
+        if (selfShape === 1 && downShape === 1) {
+          if (!inSpan) {
+            inSpan = true;
+            spanStart = x;
+          }
+        } else {
+          if (inSpan) {
+            const x0 = colSx[spanStart - startX];
+            const x1 = colEx[x - 1 - startX];
+            layerCtx.fillRect(x0, ey - u, x1 - x0, u);
+            inSpan = false;
+          }
+        }
+      }
+      if (inSpan) {
+        const x0 = colSx[spanStart - startX];
+        const x1 = colEx[endX - startX];
+        layerCtx.fillRect(x0, ey - u, x1 - x0, u);
+      }
+    }
+
+    // Top horizontal seam for solid blocks meeting top boundary
+    const topRowIdx = startY - minY;
+    let inTopSpan = false,
+      topSpanStart = 0;
+    const sy0 = rowSy[0];
+    for (let x = startX; x <= endX; x++) {
+      const colIdx = x - minX;
+      if (shapeGrid[topRowIdx * gridW + colIdx] === 1 && shapeGrid[(topRowIdx - 1) * gridW + colIdx] === 1) {
+        if (!inTopSpan) {
+          inTopSpan = true;
+          topSpanStart = x;
+        }
+      } else {
+        if (inTopSpan) {
+          const x0 = colSx[topSpanStart - startX];
+          const x1 = colEx[x - 1 - startX];
+          layerCtx.fillRect(x0, sy0, x1 - x0, u);
+          inTopSpan = false;
+        }
+      }
+    }
+    if (inTopSpan) {
+      const x0 = colSx[topSpanStart - startX];
+      const x1 = colEx[endX - startX];
+      layerCtx.fillRect(x0, sy0, x1 - x0, u);
+    }
+
+    // Vertical seam spans between solid full blocks
+    for (let x = startX; x <= endX; x++) {
+      const colIdx = x - minX;
+      const ex = colEx[x - startX];
+      let inSpan = false,
+        spanStart = 0;
+      for (let y = startY; y <= endY; y++) {
+        const rowIdx = y - minY;
+        const selfShape = shapeGrid[rowIdx * gridW + colIdx];
+        const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
+        if (selfShape === 1 && rightShape === 1) {
+          if (!inSpan) {
+            inSpan = true;
+            spanStart = y;
+          }
+        } else {
+          if (inSpan) {
+            const y0 = rowSy[spanStart - startY];
+            const y1 = rowEy[y - 1 - startY];
+            layerCtx.fillRect(ex - u, y0, u, y1 - y0);
+            inSpan = false;
+          }
+        }
+      }
+      if (inSpan) {
+        const y0 = rowSy[spanStart - startY];
+        const y1 = rowEy[endY - startY];
+        layerCtx.fillRect(ex - u, y0, u, y1 - y0);
+      }
+    }
+
+    // Left vertical seam for solid blocks meeting left boundary
+    const leftColIdx = startX - minX;
+    let inLeftSpan = false,
+      leftSpanStart = 0;
+    const sx0 = colSx[0];
+    for (let y = startY; y <= endY; y++) {
+      const rowIdx = y - minY;
+      if (shapeGrid[rowIdx * gridW + leftColIdx] === 1 && shapeGrid[rowIdx * gridW + leftColIdx - 1] === 1) {
+        if (!inLeftSpan) {
+          inLeftSpan = true;
+          leftSpanStart = y;
+        }
+      } else {
+        if (inLeftSpan) {
+          const y0 = rowSy[leftSpanStart - startY];
+          const y1 = rowEy[y - 1 - startY];
+          layerCtx.fillRect(sx0, y0, u, y1 - y0);
+          inLeftSpan = false;
+        }
+      }
+    }
+    if (inLeftSpan) {
+      const y0 = rowSy[leftSpanStart - startY];
+      const y1 = rowEy[endY - startY];
+      layerCtx.fillRect(sx0, y0, u, y1 - y0);
+    }
+
+    // Corner dots at grid intersections where solid blocks meet
+    layerCtx.fillStyle = CORNER;
+    for (let x = startX; x <= endX; x++) {
+      const colIdx = x - minX;
+      const ex = colEx[x - startX];
+      for (let y = startY; y <= endY; y++) {
+        const rowIdx = y - minY;
+        const self = shapeGrid[rowIdx * gridW + colIdx];
+        const right = shapeGrid[rowIdx * gridW + (colIdx + 1)];
+        const down = shapeGrid[(rowIdx + 1) * gridW + colIdx];
+        const diag = shapeGrid[(rowIdx + 1) * gridW + (colIdx + 1)];
+        if ((self === 1 ? 1 : 0) + (right === 1 ? 1 : 0) + (down === 1 ? 1 : 0) + (diag === 1 ? 1 : 0) >= 2) {
+          layerCtx.fillRect(ex - u, rowEy[y - startY] - u, u, u);
+        }
+      }
+    }
+  }
+
+  // 2. Outlines, open corner rounding, and soft wall shadows
   const outlinePath = outlines ? new Path2D() : null;
   const shadowPath = wallShadows ? new Path2D() : null;
-  let hasSeams = false, hasCorners = false, hasOutlines = false, hasShadows = false;
+  let hasOutlines = false,
+    hasShadows = false;
 
-  // Reusable corner buffer for rounded corners: [cx, cy, dx, dy]
   if (!edgePass._cornerBuf) {
     edgePass._cornerBuf = new Int32Array(2048);
   }
@@ -177,16 +404,20 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
 
   for (let x = startX; x <= endX; x++) {
     const colIdx = x - minX;
+    const xi = x - startX;
+    const sx = colSx[xi],
+      ex = colEx[xi];
+    const w = ex - sx;
+
     for (let y = startY; y <= endY; y++) {
       const rowIdx = y - minY;
       const selfShape = shapeGrid[rowIdx * gridW + colIdx];
       if (selfShape === 0) continue;
 
-      const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
-      const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
-      const ex = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE));
-      const ey = Math.round(camera.worldToScreenY((y + 1) * TILE_SIZE));
-      const w = ex - sx, h = ey - sy;
+      const yi = y - startY;
+      const sy = rowSy[yi],
+        ey = rowEy[yi];
+      const h = ey - sy;
 
       const leftShape = shapeGrid[rowIdx * gridW + (colIdx - 1)];
       const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
@@ -201,15 +432,20 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
 
         const leftOpen = leftShape === 0 || ((leftShape === 2 || leftShape === 3) && (leftShape === 3) !== isTopSlab);
         const rightOpen = rightShape === 0 || ((rightShape === 2 || rightShape === 3) && (rightShape === 3) !== isTopSlab);
-        const topOpen = isTopSlab ? (upShape === 0) : true;
-        const bottomOpen = isTopSlab ? true : (downShape === 0);
+        const topOpen = isTopSlab ? upShape === 0 : true;
+        const bottomOpen = isTopSlab ? true : downShape === 0;
 
-        if (seamPath && selfShape !== 4) {
-          seamPath.rect(sx, slabY, w, u);
-          seamPath.rect(sx, slabY + slabH - u, w, u);
-          seamPath.rect(sx, slabY + u, u, slabH - 2 * u);
-          seamPath.rect(ex - u, slabY + u, u, slabH - 2 * u);
-          hasSeams = true;
+        if (seams) {
+          layerCtx.fillStyle = SEAM;
+          layerCtx.fillRect(sx, slabY, w, u);
+          layerCtx.fillRect(sx, slabY + slabH - u, w, u);
+          layerCtx.fillRect(sx, slabY + u, u, slabH - 2 * u);
+          layerCtx.fillRect(ex - u, slabY + u, u, slabH - 2 * u);
+          layerCtx.fillStyle = CORNER;
+          layerCtx.fillRect(sx, slabY, u, u);
+          layerCtx.fillRect(ex - u, slabY, u, u);
+          layerCtx.fillRect(sx, slabY + slabH - u, u, u);
+          layerCtx.fillRect(ex - u, slabY + slabH - u, u, u);
         }
 
         if (outlinePath) {
@@ -244,30 +480,40 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         continue;
       }
 
-      // Full blocks & leaves
+      // Check if this block is exposed to open air or non-solid on any side
       const up = upShape === 0;
       const down = downShape === 0;
       const left = leftShape === 0;
       const right = rightShape === 0;
+      const isExposed =
+        up || down || left || right || leftShape === 2 || leftShape === 3 || rightShape === 2 || rightShape === 3 || upShape === 2 || downShape === 3;
 
-      if (seamPath && selfShape !== 4) {
-        seamPath.rect(sx, sy, w, u);
-        seamPath.rect(sx, ey - u, w, u);
-        seamPath.rect(sx, sy + u, u, h - 2 * u);
-        seamPath.rect(ex - u, sy + u, u, h - 2 * u);
-        hasSeams = true;
-
-        cornerPath.rect(sx, sy, u, u);
-        cornerPath.rect(ex - u, sy, u, u);
-        cornerPath.rect(sx, ey - u, u, u);
-        cornerPath.rect(ex - u, ey - u, u, u);
-        hasCorners = true;
-      }
-
-      if (!up && !down && !left && !right && leftShape !== 2 && leftShape !== 3 && rightShape !== 2 && rightShape !== 3) continue;
+      if (!isExposed) continue;
       if (selfShape === 4) continue; // leaves keep their own ragged edge
 
-      if (outlinePath) {
+      // A trunk bent by the wind: its outline moves with each row of it.
+      const bend = r.trunkOffsetFn(x, y, w);
+      if (bend && outlinePath) {
+        const top = bend(0),
+          bottom = bend(15);
+        if (up) outlinePath.rect(sx + top, sy, w, u);
+        if (down) outlinePath.rect(sx + bottom, ey - u, w, u);
+        const y0min = sy + (up ? u : 0),
+          y1max = ey - (down ? u : 0);
+        for (let row = 0; row < 16; ) {
+          const off = bend(row);
+          let end = row + 1;
+          while (end < 16 && bend(end) === off) end++;
+          const y0 = Math.max(y0min, Math.round(sy + (row * h) / 16));
+          const y1 = Math.min(y1max, Math.round(sy + (end * h) / 16));
+          if (y1 > y0) {
+            if (left) outlinePath.rect(sx + off, y0, u, y1 - y0);
+            if (right) outlinePath.rect(ex - u + off, y0, u, y1 - y0);
+          }
+          row = end;
+        }
+        hasOutlines = true;
+      } else if (outlinePath) {
         if (up) outlinePath.rect(sx, sy, w, u);
         if (down) outlinePath.rect(sx, ey - u, w, u);
 
@@ -300,31 +546,22 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
           [down && left, sx, ey - u, 1, -1],
           [down && right, ex - u, ey - u, -1, -1]
         ];
-        let wallDrawn = false;
         for (let i = 0; i < 4; i++) {
           const [open, cx, cy, dx, dy] = corners[i];
           if (!open) continue;
-          if (!wallDrawn) {
-            const ox = i % 2 === 0 ? -1 : 1;
-            const oy = i < 2 ? -1 : 1;
-            const skyDiag = !r.hasBackdrop(x + ox, y + oy) && !r.hasBackdrop(x, y + oy) && !r.hasBackdrop(x + ox, y);
-            if (!skyDiag) {
-              wallDrawn = true;
-              const prev = r.ctx;
-              r.ctx = mainCtx;
-              r.drawBackgroundWall(x, y);
-              r.ctx = prev;
-            }
-          }
           if (cornerCount + 4 > edgePass._cornerBuf.length) {
             const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
             newBuf.set(edgePass._cornerBuf);
             edgePass._cornerBuf = newBuf;
           }
-          edgePass._cornerBuf[cornerCount++] = cx;
+          const cornerX = bend ? cx + bend(dy > 0 ? 0 : 15) : cx;
+          edgePass._cornerBuf[cornerCount++] = cornerX;
           edgePass._cornerBuf[cornerCount++] = cy;
           edgePass._cornerBuf[cornerCount++] = dx;
           edgePass._cornerBuf[cornerCount++] = dy;
+          // Nothing is drawn behind a full block, so the cut corner would show the sky even
+          // deep underground: put the wall that's behind it there.
+          r.drawWallBehindCorner(mainCtx, x, y, cornerX, cy, dx, dy, u);
         }
       }
 
@@ -341,21 +578,13 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     }
   }
 
-  // 1. Execute batched fills for block seams, corners, and straight edge outlines
-  if (hasSeams) {
-    layerCtx.fillStyle = SEAM;
-    layerCtx.fill(seamPath);
-  }
-  if (hasCorners) {
-    layerCtx.fillStyle = CORNER;
-    layerCtx.fill(cornerPath);
-  }
+  // 3. Execute batched fills for straight edge outlines
   if (hasOutlines) {
     layerCtx.fillStyle = OUTLINE;
     layerCtx.fill(outlinePath);
   }
 
-  // 2. Round the open corners: cut the corner pixel, darken the one inside it
+  // 4. Round the open corners: cut the corner pixel, darken the one inside it
   if (rounding && cornerCount > 0) {
     const cBuf = edgePass._cornerBuf;
     for (let i = 0; i < cornerCount; i += 4) {
@@ -371,7 +600,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     }
   }
 
-  // 3. Wall shadows cast on mainCtx
+  // 5. Wall shadows cast on mainCtx
   if (hasShadows) {
     mainCtx.fillStyle = WALL_SHADOW;
     mainCtx.fill(shadowPath);
@@ -381,21 +610,17 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
 // The faint edge shadow and darker corner pixels every block gets.
 export function blockSeams(ctx, x, y, w, h, u, soft = false) {
   ctx.fillStyle = soft ? 'rgba(14, 12, 12, 0.07)' : SEAM;
-  ctx.fillRect(x, y, w, u);
   ctx.fillRect(x, y + h - u, w, u);
-  ctx.fillRect(x, y + u, u, h - 2 * u);
-  ctx.fillRect(x + w - u, y + u, u, h - 2 * u);
+  ctx.fillRect(x + w - u, y, u, h - u);
   ctx.fillStyle = soft ? 'rgba(14, 12, 12, 0.12)' : CORNER;
-  ctx.fillRect(x, y, u, u);
-  ctx.fillRect(x + w - u, y, u, u);
-  ctx.fillRect(x, y + h - u, u, u);
   ctx.fillRect(x + w - u, y + h - u, u, u);
 }
 
 // A dark outline just inside the screen's edges, with rounded corners, as if the view
 // were one big block.
 export function screenOutline(ctx, canvas, u) {
-  const W = canvas.width, H = canvas.height;
+  const W = canvas.width,
+    H = canvas.height;
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = OUTLINE;
@@ -408,7 +633,13 @@ export function screenOutline(ctx, canvas, u) {
   ctx.fillRect(u, H - 2 * u, u, u);
   ctx.fillRect(W - 2 * u, H - 2 * u, u, u);
   ctx.fillStyle = '#000';
-  for (const [x, y] of [[0, 0], [W - u, 0], [0, H - u], [W - u, H - u]]) ctx.fillRect(x, y, u, u);
+  for (const [x, y] of [
+    [0, 0],
+    [W - u, 0],
+    [0, H - u],
+    [W - u, H - u]
+  ])
+    ctx.fillRect(x, y, u, u);
   ctx.restore();
 }
 
@@ -416,13 +647,21 @@ export function screenOutline(ctx, canvas, u) {
 // matching the rounded blocks: the corner pixel is left out and one is added inside it.
 export function cornerRect(ctx, x, y, size, color, lw) {
   const h = lw / 2;
-  const x0 = x - h, y0 = y - h, s = size + lw;
+  const x0 = x - h,
+    y0 = y - h,
+    s = size + lw;
   ctx.fillStyle = color;
   ctx.fillRect(x0 + lw, y0, s - 2 * lw, lw);
   ctx.fillRect(x0 + lw, y0 + s - lw, s - 2 * lw, lw);
   ctx.fillRect(x0, y0 + lw, lw, s - 2 * lw);
   ctx.fillRect(x0 + s - lw, y0 + lw, lw, s - 2 * lw);
-  for (const [cx, cy] of [[x0 + lw, y0 + lw], [x0 + s - 2 * lw, y0 + lw], [x0 + lw, y0 + s - 2 * lw], [x0 + s - 2 * lw, y0 + s - 2 * lw]]) ctx.fillRect(cx, cy, lw, lw);
+  for (const [cx, cy] of [
+    [x0 + lw, y0 + lw],
+    [x0 + s - 2 * lw, y0 + lw],
+    [x0 + lw, y0 + s - 2 * lw],
+    [x0 + s - 2 * lw, y0 + s - 2 * lw]
+  ])
+    ctx.fillRect(cx, cy, lw, lw);
 }
 
 export function drawVignette(ctx, canvas) {
@@ -447,7 +686,10 @@ export function outlineLayer(layer, zoom) {
   const u = Math.max(1, Math.round(zoom));
   let sil = outlineLayer._c;
   if (!sil) sil = outlineLayer._c = document.createElement('canvas');
-  if (sil.width !== layer.width || sil.height !== layer.height) { sil.width = layer.width; sil.height = layer.height; }
+  if (sil.width !== layer.width || sil.height !== layer.height) {
+    sil.width = layer.width;
+    sil.height = layer.height;
+  }
   const s = sil.getContext('2d');
   s.setTransform(1, 0, 0, 1, 0, 0);
   s.globalCompositeOperation = 'copy';
@@ -460,6 +702,12 @@ export function outlineLayer(layer, zoom) {
   l.save();
   l.setTransform(1, 0, 0, 1, 0, 0);
   l.globalCompositeOperation = 'destination-over';
-  for (const [dx, dy] of [[u, 0], [-u, 0], [0, u], [0, -u]]) l.drawImage(sil, dx, dy);
+  for (const [dx, dy] of [
+    [u, 0],
+    [-u, 0],
+    [0, u],
+    [0, -u]
+  ])
+    l.drawImage(sil, dx, dy);
   l.restore();
 }

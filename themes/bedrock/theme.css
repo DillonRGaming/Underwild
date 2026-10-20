@@ -121,12 +121,12 @@
   --stat-gap: -2px;
   --stat-icon-width: 20px;
   --stat-icon-height: 20px;
-  --icon-heart-full: url("themes/java/icons/heart_full.png");
-  --icon-heart-half: url("themes/java/icons/heart_half.png");
-  --icon-heart-empty: url("themes/java/icons/heart_empty.png");
-  --icon-hunger-full: url("themes/java/icons/hunger_full.png");
-  --icon-hunger-half: url("themes/java/icons/hunger_half.png");
-  --icon-hunger-empty: url("themes/java/icons/hunger_empty.png");
+  --icon-heart-full: url('themes/java/icons/heart_full.png');
+  --icon-heart-half: url('themes/java/icons/heart_half.png');
+  --icon-heart-empty: url('themes/java/icons/heart_empty.png');
+  --icon-hunger-full: url('themes/java/icons/hunger_full.png');
+  --icon-hunger-half: url('themes/java/icons/hunger_half.png');
+  --icon-hunger-empty: url('themes/java/icons/hunger_empty.png');
 
   --scroll-width: 8px;
   --scroll-track: transparent;
@@ -185,7 +185,7 @@
   text-overflow: ellipsis;
 }
 
-.minecraft-button[data-selected="true"] {
+.minecraft-button[data-selected='true'] {
   color: #ffffff;
   text-shadow: var(--be-shadow);
 }
@@ -235,22 +235,24 @@
 }
 
 /* Green call-to-action buttons */
-#mainMenu [data-action="single-player"],
+#mainMenu [data-action='single-player'],
 #createWorldButton,
-.menu-container [data-action="apply-background"],
-.menu-container [data-action="apply-controls"],
-.menu-container [data-action="apply-skin"] {
+.menu-container [data-action='apply-background'],
+.menu-container [data-action='apply-controls'],
+.menu-container [data-action='apply-skin'] {
   color: #ffffff;
   text-shadow: var(--be-shadow);
   background: var(--green);
-  box-shadow: inset 0 -5px 0 var(--green-edge), inset 0 2px 0 var(--green-light);
+  box-shadow:
+    inset 0 -5px 0 var(--green-edge),
+    inset 0 2px 0 var(--green-light);
 }
 
-#mainMenu [data-action="single-player"]:hover,
+#mainMenu [data-action='single-player']:hover,
 #createWorldButton:hover,
-.menu-container [data-action="apply-background"]:hover,
-.menu-container [data-action="apply-controls"]:hover,
-.menu-container [data-action="apply-skin"]:hover {
+.menu-container [data-action='apply-background']:hover,
+.menu-container [data-action='apply-controls']:hover,
+.menu-container [data-action='apply-skin']:hover {
   color: #ffffff;
   background: var(--green-hover);
 }
@@ -375,34 +377,44 @@
   font-size: 20px;
 }
 
-#mainMenu .menu-buttons [data-action="single-player"] {
+#mainMenu .menu-buttons [data-action='single-player'] {
   min-height: clamp(58px, 8.6vh, 72px);
   font-size: 0;
 }
 
-#mainMenu [data-action="single-player"]::after {
-  content: "PLAY";
+#mainMenu [data-action='single-player']::after {
+  content: 'PLAY';
   font-size: 28px;
   letter-spacing: 2px;
 }
 
-#mainMenu [data-action="single-player"] { order: 1; }
-#mainMenu [data-action="load-world"] { order: 2; }
-#mainMenu [data-action="mods"] { order: 3; }
-#mainMenu [data-action="skins-options"] { order: 4; }
-#mainMenu [data-action="quit"] { order: 5; }
+#mainMenu [data-action='single-player'] {
+  order: 1;
+}
+#mainMenu [data-action='load-world'] {
+  order: 2;
+}
+#mainMenu [data-action='mods'] {
+  order: 3;
+}
+#mainMenu [data-action='skins-options'] {
+  order: 4;
+}
+#mainMenu [data-action='quit'] {
+  order: 5;
+}
 
-#mainMenu .menu-buttons [data-action="skins-options"] {
+#mainMenu .menu-buttons [data-action='skins-options'] {
   font-size: 0;
 }
 
-#mainMenu [data-action="skins-options"]::after {
-  content: "Dressing Room";
+#mainMenu [data-action='skins-options']::after {
+  content: 'Dressing Room';
   font-size: 20px;
 }
 
 /* Settings and Changelog sit top right as small square-cornered buttons, like Ore UI's icon row */
-#mainMenu .menu-buttons [data-action="options"] {
+#mainMenu .menu-buttons [data-action='options'] {
   position: fixed;
   top: 44px;
   right: 196px;
@@ -417,8 +429,8 @@
   justify-content: center;
 }
 
-#mainMenu [data-action="options"]::before {
-  content: "";
+#mainMenu [data-action='options']::before {
+  content: '';
   display: block;
   width: 28px;
   height: 24px;
@@ -461,7 +473,7 @@
 }
 
 #pauseMenu .menu-title::after {
-  content: "UNDERWILD";
+  content: 'UNDERWILD';
   font-size: 68px;
 }
 
@@ -470,18 +482,18 @@
   font-size: 20px;
 }
 
-#pauseMenu .menu-buttons .minecraft-button[data-action="pause-options"],
-#pauseMenu .menu-buttons .minecraft-button[data-action="pause-back-to-main"] {
+#pauseMenu .menu-buttons .minecraft-button[data-action='pause-options'],
+#pauseMenu .menu-buttons .minecraft-button[data-action='pause-back-to-main'] {
   font-size: 0;
 }
 
-#pauseMenu [data-action="pause-options"]::after {
-  content: "Settings";
+#pauseMenu [data-action='pause-options']::after {
+  content: 'Settings';
   font-size: 20px;
 }
 
-#pauseMenu [data-action="pause-back-to-main"]::after {
-  content: "Save & Quit";
+#pauseMenu [data-action='pause-back-to-main']::after {
+  content: 'Save & Quit';
   font-size: 20px;
 }
 
@@ -558,11 +570,11 @@
 }
 
 /* Back buttons become the chevron at the left of the title bar */
-.menu-container [data-action="back-to-options"],
-.menu-container [data-action="back-to-main"]:not(#mainMenu *),
-.menu-container [data-action="back-to-create-world"],
-.menu-container [data-action="back-to-main-from-skin"],
-.menu-container [data-action="back-to-mods"] {
+.menu-container [data-action='back-to-options'],
+.menu-container [data-action='back-to-main']:not(#mainMenu *),
+.menu-container [data-action='back-to-create-world'],
+.menu-container [data-action='back-to-main-from-skin'],
+.menu-container [data-action='back-to-mods'] {
   position: fixed;
   top: 0;
   left: 0;
@@ -579,22 +591,22 @@
   box-shadow: none;
 }
 
-.menu-container [data-action="back-to-options"]:hover,
-.menu-container [data-action="back-to-main"]:not(#mainMenu *):hover,
-.menu-container [data-action="back-to-create-world"]:hover,
-.menu-container [data-action="back-to-main-from-skin"]:hover,
-.menu-container [data-action="back-to-mods"]:hover {
+.menu-container [data-action='back-to-options']:hover,
+.menu-container [data-action='back-to-main']:not(#mainMenu *):hover,
+.menu-container [data-action='back-to-create-world']:hover,
+.menu-container [data-action='back-to-main-from-skin']:hover,
+.menu-container [data-action='back-to-mods']:hover {
   background: rgba(0, 0, 0, 0.08);
   border: none;
   box-shadow: none;
 }
 
-.menu-container [data-action="back-to-options"]::before,
-.menu-container [data-action="back-to-main"]:not(#mainMenu *)::before,
-.menu-container [data-action="back-to-create-world"]::before,
-.menu-container [data-action="back-to-main-from-skin"]::before,
-.menu-container [data-action="back-to-mods"]::before {
-  content: "<";
+.menu-container [data-action='back-to-options']::before,
+.menu-container [data-action='back-to-main']:not(#mainMenu *)::before,
+.menu-container [data-action='back-to-create-world']::before,
+.menu-container [data-action='back-to-main-from-skin']::before,
+.menu-container [data-action='back-to-mods']::before {
+  content: '<';
   font-size: 24px;
   line-height: 48px;
 }
@@ -650,7 +662,7 @@
 }
 
 #optionsMenu .menu-buttons:first-of-type .minecraft-button::after {
-  content: ">";
+  content: '>';
   float: right;
   color: var(--text-muted);
 }
@@ -728,7 +740,12 @@
   width: 100vw;
   display: block;
   padding-left: var(--side);
-  background: linear-gradient(to right, var(--charcoal) 0 var(--side), var(--outline) var(--side) calc(var(--side) + 4px), var(--panel) calc(var(--side) + 4px));
+  background: linear-gradient(
+    to right,
+    var(--charcoal) 0 var(--side),
+    var(--outline) var(--side) calc(var(--side) + 4px),
+    var(--panel) calc(var(--side) + 4px)
+  );
   border: none;
 }
 
@@ -744,12 +761,12 @@
 }
 
 #createWorldMenu > .menu-content > .menu-buttons::before {
-  content: "";
+  content: '';
   display: block;
   height: var(--preview-h);
   margin-bottom: 16px;
   border: 2px solid var(--outline);
-  background: url("world_preview.png") center / cover;
+  background: url('world_preview.png') center / cover;
   image-rendering: pixelated;
 }
 
@@ -759,7 +776,7 @@
 }
 
 #createWorldButton::after {
-  content: "CREATE";
+  content: 'CREATE';
   font-size: 28px;
   letter-spacing: 2px;
 }
@@ -784,12 +801,14 @@
   border-top: 2px solid #3d3e40;
   border-radius: 0;
   box-shadow: none;
-  background: url("../../assets/textures/crafting_table.png") 24px center / 36px 36px no-repeat, var(--panel);
+  background:
+    url('../../assets/textures/crafting_table.png') 24px center / 36px 36px no-repeat,
+    var(--panel);
   image-rendering: pixelated;
 }
 
 #createWorldMenu > .menu-content::after {
-  content: "General";
+  content: 'General';
   box-sizing: border-box;
   top: var(--tabs-top);
   pointer-events: none;
@@ -797,17 +816,21 @@
 
 #createWorldMenu .form-section > .menu-buttons .minecraft-button {
   top: calc(var(--tabs-top) + var(--tab-h));
-  background: url("../../assets/textures/chest.png") 24px center / 36px 36px no-repeat, var(--charcoal);
+  background:
+    url('../../assets/textures/chest.png') 24px center / 36px 36px no-repeat,
+    var(--charcoal);
   font-size: 0;
 }
 
 #createWorldMenu .form-section > .menu-buttons .minecraft-button::after {
-  content: "Advanced";
+  content: 'Advanced';
   font-size: 22px;
 }
 
 #createWorldMenu .form-section > .menu-buttons .minecraft-button:hover {
-  background: url("../../assets/textures/chest.png") 24px center / 36px 36px no-repeat, #3d3e40;
+  background:
+    url('../../assets/textures/chest.png') 24px center / 36px 36px no-repeat,
+    #3d3e40;
 }
 
 #createWorldMenu .form-section > .menu-buttons {
@@ -834,7 +857,7 @@
   font-size: 18px;
 }
 
-#createWorldMenu .form-section > label[for="worldSeed"],
+#createWorldMenu .form-section > label[for='worldSeed'],
 #createWorldMenu .form-section > .option-group {
   border-top: 2px solid var(--row-line);
 }

@@ -6,7 +6,8 @@ export default {
   tab: 'functional',
   climbable: true, // you can climb it; hangs on a wall like a torch
   burnTime: 5, // seconds it burns as furnace fuel
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['s s', 'sss', 's s'], ingredients: { s: 'stick' }, count: 3 }
   ],
   tool: 'axe', // mined fastest with this

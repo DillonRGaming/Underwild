@@ -6,11 +6,12 @@ export default {
   displayName: 'Rock',
   material: 'plant',
   kind: 'plant',
+  isRock: true,
   tab: 'nature',
   placeMeta: () => rockMeta(Math.random(), Math.random(), Math.random()), // random size, spot and facing when placed
   shape: 'full',
   solid: false,
   color: '#8f8e8b',
   hardness: 0.3,
-  ...plant({ growsOn: ['land', 'beach'] })
+  ...plant({ growsOn: ['land', 'beach', 'moon', 'lunar_rock', 'stone'] })
 };

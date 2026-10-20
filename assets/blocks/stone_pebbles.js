@@ -4,7 +4,8 @@ export default {
   material: 'stone',
   kind: 'block',
   tab: 'building',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['sss'], ingredients: { s: 'stone' }, count: 3 }
   ],
   tool: 'pickaxe', // mined fastest with this

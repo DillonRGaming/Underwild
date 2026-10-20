@@ -1,5 +1,5 @@
-import { waterMass } from '../logic/water.js';
 import { TILE_SIZE } from './utils.js';
+import { wind, exposureAt } from './wind.js';
 const EDGE_EPS = 0.01;
 // Swimming speeds (px/s).
 const SWIM_SINK_SPEED = 25;
@@ -23,12 +23,14 @@ function hasGroundBelow(world, x, player) {
 
 // Whether the player's box at (x, y) overlaps anything solid.
 function boxBlocked(world, x, y, player) {
-  const l = Math.floor(x / TILE_SIZE), r = Math.floor((x + player.width - EDGE_EPS) / TILE_SIZE);
-  const t = Math.floor(y / TILE_SIZE), b = Math.floor((y + player.height - EDGE_EPS) / TILE_SIZE);
+  const l = Math.floor(x / TILE_SIZE),
+    r = Math.floor((x + player.width - EDGE_EPS) / TILE_SIZE);
+  const t = Math.floor(y / TILE_SIZE),
+    b = Math.floor((y + player.height - EDGE_EPS) / TILE_SIZE);
   for (let tx = l; tx <= r; tx++) {
     for (let ty = t; ty <= b; ty++) {
-      const b = solidBox(world, tx, ty);
-      if (b && b.bottom > y && b.top < y + player.height && b.right > x && b.left < x + player.width) return true;
+      const box = solidBox(world, tx, ty);
+      if (box && box.bottom > y && box.top < y + player.height && box.right > x && box.left < x + player.width) return true;
     }
   }
   return false;
@@ -55,11 +57,20 @@ function sweepX(world, player, nextX, canStep) {
       const overlapping = dirX > 0 ? box.left < player.x + player.width - EDGE_EPS : box.right > player.x + EDGE_EPS;
       if (overlapping) {
         const ahead = dirX > 0 ? box.left > player.x : box.right < player.x + player.width;
-        if (ahead) { player.vx = 0; return player.x; }
+        if (ahead) {
+          player.vx = 0;
+          return player.x;
+        }
         continue;
       }
       // A low ledge (a bottom slab or trapdoor) is stepped up onto if there's room.
-      if (canStep && (player.onGround || feet - box.top <= TILE_SIZE / 2) && feet - box.top > 0 && feet - box.top <= TILE_SIZE / 2 && !boxBlocked(world, nextX, box.top - player.height - 0.01, player)) {
+      if (
+        canStep &&
+        (player.onGround || feet - box.top <= TILE_SIZE / 2) &&
+        feet - box.top > 0 &&
+        feet - box.top <= TILE_SIZE / 2 &&
+        !boxBlocked(world, nextX, box.top - player.height - 0.01, player)
+      ) {
         player.y = box.top - player.height - 0.01;
         player.onGround = true;
         feet = player.y + player.height;
@@ -107,15 +118,16 @@ function isBlockSolid(world, x, y) {
 // as a thin strip against its hinge side.
 function solidBox(world, tx, ty) {
   if (!isBlockSolid(world, tx, ty)) return null;
-  const left = tx * TILE_SIZE, top = ty * TILE_SIZE;
+  const left = tx * TILE_SIZE,
+    top = ty * TILE_SIZE;
   const box = { left, right: left + TILE_SIZE, top, bottom: top + TILE_SIZE };
   const type = world.getBlockType(tx, ty);
   if (type?.shape !== 'slab') {
-    box.top += (type?.surfaceInset || 0) * TILE_SIZE / 16; // dirt paths sit a texel low
+    box.top += ((type?.surfaceInset || 0) * TILE_SIZE) / 16; // dirt paths sit a texel low
     return box;
   }
   const meta = world.getCell(tx, ty).meta || {};
-  const h = TILE_SIZE * (type.thickness ?? 8) / 16;
+  const h = (TILE_SIZE * (type.thickness ?? 8)) / 16;
   if (meta.open) {
     if (meta.hinge === 'left') box.right = left + h;
     else box.left = box.right - h;
@@ -134,11 +146,11 @@ function topSurfaceY(world, tileX, tileY, localX) {
   const tileTop = tileY * TILE_SIZE;
   switch (type.shape) {
     case 'full':
-      return tileTop + (type.surfaceInset || 0) * TILE_SIZE / 16;
+      return tileTop + ((type.surfaceInset || 0) * TILE_SIZE) / 16;
     case 'slab': {
       const pos = meta.slabPos || 'bottom';
       // Slabs are half a block; thinner ones (trapdoors) set thickness in 16ths.
-      return pos === 'bottom' ? tileTop + TILE_SIZE * (16 - (type.thickness ?? 8)) / 16 : tileTop;
+      return pos === 'bottom' ? tileTop + (TILE_SIZE * (16 - (type.thickness ?? 8))) / 16 : tileTop;
     }
     case 'stairs': {
       const orient = meta.orient || 'right';
@@ -161,7 +173,7 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
       return tileTop + TILE_SIZE;
     case 'slab': {
       const pos = meta.slabPos || 'top';
-      return pos === 'top' ? tileTop + TILE_SIZE * (type.thickness ?? 8) / 16 : tileTop + TILE_SIZE;
+      return pos === 'top' ? tileTop + (TILE_SIZE * (type.thickness ?? 8)) / 16 : tileTop + TILE_SIZE;
     }
     case 'stairs': {
       return tileTop + TILE_SIZE;
@@ -171,6 +183,59 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
   }
 }
 
+// Wind on the player, roughly like real wind: the speed (0..100) is about mph, and the force
+// grows with its square, so a breeze does nothing and a gale a lot. On the ground your feet
+// hold you until the force beats their grip on the block (sand and metal are slippery, mud and
+// grass grippy): on grass you stand still up to about 75, on sand up to about 60. Walking, a
+// headwind slows you a little and a tailwind speeds you up. In the air you're carried more
+// easily. Crouching makes you a smaller target, and in water, on ladders and out of the open
+// air there's none.
+const WIND_SLIDE = 90; // px/s you're blown along at, at the top of the scale with nothing holding you
+const WIND_WALK = 0.25; // share of your walking speed a full-force wind adds or takes away
+const WIND_AIR = 80; // px/s you drift at in the air, at full force
+const CROUCH_CATCH = 0.4;
+const DEFAULT_GRIP = 0.7;
+const MATERIAL_GRIP = {
+  mud: 0.9,
+  grass: 0.8,
+  dirt: 0.8,
+  clay: 0.8,
+  plant: 0.8,
+  stone: 0.7,
+  sandstone: 0.7,
+  coal: 0.65,
+  gravel: 0.6,
+  wood: 0.6,
+  oak: 0.6,
+  birch: 0.6,
+  spruce: 0.6,
+  pine: 0.6,
+  maple: 0.6,
+  sand: 0.45,
+  red_sand: 0.45,
+  copper: 0.4,
+  steel: 0.4,
+  gold: 0.4
+};
+
+function gripOf(type) {
+  return type?.grip ?? MATERIAL_GRIP[type?.material] ?? DEFAULT_GRIP;
+}
+
+// How fast (px/s, negative is left) the wind is pushing the player right now, walking
+// (`moving`) or standing.
+function windPush(player, world, tileX, inWater, onLadder, crouching, moving, walkSpeed) {
+  if (inWater || onLadder) return 0;
+  const w = wind.velocityAt(tileX) * exposureAt(world, tileX, Math.floor(player.y / TILE_SIZE));
+  if (!w) return 0;
+  const dir = Math.sign(w);
+  const force = w * w * (crouching ? CROUCH_CATCH : 1); // 0..1 at speed 0..100 (more in gusts)
+  if (!player.onGround) return dir * force * WIND_AIR;
+  const hold = gripOf(world.getBlockType(tileX, Math.floor((player.y + player.height + 1) / TILE_SIZE))) * 0.75;
+  const slide = Math.max(0, force - hold) / (1 - hold);
+  return dir * (slide * WIND_SLIDE + (moving ? force * WIND_WALK * walkSpeed : 0));
+}
+
 // Crouching shrinks the hitbox (feet stay put) so you can duck under a trapdoor or slab in a
 // two-block gap. You stay crouched while there's no room to stand back up.
 const CROUCH_SHRINK = 6;
@@ -178,15 +243,24 @@ const CROUCH_SHRINK = 6;
 export function resolvePlayerPhysics(player, world, input, dt, noClipMode = false, creativeMode = false, keybinds) {
   const wantCrouch = !player.creativeFlying && input.isKeyDown(keybinds.crouch || 'ControlLeft');
   // Something closing in on the head (a trapdoor shut above you) ducks you down too.
-  const stuck = !wantCrouch && !noClipMode && !player.creativeFlying
-    && boxBlocked(world, player.x, player.y, player)
-    && (player.crouchBox || !boxBlocked(world, player.x, player.y + CROUCH_SHRINK, { width: player.width, height: player.height - CROUCH_SHRINK }));
+  const stuck =
+    !wantCrouch &&
+    !noClipMode &&
+    !player.creativeFlying &&
+    boxBlocked(world, player.x, player.y, player) &&
+    (player.crouchBox || !boxBlocked(world, player.x, player.y + CROUCH_SHRINK, { width: player.width, height: player.height - CROUCH_SHRINK }));
   const small = !noClipMode && !player.creativeFlying && (wantCrouch || stuck);
-  if (small) { player.y += CROUCH_SHRINK; player.height -= CROUCH_SHRINK; }
+  if (small) {
+    player.y += CROUCH_SHRINK;
+    player.height -= CROUCH_SHRINK;
+  }
   try {
     stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, keybinds, stuck);
   } finally {
-    if (small) { player.height += CROUCH_SHRINK; player.y -= CROUCH_SHRINK; }
+    if (small) {
+      player.height += CROUCH_SHRINK;
+      player.y -= CROUCH_SHRINK;
+    }
   }
   player.crouchBox = small;
   if (stuck) player.crouching = true;
@@ -194,9 +268,7 @@ export function resolvePlayerPhysics(player, world, input, dt, noClipMode = fals
 
 function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, keybinds, forceCrouch) {
   const playerCenterX = player.x + player.width / 2;
-  const playerCenterY = player.y + player.height / 2;
   const playerTileX = Math.floor(playerCenterX / TILE_SIZE);
-  const playerTileY = Math.floor(playerCenterY / TILE_SIZE);
   // How much of the player is under water (0..1), from the water line in their column.
   const waterAt = (y) => {
     const ty = Math.floor(y / TILE_SIZE);
@@ -211,18 +283,18 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   const headWet = waterAt(player.y + 4);
   const inWater = waistWet || (feetWet && !player.onGround);
 
-  if (!player.creativeFlying) player.creativeFlying = false;
-  if (!player.lastJumpPress) player.lastJumpPress = 0;
-  if (!player.jumpPressed) player.jumpPressed = false;
+  player.creativeFlying = !!player.creativeFlying;
+  player.lastJumpPress ||= 0;
 
   const isCrouching = forceCrouch || (!player.creativeFlying && input.isKeyDown(keybinds.crouch || 'ControlLeft'));
   const isSprinting = !isCrouching && (input.isKeyDown(keybinds.sprint) || input.isKeyDown('ShiftRight'));
   player.crouching = isCrouching;
 
-  let gravity = player.gravity;
+  const gravityMult = world?.gravityMultiplier ?? world?.dimension?.gravityMultiplier ?? 1;
+  const gravity = player.gravity * gravityMult;
   let walkSpeed = 60;
   let sprintSpeed = 90;
-  let jumpVelocity = player.jumpVelocity;
+  const jumpVelocity = player.jumpVelocity * (gravityMult < 1 ? Math.sqrt(gravityMult * 1.8) : 1);
   let accel = player.onGround ? (isSprinting ? 1100 : 900) : 600;
 
   // Swimming, Minecraft-style: slower sideways, slowly sink, hold jump to swim up.
@@ -235,14 +307,15 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
     accel = 700;
   }
 
-  const maxSpeed = isCrouching ? walkSpeed * CROUCH_SPEED : (isSprinting ? sprintSpeed : walkSpeed);
+  const maxSpeed = isCrouching ? walkSpeed * CROUCH_SPEED : isSprinting ? sprintSpeed : walkSpeed;
 
   // Double-tap jump toggles flying in creative. Every press is seen (from the key events,
   // not frame polling), and a toggle uses up both taps so a third tap starts a new pair.
   if (input.pressTimes) {
     const now = performance.now();
     const taps = [...input.pressTimes(keybinds.jump), ...input.pressTimes(keybinds.forward)]
-      .filter(t => t > (player.lastJumpSeen || 0) && t > now - 1000).sort((a, b) => a - b);
+      .filter((t) => t > (player.lastJumpSeen || 0) && t > now - 1000)
+      .sort((a, b) => a - b);
     for (const t of taps) {
       if (creativeMode && player.lastJumpPress && t - player.lastJumpPress < 350) {
         player.creativeFlying = !player.creativeFlying;
@@ -276,10 +349,13 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   }
 
   const target = (input.isKeyDown(keybinds.right) ? 1 : 0) - (input.isKeyDown(keybinds.left) ? 1 : 0);
-  const desiredVx = target * maxSpeed;
+  // The wind shifts the speed you settle at: faster with it, slower against it, and a slow
+  // drift (or none, on grippy ground) standing still.
+  const push = windPush(player, world, playerTileX, inWater, isOnLadder(player, world), isCrouching, target !== 0, walkSpeed);
+  const desiredVx = target * maxSpeed + push;
   // Thrown faster than you can run (an explosion): keep the momentum through the air,
   // slowing gently, rather than braking to a stop and dropping straight down.
-  const flung = !player.onGround && !inWater && Math.abs(player.vx) > maxSpeed;
+  const flung = !player.onGround && !inWater && Math.abs(player.vx) > maxSpeed + Math.abs(push);
   if (flung) {
     player.vx *= Math.max(0, 1 - 0.5 * dt);
     if (target && Math.sign(target) !== Math.sign(player.vx)) player.vx += target * accel * 0.2 * dt;
@@ -290,14 +366,12 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   }
 
   if (target === 0 && !flung) {
-    const friction = inWater ? 6 : (player.onGround ? 12 : 1);
-    player.vx *= Math.max(0, 1 - friction * dt);
+    const friction = inWater ? 6 : player.onGround ? 12 : 1;
+    player.vx = push + (player.vx - push) * Math.max(0, 1 - friction * dt);
     if (Math.abs(player.vx) < 1) player.vx = 0;
   }
 
   const jumpKeyPressed = input.isKeyDown(keybinds.forward) || input.isKeyDown(keybinds.jump);
-
-  player.jumpPressed = jumpKeyPressed;
 
   if (creativeMode && player.creativeFlying) {
     player.onGround = false;
@@ -311,7 +385,7 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
     if (input.isKeyDown(keybinds.left)) player.vx -= flySpeed;
 
     if (jumpKeyPressed) player.vy -= flySpeed;
-    if (input.isKeyDown('ControlLeft') || input.isKeyDown('ControlRight') || input.isKeyDown(keybinds.backward)) player.vy += flySpeed;
+    if (input.isKeyDown(keybinds.crouch || 'ControlLeft') || input.isKeyDown('ControlRight') || input.isKeyDown(keybinds.backward)) player.vy += flySpeed;
 
     const wantX = player.x + player.vx * dt;
     let nextX = sweepX(world, player, wantX, false);
@@ -336,8 +410,6 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
     if (dirY !== 0) {
       const left = Math.floor(nextX / TILE_SIZE);
       const right = Math.floor((nextX + player.width - EDGE_EPS) / TILE_SIZE);
-      const top = Math.floor(nextY / TILE_SIZE);
-      const bottom = Math.floor((nextY + player.height - 1) / TILE_SIZE);
       const from = Math.floor(Math.min(player.y, nextY) / TILE_SIZE);
       const to = Math.floor((Math.max(player.y, nextY) + player.height - EDGE_EPS) / TILE_SIZE);
       for (let tx = left; tx <= right; tx++) {
@@ -374,15 +446,17 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
       let surfaceY = null;
       for (let ty = Math.floor(player.y / TILE_SIZE); ty <= Math.floor((player.y + player.height) / TILE_SIZE); ty++) {
         const m = world.inBounds(playerTileX, ty) ? world.waterAt(playerTileX, ty) : 0;
-        if (m > 0) { surfaceY = (ty + 1) * TILE_SIZE - Math.min(1, m) * TILE_SIZE; break; }
+        if (m > 0) {
+          surfaceY = (ty + 1) * TILE_SIZE - Math.min(1, m) * TILE_SIZE;
+          break;
+        }
       }
       if (surfaceY !== null) {
         const bob = Math.sin(performance.now() / 350) * 1.5;
         const wantY = surfaceY - player.height * 0.45 + bob;
         target = Math.max(-SWIM_UP_SPEED, Math.min(SWIM_UP_SPEED, (wantY - player.y) * 5));
       }
-    }
-    else if (isCrouching) target = SWIM_DIVE_SPEED;
+    } else if (isCrouching) target = SWIM_DIVE_SPEED;
     player.vy += (target - player.vy) * Math.min(1, 6 * dt);
     // Swimming into a ledge with the head out of the water hops up onto it.
     const ahead = Math.sign(player.vx) || 0;
@@ -400,7 +474,8 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
 
   // Auto-jump: hop up a full-block step at the feet when there's room above it, but not
   // into a wall that's taller than that, and NOT for low half-block ledges/slabs (which sweepX steps up seamlessly).
-  if (player.onGround && player.autoJump !== false) {
+  // Only while walking that way (the wind blowing you into a step doesn't climb it).
+  if (player.onGround && player.autoJump !== false && target !== 0) {
     const direction = Math.sign(player.vx);
     if (direction !== 0) {
       const tileX = Math.floor((player.x + player.width / 2) / TILE_SIZE);
@@ -411,7 +486,7 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
       const solidFull = (x, y) => world.inBounds(x, y) && isBlockSolid(world, x, y) && world.getBlockType(x, y)?.shape !== 'slab';
       const free = (x, y) => !world.inBounds(x, y) || !isBlockSolid(world, x, y);
       const aheadBox = solidBox(world, aheadX, feetRow);
-      const stepDiff = aheadBox ? (player.y + player.height) - aheadBox.top : 0;
+      const stepDiff = aheadBox ? player.y + player.height - aheadBox.top : 0;
       // If the step is <= half a block (e.g. stepping onto a slab, or from a slab onto a block), do not jump!
       if (stepDiff > TILE_SIZE / 2 && solidFull(aheadX, feetRow) && free(aheadX, headRow) && free(aheadX, headRow - 1) && free(tileX, headRow - 1)) {
         player.vy = -jumpVelocity * 0.6;
@@ -421,13 +496,15 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   }
 
   if (onLadder) {
-    if (player.vy > 0 && !jumpKeyPressed && !isCrouching && !input.isKeyDown(keybinds.backward)) player.vy = Math.min(player.vy + gravity * dt, LADDER_SLIDE_SPEED);
+    if (player.vy > 0 && !jumpKeyPressed && !isCrouching && !input.isKeyDown(keybinds.backward))
+      player.vy = Math.min(player.vy + gravity * dt, LADDER_SLIDE_SPEED);
   } else if (!inWater) {
     // A little gentler on the way down, so falls aren't so sudden (jumps stay the same).
     player.vy += gravity * (player.vy > 0 ? 0.85 : 1) * dt;
   }
 
-  const maxFallSpeed = inWater ? SWIM_DIVE_SPEED * 1.5 : player.maxFallSpeed;
+  const baseMaxFall = inWater ? SWIM_DIVE_SPEED * 1.5 : player.maxFallSpeed;
+  const maxFallSpeed = gravityMult < 1 ? baseMaxFall * Math.sqrt(gravityMult) : baseMaxFall;
   if (player.vy > maxFallSpeed) player.vy = maxFallSpeed;
 
   let nextX = player.x + player.vx * dt;
@@ -475,13 +552,17 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
           else {
             const s1 = topSurfaceY(world, tx, footTileY, localLeft);
             const s2 = topSurfaceY(world, tx, footTileY, localRight);
-            s = (s1 !== null && s2 !== null) ? Math.min(s1, s2) : (s1 ?? s2);
+            s = s1 !== null && s2 !== null ? Math.min(s1, s2) : (s1 ?? s2);
           }
           if (s !== null) {
             if (minSurface === null || s < minSurface) minSurface = s;
           }
         }
-        if (minSurface !== null && newBottom >= minSurface && (footTileY === lastRow ? minSurface >= oldBottom - TILE_SIZE / 2 : minSurface >= oldBottom - 0.5)) {
+        if (
+          minSurface !== null &&
+          newBottom >= minSurface &&
+          (footTileY === lastRow ? minSurface >= oldBottom - TILE_SIZE / 2 : minSurface >= oldBottom - 0.5)
+        ) {
           // (Never snap up onto something far above the feet, like a plank at head height.)
           nextY = minSurface - player.height;
           player.vy = 0;
@@ -493,8 +574,10 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
       // Feet slip past ledges by a few pixels, but the body mustn't drop deep into a block
       // beside them: slide off it sideways, or land on it if there's no room to.
       if (!player.onGround) {
-        const l = Math.floor((player.x + EDGE_EPS) / TILE_SIZE), r = Math.floor((player.x + player.width - EDGE_EPS) / TILE_SIZE);
-        const t = Math.floor((oldBottom - EDGE_EPS) / TILE_SIZE), b = Math.floor((nextY + player.height - EDGE_EPS) / TILE_SIZE);
+        const l = Math.floor((player.x + EDGE_EPS) / TILE_SIZE),
+          r = Math.floor((player.x + player.width - EDGE_EPS) / TILE_SIZE);
+        const t = Math.floor((oldBottom - EDGE_EPS) / TILE_SIZE),
+          b = Math.floor((nextY + player.height - EDGE_EPS) / TILE_SIZE);
         for (let tx = l; tx <= r; tx++) {
           for (let ty = t; ty <= b; ty++) {
             const box = solidBox(world, tx, ty);
@@ -503,7 +586,8 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
             // fall straight down past it rather than snapping sideways.
             const overlap = Math.min(box.right, player.x + player.width) - Math.max(box.left, player.x);
             if (overlap <= 0 || overlap <= FEET_INSET + 0.5) continue;
-            const outLeft = box.left - player.width - 0.01, outRight = box.right + 0.01;
+            const outLeft = box.left - player.width - 0.01,
+              outRight = box.right + 0.01;
             const toX = Math.abs(outLeft - player.x) < Math.abs(outRight - player.x) ? outLeft : outRight;
             if (!boxBlocked(world, toX, nextY, player)) player.x = toX;
             else {
@@ -526,26 +610,26 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
       const firstRow = Math.floor(player.y / TILE_SIZE);
       let hitCeiling = false;
       for (let headTilesY = firstRow; headTilesY >= Math.floor(headY / TILE_SIZE) && !hitCeiling; headTilesY--)
-      for (let tx = leftTileX; tx <= rightTileX; tx++) {
-        const localLeft = (player.x - tx * TILE_SIZE) / TILE_SIZE;
-        const localRight = ((player.x + player.width - EDGE_EPS) - tx * TILE_SIZE) / TILE_SIZE;
-        const box = solidBox(world, tx, headTilesY);
-        let ceilY;
-        if (box && isStrip(box)) ceilY = box.right > player.x && box.left < player.x + player.width ? box.bottom : null;
-        else {
-          const c1 = ceilingSurfaceY(world, tx, headTilesY, localLeft);
-          const c2 = ceilingSurfaceY(world, tx, headTilesY, localRight);
-          ceilY = (c1 !== null && c2 !== null) ? Math.min(c1, c2) : (c1 ?? c2);
+        for (let tx = leftTileX; tx <= rightTileX; tx++) {
+          const localLeft = (player.x - tx * TILE_SIZE) / TILE_SIZE;
+          const localRight = (player.x + player.width - EDGE_EPS - tx * TILE_SIZE) / TILE_SIZE;
+          const box = solidBox(world, tx, headTilesY);
+          let ceilY;
+          if (box && isStrip(box)) ceilY = box.right > player.x && box.left < player.x + player.width ? box.bottom : null;
+          else {
+            const c1 = ceilingSurfaceY(world, tx, headTilesY, localLeft);
+            const c2 = ceilingSurfaceY(world, tx, headTilesY, localRight);
+            ceilY = c1 !== null && c2 !== null ? Math.min(c1, c2) : (c1 ?? c2);
+          }
+          if (ceilY !== null && headY <= ceilY && (headTilesY === Math.floor(headY / TILE_SIZE) || ceilY <= player.y + 0.5)) {
+            // A bump never pushes you down (into the ground) if your head is already level
+            // with or past the ceiling, e.g. under a trapdoor that swung over you.
+            nextY = Math.min(ceilY + 0.01, player.y);
+            player.vy = 0;
+            hitCeiling = true;
+            break;
+          }
         }
-        if (ceilY !== null && headY <= ceilY && (headTilesY === Math.floor(headY / TILE_SIZE) || ceilY <= player.y + 0.5)) {
-          // A bump never pushes you down (into the ground) if your head is already level
-          // with or past the ceiling, e.g. under a trapdoor that swung over you.
-          nextY = Math.min(ceilY + 0.01, player.y);
-          player.vy = 0;
-          hitCeiling = true;
-          break;
-        }
-      }
     }
   }
 
@@ -553,5 +637,4 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   if (inWater || onLadder) player.cancelFall?.();
   else if (player.onGround) player.land?.();
   else player.trackFall?.();
-
 }

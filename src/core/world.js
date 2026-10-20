@@ -19,6 +19,8 @@ const AIR_CELL = Object.freeze({ id: 'air', meta: null });
 
 // Seconds between falling-block ticks; sand and gravel count these to time their drops.
 const FALL_TICK_INTERVAL = 0.06;
+// Seconds between the slow block ticks (grass spreading, leaves decaying, furnaces, puddles).
+const SLOW_TICK_INTERVAL = 1 / 6;
 
 export class World {
   constructor(width, height, registry, seed = 0) {
@@ -43,6 +45,9 @@ export class World {
     this.initializeStars();
 
     this.seed = seed;
+    this.dimensionId = 'earth';
+    this.dimension = null;
+    this.gravityMultiplier = 1.0;
     this.water = new WaterSim(this);
 
     this._savedEntities = new Map();
@@ -122,6 +127,10 @@ export class World {
 
   isChunkLoaded(chunkX) {
     return this.chunks.has(this.chunkKey(chunkX));
+  }
+
+  getChunk(chunkX) {
+    return this.chunks.get(this.chunkKey(chunkX)) || null;
   }
 
   loadChunkAsync(chunkX) {
@@ -225,7 +234,7 @@ export class World {
     this._ghostCells.delete(chunkX);
     // Fresh ground: grow / kill grass now rather than over the first minutes of play. Only
     // the edge column of a neighbour that was already generated earlier gets looked at too.
-    if (!chunk.dirty) {
+    if (!chunk.dirty && this.dimension?.functions?.canSpreadGrass !== false && this.worldType !== 'moon') {
       const startX = chunkX * this.chunkSize;
       settleGrass(this, startX - 1, startX + this.chunkSize);
     }
@@ -262,6 +271,7 @@ export class World {
 
   resetChunks() {
     this._chunkGeneration++;
+    this._lastChunk = null;
     this.water?.reset();
     this.chunks.clear();
     this.loadedChunkOrder.length = 0;
@@ -322,6 +332,7 @@ export class World {
       }
     }
     this.chunks.delete(key);
+    this._lastChunk = null;
 
     const idx = this.loadedChunkOrder.indexOf(chunkX);
     if (idx !== -1) this.loadedChunkOrder.splice(idx, 1);
@@ -360,8 +371,10 @@ export class World {
   setCellRaw(x, y, cell) {
     const chunk = this.chunks.get(this.chunkKey(this.chunkXFor(x)));
     if (!chunk?.cells) return;
-    chunk.cells[y * this.chunkSize + (x - chunk.chunkX * this.chunkSize)] = cell;
+    const idx = y * this.chunkSize + (x - chunk.chunkX * this.chunkSize);
+    chunk.cells[idx] = cell;
     chunk.dirty = true;
+    this._noteCellWritten(chunk, idx, cell.id);
   }
 
   // Water in a block as a share of a full block.
@@ -373,9 +386,14 @@ export class World {
 
   getCell(x, y) {
     if (!this.inBounds(x, y)) return AIR_CELL;
-    const chunk = this.chunks.get(this.chunkKey(Math.floor(x / this.chunkSize)));
-    if (!chunk || !chunk.cells) return AIR_CELL;
-    const rx = x - chunk.chunkX * this.chunkSize;
+    const cx = Math.floor(x / this.chunkSize);
+    let chunk = this._lastChunk;
+    if (!chunk || chunk.chunkX !== cx) {
+      chunk = this.chunks.get(this.chunkKey(cx));
+      if (!chunk || !chunk.cells) return AIR_CELL;
+      this._lastChunk = chunk;
+    }
+    const rx = x - cx * this.chunkSize;
     return chunk.cells[y * this.chunkSize + rx] ?? AIR_CELL;
   }
 
@@ -387,36 +405,42 @@ export class World {
     return this.registry.get(this.getCell(x, y).id);
   }
 
-  setBlock(x, y, id, meta = null) {
+  // keepLayers: false writes the cell exactly as given, without carrying over the background
+  // block behind it or a mined-out wall (used when mining that background block itself).
+  setBlock(x, y, id, meta = null, { keepLayers = true } = {}) {
     if (!this.inBounds(x, y)) return;
     const cx = this.chunkXFor(x);
     const chunk = this.chunks.get(this.chunkKey(cx));
 
     if (chunk && chunk.cells) {
       const rx = x - cx * this.chunkSize;
+      const idx = y * this.chunkSize + rx;
       // Clearing a plant that water was flowing through leaves the water behind.
-      const old = chunk.cells[y * this.chunkSize + rx];
+      const old = chunk.cells[idx];
       if (id === 'air' && old?.meta?.water > 0) {
         id = 'water';
         meta = { mass: old.meta.water };
       }
-      // A block in front of a background block keeps it (meta.bgId); clearing the front
-      // block puts the background block back. A mined-out natural wall stays gone.
-      const keepBg = old?.meta?.bgId;
-      const keepBgMeta = old?.meta?.bgMeta;
-      const keepNoWall = old?.meta?.noWall;
-      if (old?.meta?.layer === 'bg' && meta?.layer !== 'bg') {
-        if (id !== 'air') meta = { ...(meta || {}), bgId: old.id, bgMeta: old.meta };
-      } else if (keepBg && meta?.layer !== 'bg') {
-        if (id === 'air') { id = keepBg; meta = keepBgMeta || { layer: 'bg' }; }
-        else if (!meta?.bgId) meta = { ...(meta || {}), bgId: keepBg, ...(keepBgMeta ? { bgMeta: keepBgMeta } : {}) };
+      if (keepLayers) {
+        // A block in front of a background block keeps it (meta.bgId); clearing the front
+        // block puts the background block back. A mined-out natural wall stays gone.
+        const keepBg = old?.meta?.bgId;
+        const keepBgMeta = old?.meta?.bgMeta;
+        if (old?.meta?.layer === 'bg' && meta?.layer !== 'bg') {
+          if (id !== 'air') meta = { ...(meta || {}), bgId: old.id, bgMeta: old.meta };
+        } else if (keepBg && meta?.layer !== 'bg') {
+          if (id === 'air') {
+            id = keepBg;
+            meta = keepBgMeta || { layer: 'bg' };
+          } else if (!meta?.bgId) meta = { ...(meta || {}), bgId: keepBg, ...(keepBgMeta ? { bgMeta: keepBgMeta } : {}) };
+        }
+        if (old?.meta?.noWall && !meta?.noWall) meta = { ...(meta || {}), noWall: true };
       }
-      if (keepNoWall && !meta?.noWall) {
-        meta = { ...(meta || {}), noWall: true };
-      }
-      chunk.cells[y * this.chunkSize + rx] = { id, meta };
+      chunk.cells[idx] = { id, meta };
       chunk.dirty = true;
+      this._noteCellWritten(chunk, idx, id);
       this.blockVersion = (this.blockVersion || 0) + 1;
+      if (this._affectsLight(old, id, meta)) this.lightVersion = (this.lightVersion || 0) + 1;
       this.updateLighting(x, y);
       this.water?.blockChanged(x, y);
       if (this.onBlockChanged) this.onBlockChanged(x, y);
@@ -426,6 +450,38 @@ export class World {
       }
       this._crossChunkPending.get(cx).push({ x, y, id, meta });
     }
+  }
+
+  // Whether replacing `old` with (id, meta) can change how placed lights spread: a light
+  // appearing or going, or a cell turning solid or open.
+  _affectsLight(old, id, meta) {
+    if (!old) return true;
+    if (old.id === id && (old.meta?.layer === 'bg') === (meta?.layer === 'bg')) return false;
+    const a = this.registry.get(old.id);
+    const b = this.registry.get(id);
+    return (
+      a?.lightLevel > 0 || b?.lightLevel > 0 || !!a?.solid !== !!b?.solid || (old.meta?.layer === 'bg') !== (meta?.layer === 'bg') || a?.opacity !== b?.opacity
+    );
+  }
+
+  // A cell was written: if its new block ticks, it joins the chunk's ticking cells. (Cells
+  // that stop ticking are dropped from the set when tick() next comes across them.)
+  _noteCellWritten(chunk, idx, id) {
+    if (chunk.tickers && this._getTickDef(id)) chunk.tickers.add(idx);
+  }
+
+  // The cells of a chunk whose blocks tick, worked out once per chunk and then kept up to date.
+  _tickersOf(chunk) {
+    if (!chunk.tickers) {
+      const set = new Set();
+      const cells = chunk.cells;
+      for (let i = 0; i < cells.length; i++) {
+        const cell = cells[i];
+        if (cell && this._getTickDef(cell.id)) set.add(i);
+      }
+      chunk.tickers = set;
+    }
+    return chunk.tickers;
   }
 
   // Multiplayer: set a cell to what another player has, wherever its chunk is (loaded,
@@ -455,7 +511,9 @@ export class World {
     }
     if (!chunk) return;
     chunk.dirty = true;
+    this._noteCellWritten(chunk, idx, id);
     this.blockVersion = (this.blockVersion || 0) + 1;
+    if (this._affectsLight(old, id, meta)) this.lightVersion = (this.lightVersion || 0) + 1;
     if (!old || old.id !== id) this.updateLighting(x, y);
     this.water?.blockChanged(x, y);
   }
@@ -648,9 +706,7 @@ export class World {
         const cell = this.getCell(nx, ny);
         const isBg = cell?.meta?.layer === 'bg';
         const opaque = !isBg && this._isOpaque(type);
-        const cost = sourceOpaque
-          ? SOLID_LIGHT_COST
-          : opaque ? airCost : Math.max(airCost, this._lightAttenuation(type) - LIGHT_SCALE + airCost);
+        const cost = sourceOpaque ? SOLID_LIGHT_COST : opaque ? airCost : Math.max(airCost, this._lightAttenuation(type) - LIGHT_SCALE + airCost);
         const newLight = light - cost;
         const nIdx = ny * width + nx;
         if (newLight > map[nIdx]) {
@@ -689,7 +745,10 @@ export class World {
     if (!this._flowScratch || this._flowScratch.length < w * h) this._flowScratch = new Float32Array(w * h);
     const scratch = this._flowScratch;
 
-    for (const [display, target] of [[this.displaySky, this.lightMap], [this.displayBlock, this.blockLightMap]]) {
+    for (const [display, target] of [
+      [this.displaySky, this.lightMap],
+      [this.displayBlock, this.blockLightMap]
+    ]) {
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const idx = y * this.width + x;
@@ -700,9 +759,7 @@ export class World {
         for (let y = y0; y <= y1; y++) {
           for (let x = x0; x <= x1; x++) scratch[(y - y0) * w + (x - x0)] = display[y * this.width + x];
         }
-        const read = (x, y) => (x < x0 || x > x1 || y < y0 || y > y1)
-          ? display[y * this.width + x] || 0
-          : scratch[(y - y0) * w + (x - x0)];
+        const read = (x, y) => (x < x0 || x > x1 || y < y0 || y > y1 ? display[y * this.width + x] || 0 : scratch[(y - y0) * w + (x - x0)]);
         for (let y = y0; y <= y1; y++) {
           for (let x = x0; x <= x1; x++) {
             const idx = y * this.width + x;
@@ -765,6 +822,13 @@ export class World {
   }
 
   tick(dt) {
+    if (this.dimension?.functions?.tick) {
+      try {
+        this.dimension.functions.tick(dt, this);
+      } catch (e) {
+        console.error('Dimension tick error:', e);
+      }
+    }
     if (this.remote) {
       perf.startPhase('tickLighting');
       this.flushLighting();
@@ -776,11 +840,16 @@ export class World {
     this.water.step(dt);
     perf.endPhase('tickWater');
     // Falling blocks tick on a fixed clock so they drop at a steady pace;
-    // everything else keeps the old random ~10%-of-frames cadence.
+    // On worlds with custom gravity (e.g. Moon), drops pace at the world's gravity.
+    const gMult = this.gravityMultiplier ?? this.dimension?.gravityMultiplier ?? 1;
+    const fallInterval = FALL_TICK_INTERVAL / Math.max(0.01, gMult);
     this._fallAccum = (this._fallAccum || 0) + dt;
-    const fallDue = this._fallAccum >= FALL_TICK_INTERVAL;
-    if (fallDue) this._fallAccum = Math.min(this._fallAccum - FALL_TICK_INTERVAL, FALL_TICK_INTERVAL);
-    const slowDue = Math.random() < 0.1;
+    const fallDue = this._fallAccum >= fallInterval;
+    if (fallDue) this._fallAccum = Math.min(this._fallAccum - fallInterval, fallInterval);
+    // Everything else ticks on its own steady clock.
+    this._slowAccum = (this._slowAccum || 0) + dt;
+    const slowDue = this._slowAccum >= SLOW_TICK_INTERVAL;
+    if (slowDue) this._slowAccum = Math.min(this._slowAccum - SLOW_TICK_INTERVAL, SLOW_TICK_INTERVAL);
     if (!fallDue && !slowDue) {
       perf.startPhase('tickLighting');
       this.flushLighting();
@@ -788,17 +857,21 @@ export class World {
       return;
     }
 
+    // Only the cells whose blocks tick are visited (see _tickersOf).
     const time = this.time;
     const pending = [];
     for (const chunk of this.chunks.values()) {
       if (!chunk || !chunk.cells) continue;
       const cells = chunk.cells;
-      const len = cells.length;
-      for (let i = 0; i < len; i++) {
+      const tickers = this._tickersOf(chunk);
+      for (const i of tickers) {
         const cell = cells[i];
-        if (!cell || cell.id === 'air' || cell.id === 'stone') continue;
-        const t = this._getTickDef(cell.id);
-        if (t && (t.falls ? fallDue : slowDue)) pending.push(chunk, i, cell, t);
+        const t = cell ? this._getTickDef(cell.id) : null;
+        if (!t) {
+          tickers.delete(i);
+          continue;
+        }
+        if (t.falls ? fallDue : slowDue) pending.push(chunk, i, cell, t);
       }
     }
 
@@ -822,7 +895,7 @@ export class World {
     let def = this._tickCache.get(id);
     if (def === undefined) {
       const t = this.registry.get(id);
-      def = (t && typeof t.tick === 'function') ? t : null;
+      def = t && typeof t.tick === 'function' ? t : null;
       this._tickCache.set(id, def);
     }
     return def;

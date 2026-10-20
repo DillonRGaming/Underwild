@@ -6,11 +6,13 @@ import { gameClock } from '../../src/core/gameClock.js';
 // meta.burnId (fuel now burning), meta.burn / burnMax (seconds of fuel), meta.cook[4] (seconds cooked).
 
 // input id -> [output id, seconds to cook]
-// What each thing smelts into lives on the thing itself: smelt: { into: 'glass', time: 3 }
+// What each thing smelts into lives on the thing itself: smelt: { into: 'copper_ingot', time: 3 }
 // (seconds), plus optionally fuel: ['coal', 'coal_block'] if only those fires will cook it.
 // And fuel says how long it burns: burnTime: 40.
 let registry = null;
-export function useFurnaceRegistry(r) { registry = r; }
+export function useFurnaceRegistry(r) {
+  registry = r;
+}
 export function smeltingOf(id) {
   const s = id && registry?.get(id)?.smelt;
   return s ? [s.into, s.time, s.fuel] : null;
@@ -26,7 +28,7 @@ export function fuelTime(id) {
   return (id && registry?.get(id)?.burnTime) || 0;
 }
 
-const stackIdOf = s => (s ? s.blockId || s.itemId : null);
+const stackIdOf = (s) => (s ? s.blockId || s.itemId : null);
 
 function makeStack(registry, id, count) {
   const def = registry.get(id);
@@ -52,7 +54,9 @@ export function ensureFurnaceMeta(meta) {
       inv[FUEL] = old[1];
       inv[OUT] = old[2];
     } else {
-      old.forEach((s, i) => { if (i < FURNACE_SLOTS) inv[i] = s; });
+      old.forEach((s, i) => {
+        if (i < FURNACE_SLOTS) inv[i] = s;
+      });
     }
     meta.inv = inv;
   }
@@ -87,10 +91,11 @@ export function stepFurnace(meta, dt, registry) {
   const inv = meta.inv;
   let changed = false;
   // Light the next piece of fuel only when something can actually cook.
-  const canCook = () => [0, 1, 2, 3].some(i => {
-    const r = crucibleRecipe(meta, i);
-    return r && fuelSuits(r, stackIdOf(inv[FUEL])) && crucibleState(meta, i, registry) !== 'full';
-  });
+  const canCook = () =>
+    [0, 1, 2, 3].some((i) => {
+      const r = crucibleRecipe(meta, i);
+      return r && fuelSuits(r, stackIdOf(inv[FUEL])) && crucibleState(meta, i, registry) !== 'full';
+    });
   if (meta.burn <= 0 && fuelTime(stackIdOf(inv[FUEL])) > 0 && canCook()) {
     meta.burnMax = meta.burn = fuelTime(stackIdOf(inv[FUEL]));
     meta.burnId = stackIdOf(inv[FUEL]);
@@ -101,14 +106,17 @@ export function stepFurnace(meta, dt, registry) {
   const burning = meta.burn > 0;
   if (burning) {
     // Every crucible cooking draws on the same fire, so fuel burns that many times faster.
-    const cooking = [0, 1, 2, 3].filter(i => crucibleState(meta, i, registry) === 'cooking').length;
+    const cooking = [0, 1, 2, 3].filter((i) => crucibleState(meta, i, registry) === 'cooking').length;
     meta.burn = Math.max(0, meta.burn - dt * Math.max(1, cooking));
     changed = true;
   }
   for (let i = 0; i < CRUCIBLES; i++) {
     const r = crucibleRecipe(meta, i);
     if (!r) {
-      if (meta.cook[i]) { meta.cook[i] = 0; changed = true; }
+      if (meta.cook[i]) {
+        meta.cook[i] = 0;
+        changed = true;
+      }
       continue;
     }
     const state = crucibleState(meta, i, registry);
@@ -138,7 +146,8 @@ export default {
   kind: 'station',
   tab: 'functional',
   dropsContents: true, // spills what's inside when broken
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['scs', 'c c', 'sss'], ingredients: { s: 'stone', c: 'clay' }, count: 1 }
   ],
   tool: 'pickaxe', // mined fastest with this

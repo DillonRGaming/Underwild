@@ -1,9 +1,9 @@
 import { gameClock } from '../../src/core/gameClock.js';
 // Loose blocks (sand, gravel) fall when there's air or water underneath. They start slowly
 // and pick up speed, sink slowly through water, and swap places with the water they enter.
-const FALL_WAIT_START = 5;   // pace of the first drops; it speeds up from there
-const FALL_WAIT_MIN = 2;     // fastest pace in air: one block every 2 ticks
-const FALL_WAIT_WATER = 5;   // sinking through water
+const FALL_WAIT_START = 5; // pace of the first drops; it speeds up from there
+const FALL_WAIT_MIN = 2; // fastest pace in air: one block every 2 ticks
+const FALL_WAIT_WATER = 5; // sinking through water
 export const FALL_TICK_MS = 60; // matches world.js FALL_TICK_INTERVAL
 
 export function fallTick(world, x, y, id, meta) {
@@ -16,18 +16,23 @@ export function fallTick(world, x, y, id, meta) {
   if (isBg) {
     const belowHasBg = belowCell.meta?.layer === 'bg' || !!belowCell.meta?.bgId;
     if (belowSolid || belowHasBg) {
-      if (meta.fallStreak || meta.fallWait) { meta.fallStreak = 0; meta.fallWait = 0; }
+      if (meta.fallStreak || meta.fallWait) {
+        meta.fallStreak = 0;
+        meta.fallWait = 0;
+      }
       return;
     }
     const streak = meta.fallStreak || 0;
-    const waitFor = n => below === 'water' ? FALL_WAIT_WATER : Math.max(FALL_WAIT_MIN, FALL_WAIT_START - n);
+    const waitFor = (n) => (below === 'water' ? FALL_WAIT_WATER : Math.max(FALL_WAIT_MIN, FALL_WAIT_START - n));
     const need = streak === 0 ? 1 : waitFor(streak);
     meta.fallWait = (meta.fallWait || 0) + 1;
     if (meta.fallWait < need) return;
 
     let top = y;
     while (top > 0 && world.getCell(x, top - 1).meta?.layer === 'bg' && world.getBlockType(x, top - 1)?.falls) top--;
-    const fell = { fellAt: gameClock.now(), slideMs: waitFor(streak + 1) * FALL_TICK_MS, fallStreak: streak + 1, fallWait: 0, layer: 'bg' };
+    const gMult = world.gravityMultiplier ?? world.dimension?.gravityMultiplier ?? 1;
+    const tickMs = Math.round(FALL_TICK_MS / Math.max(0.01, gMult));
+    const fell = { fellAt: gameClock.now(), slideMs: waitFor(streak + 1) * tickMs, fallStreak: streak + 1, fallWait: 0, layer: 'bg' };
 
     for (let ty = y; ty >= top; ty--) {
       const tid = ty === y ? id : world.getBlockId(x, ty);
@@ -53,11 +58,14 @@ export function fallTick(world, x, y, id, meta) {
   }
 
   if (belowSolid) {
-    if (meta.fallStreak || meta.fallWait) { meta.fallStreak = 0; meta.fallWait = 0; }
+    if (meta.fallStreak || meta.fallWait) {
+      meta.fallStreak = 0;
+      meta.fallWait = 0;
+    }
     return;
   }
   const streak = meta.fallStreak || 0;
-  const waitFor = n => below === 'water' ? FALL_WAIT_WATER : Math.max(FALL_WAIT_MIN, FALL_WAIT_START - n);
+  const waitFor = (n) => (below === 'water' ? FALL_WAIT_WATER : Math.max(FALL_WAIT_MIN, FALL_WAIT_START - n));
   // Starts falling on the first tick, then each drop waits for the previous slide to finish.
   const need = streak === 0 ? 1 : waitFor(streak);
   meta.fallWait = (meta.fallWait || 0) + 1;
@@ -65,7 +73,9 @@ export function fallTick(world, x, y, id, meta) {
   // The whole stack of loose blocks resting on this one drops with it.
   let top = y;
   while (top > 0 && world.getCell(x, top - 1).meta?.layer !== 'bg' && world.getBlockType(x, top - 1)?.falls) top--;
-  const fell = { fellAt: gameClock.now(), slideMs: waitFor(streak + 1) * FALL_TICK_MS, fallStreak: streak + 1, fallWait: 0 };
+  const gMult = world.gravityMultiplier ?? world.dimension?.gravityMultiplier ?? 1;
+  const tickMs = Math.round(FALL_TICK_MS / Math.max(0.01, gMult));
+  const fell = { fellAt: gameClock.now(), slideMs: waitFor(streak + 1) * tickMs, fallStreak: streak + 1, fallWait: 0 };
   const waterMeta = below === 'water' ? { ...(belowCell.meta || {}) } : null;
   for (let ty = y; ty >= top; ty--) {
     const tid = ty === y ? id : world.getBlockId(x, ty);
@@ -82,7 +92,6 @@ export function createFallingSand(id, displayName, color) {
     kind: 'block',
     tab: 'nature',
     tool: 'shovel',
-    smelt: { into: 'glass', time: 3 },
     // Plain sand takes land plants and beach/lakebed ones; the other sands only the latter.
     soil: id === 'sand' ? ['land', 'beach', 'lakebed'] : id === 'wet_sand' ? ['beach', 'lakebed'] : [],
     shape: 'full',

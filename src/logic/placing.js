@@ -15,12 +15,17 @@ function hasSolidNeighbor(world, x, y) {
   return false;
 }
 
-
 export class Placer {
   constructor(registry) {
     this.registry = registry;
   }
-  place(world, item, tileX, tileY, { mouseWorldX, mouseWorldY, modifierFlip, rotate, facing = 1, background = false, hasWall = false, anywhere = false, replace = false }) {
+  place(
+    world,
+    item,
+    tileX,
+    tileY,
+    { mouseWorldX, mouseWorldY, modifierFlip, rotate, facing = 1, background = false, hasWall = false, anywhere = false, replace = false }
+  ) {
     if (!world.inBounds(tileX, tileY)) return false;
     let existing = world.getBlockId(tileX, tileY);
     const existingCell = world.getCell(tileX, tileY);
@@ -28,7 +33,16 @@ export class Placer {
     if (!type) return false;
     // A background block sits behind whatever is in front: put one behind a torch, plant...
     const existingType = this.registry.get(existing);
-    if (background && existing !== 'air' && existing !== 'water' && existingType && (!existingType.solid || (existingType.shape && existingType.shape !== 'full')) && type.solid && existingCell.meta?.layer !== 'bg' && !existingCell.meta?.bgId) {
+    if (
+      background &&
+      existing !== 'air' &&
+      existing !== 'water' &&
+      existingType &&
+      (!existingType.solid || (existingType.shape && existingType.shape !== 'full')) &&
+      type.solid &&
+      existingCell.meta?.layer !== 'bg' &&
+      !existingCell.meta?.bgId
+    ) {
       world.setBlock(tileX, tileY, existing, { ...(existingCell.meta || {}), bgId: type.id });
       return true;
     }
@@ -54,9 +68,15 @@ export class Placer {
     if (type.plant && !(world.inBounds(tileX, tileY + 1) && canGrowOn(type, world.getBlockType(tileX, tileY + 1)))) return false;
     const wallBehind = hasWall || !!behind || !!existingCell.meta?.bgId;
     // Trapdoors only need to touch some block (a tree trunk, a background block...), not a solid one.
-    const touching = type.kind === 'trapdoor'
-      ? [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => world.inBounds(tileX + dx, tileY + dy) && world.getBlockId(tileX + dx, tileY + dy) !== 'air')
-      : hasSolidNeighbor(world, tileX, tileY);
+    const touching =
+      type.kind === 'trapdoor'
+        ? [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1]
+          ].some(([dx, dy]) => world.inBounds(tileX + dx, tileY + dy) && world.getBlockId(tileX + dx, tileY + dy) !== 'air')
+        : hasSolidNeighbor(world, tileX, tileY);
     // A background wall or block behind provides support for placing anything in front (slabs, torches, trapdoors, blocks...).
     const supported = touching || wallBehind || isNatureBlock || background || anywhere;
     if (!supported) return false;
@@ -64,7 +84,7 @@ export class Placer {
     if (type.shape === 'slab') {
       const localY = mouseWorldY - tileY * TILE_SIZE;
       const top = localY < TILE_SIZE / 2;
-      meta = { slabPos: modifierFlip ? (top ? 'bottom' : 'top') : (top ? 'top' : 'bottom') };
+      meta = { slabPos: modifierFlip ? (top ? 'bottom' : 'top') : top ? 'top' : 'bottom' };
       // Trapdoors hinge on the side behind you and always swing open that way.
       if (type.kind === 'trapdoor') meta.hinge = facing < 0 ? 'right' : 'left';
     } else if (type.shape === 'stairs') {

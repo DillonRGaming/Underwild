@@ -4,7 +4,8 @@ export default {
   material: 'misc',
   kind: 'material',
   tab: 'materials',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shapeless: { sand: 1, clay: 1 }, count: 2 }
   ],
   type: 'item',

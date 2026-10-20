@@ -15,12 +15,14 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
   const DB_NAME = 'underwild';
   const STORE = 'worlds';
   let dbPromise = null;
-  const db = () => dbPromise || (dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  }));
+  const db = () =>
+    dbPromise ||
+    (dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }));
   const tx = async (mode, fn) => {
     const d = await db();
     return new Promise((resolve, reject) => {
@@ -30,7 +32,10 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
       t.onerror = () => reject(t.error);
     });
   };
-  const fileName = (name) => String(name || '').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim() || 'World';
+  const fileName = (name) =>
+    String(name || '')
+      .replace(/[^a-zA-Z0-9_\- ]/g, '_')
+      .trim() || 'World';
 
   api.worlds = {
     async list() {
@@ -47,7 +52,9 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
           }
           const rec = c.value;
           let meta = {};
-          try { meta = JSON.parse(rec.json).meta || {}; } catch (e) {}
+          try {
+            meta = JSON.parse(rec.json).meta || {};
+          } catch (e) {}
           // The same fields the desktop app lists (see main.js worlds:list).
           out.push({
             name: meta.displayName || rec.name,
@@ -63,39 +70,83 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
         req.onerror = () => resolve(out);
       });
     },
-    async exists(name) { return !!(await tx('readonly', s => s.get(fileName(name)))); },
+    async exists(name) {
+      return !!(await tx('readonly', (s) => s.get(fileName(name))));
+    },
     async save(name, json) {
-      const old = await tx('readonly', s => s.get(fileName(name)));
+      const old = await tx('readonly', (s) => s.get(fileName(name)));
       const now = Date.now();
-      await tx('readwrite', s => s.put({ name, json, createdAt: old?.createdAt || now, modifiedAt: now }, fileName(name)));
+      await tx('readwrite', (s) => s.put({ name, json, createdAt: old?.createdAt || now, modifiedAt: now }, fileName(name)));
       return true;
     },
     // Browsers can't write synchronously; start the write and let it finish in the background.
-    saveSync(name, json) { api.worlds.save(name, json).catch(() => {}); return true; },
-    async load(name) { return (await tx('readonly', s => s.get(fileName(name))))?.json ?? null; },
-    async delete(name) { await tx('readwrite', s => s.delete(fileName(name))); return true; }
+    saveSync(name, json) {
+      api.worlds.save(name, json).catch(() => {});
+      return true;
+    },
+    async load(name) {
+      return (await tx('readonly', (s) => s.get(fileName(name))))?.json ?? null;
+    },
+    async delete(name) {
+      await tx('readwrite', (s) => s.delete(fileName(name)));
+      return true;
+    }
   };
 
   // --- Preferences ------------------------------------------------------------------------
   const PREFS_KEY = 'underwild-prefs';
-  const readPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch (e) { return {}; } };
-  const writePrefs = (p) => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (e) {} };
+  const readPrefs = () => {
+    try {
+      return JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+    } catch (e) {
+      return {};
+    }
+  };
+  const writePrefs = (p) => {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+    } catch (e) {}
+  };
   api.prefs = {
-    async getAll() { return readPrefs(); },
-    async get(key) { return readPrefs()[key] ?? null; },
-    async set(key, value) { const p = readPrefs(); p[key] = value; writePrefs(p); return true; },
-    async setMany(entries) { const p = readPrefs(); Object.assign(p, entries); writePrefs(p); return true; },
-    async delete(key) { const p = readPrefs(); delete p[key]; writePrefs(p); return true; },
-    async clear() { writePrefs({}); return true; }
+    async getAll() {
+      return readPrefs();
+    },
+    async get(key) {
+      return readPrefs()[key] ?? null;
+    },
+    async set(key, value) {
+      const p = readPrefs();
+      p[key] = value;
+      writePrefs(p);
+      return true;
+    },
+    async setMany(entries) {
+      const p = readPrefs();
+      Object.assign(p, entries);
+      writePrefs(p);
+      return true;
+    },
+    async delete(key) {
+      const p = readPrefs();
+      delete p[key];
+      writePrefs(p);
+      return true;
+    },
+    async clear() {
+      writePrefs({});
+      return true;
+    }
   };
 
   // --- Multiplayer (Android app) ------------------------------------------------------------
   const cap = window.Capacitor;
-  const discovery = cap?.isNativePlatform?.() ? (cap.Plugins?.LanDiscovery || cap.registerPlugin?.('LanDiscovery')) : null;
+  const discovery = cap?.isNativePlatform?.() ? cap.Plugins?.LanDiscovery || cap.registerPlugin?.('LanDiscovery') : null;
   if (discovery) {
     const listeners = new Set();
-    const emit = (ev) => { for (const cb of listeners) cb(ev); };
-    const hosts = new Map();      // "address:port" -> info
+    const emit = (ev) => {
+      for (const cb of listeners) cb(ev);
+    };
+    const hosts = new Map(); // "address:port" -> info
     let browseTimer = null;
     let browseHandle = null;
     let socket = null;
@@ -104,7 +155,10 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
     const HOST_TIMEOUT_MS = 4000;
 
     api.mp = {
-      onEvent(cb) { listeners.add(cb); return () => listeners.delete(cb); },
+      onEvent(cb) {
+        listeners.add(cb);
+        return () => listeners.delete(cb);
+      },
       async host(port) {
         if (!lanHost) return { ok: false, error: 'Hosting is not available in this app.' };
         try {
@@ -138,9 +192,15 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
           lanHost.send({ id: target, data: line }).catch(() => {});
         }
       },
-      kick(id) { lanHost?.kick({ id }).catch(() => {}); },
+      kick(id) {
+        lanHost?.kick({ id }).catch(() => {});
+      },
       async addresses() {
-        try { return (await lanHost.addresses()).addresses || []; } catch (e) { return []; }
+        try {
+          return (await lanHost.addresses()).addresses || [];
+        } catch (e) {
+          return [];
+        }
       },
       async browse(on) {
         if (!on) {
@@ -169,7 +229,7 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
       },
       join(address, port) {
         api.mp.leave();
-        const known = [...hosts.values()].find(h => h.address === address && (!port || h.port === port));
+        const known = [...hosts.values()].find((h) => h.address === address && (!port || h.port === port));
         const wsPort = known?.wsPort || (port ? port + 1 : 47778);
         return new Promise((resolve) => {
           let settled = false;

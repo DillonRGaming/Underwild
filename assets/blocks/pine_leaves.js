@@ -7,11 +7,11 @@ export default {
   kind: 'leaves',
   tab: 'nature',
   leaves: {
-    decay: [0.4, 5.5],   // seconds an unattached leaf waits before falling away (null = never)
+    decay: [0.4, 5.5], // seconds an unattached leaf waits before falling away (null = never)
     fallOnBreak: [1, 2], // falling-leaf particles when broken (min, max)
-    fallOnPlace: 0.35,   // chance of a falling leaf when placed
-    fallOnDecay: 1,      // falling-leaf particles when it decays
-    idleFall: 0.002,     // chance per check that it drops a leaf on its own
+    fallOnPlace: 0.35, // chance of a falling leaf when placed
+    fallOnDecay: 1, // falling-leaf particles when it decays
+    idleFall: 0.002, // chance per check that it drops a leaf on its own
     particleColor: '#2e6e5a' // falling-leaf colour when there's no texture
   },
   shape: 'full',

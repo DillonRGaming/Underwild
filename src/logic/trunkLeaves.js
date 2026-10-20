@@ -30,5 +30,3 @@ export function keptLeafCover(world, x, y) {
   }
   return cover;
 }
-
-

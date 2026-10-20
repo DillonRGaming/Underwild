@@ -10,10 +10,18 @@ export class Camera {
     this.y = 0;
     this.zoom = 3.0;
   }
-  worldToScreenX(wx) { return (wx - this.x) * this.zoom; }
-  worldToScreenY(wy) { return (wy - this.y) * this.zoom; }
-  screenToWorldX(sx) { return sx / this.zoom + this.x; }
-  screenToWorldY(sy) { return sy / this.zoom + this.y; }
+  worldToScreenX(wx) {
+    return (wx - this.x) * this.zoom;
+  }
+  worldToScreenY(wy) {
+    return (wy - this.y) * this.zoom;
+  }
+  screenToWorldX(sx) {
+    return sx / this.zoom + this.x;
+  }
+  screenToWorldY(sy) {
+    return sy / this.zoom + this.y;
+  }
   followTo(targetX, targetY, canvas, world) {
     const viewW = canvas.width / this.zoom;
     const viewH = canvas.height / this.zoom;

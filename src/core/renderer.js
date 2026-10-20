@@ -1,5 +1,7 @@
 import { isGrassyCell, bareIdOf } from '../../assets/blocks/grassSpread.js';
 import { gameClock } from './gameClock.js';
+import { wind, exposureAt } from './wind.js';
+import { weather } from './weather.js';
 import { TILE_SIZE, darkenHex } from './utils.js';
 import { Clouds } from './clouds.js';
 import { polishOn } from './polishSettings.js';
@@ -7,13 +9,13 @@ import { ClassicClouds } from './clouds_classic.js';
 import { drawSkyGradient, drawHills, isOutlined, edgePass, drawVignette, outlineLayer, blockSeams, screenOutline, cornerRect } from './polish.js';
 import { keptLeafCover } from '../logic/trunkLeaves.js';
 import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
-import { waterLevel, waterMass, WATER_LEVELS, SQ as WATER_SQ } from '../logic/water.js';
+import { SQ as WATER_SQ } from '../logic/water.js';
 import { grassColorAt, leafColorAt, biomeHasLeafTint, fogAt, ROCK_SCALES } from '../logic/biomes.js';
 import { perf } from './perf.js';
 import { waterPerf } from './waterPerf.js';
 
-const NAME_TAG_NEAR = 15;   // blocks: name tags are fully shown up to here
-const NAME_TAG_FAR = 20;    // and have faded away completely by here
+const NAME_TAG_NEAR = 15; // blocks: name tags are fully shown up to here
+const NAME_TAG_FAR = 20; // and have faded away completely by here
 
 const MIN_BRIGHTNESS = 0.04;
 const _rawSplat = [];
@@ -25,8 +27,10 @@ for (let i = 0; i < SPLAT_LEN; i++) {
   SPLAT_DX[i] = _rawSplat[i * 2];
   SPLAT_DY[i] = _rawSplat[i * 2 + 1];
 }
-const NIGHT_SKY = [3, 4, 9];
-const NIGHT_LIGHT = 0.07;
+const NIGHT_SKY = [10, 15, 34];
+const TWILIGHT_SKY = [84, 102, 148]; // dawn and dusk, between the day's blue and the night's
+const NIGHT_LIGHT = 0.07; // the sky, clouds and far land at night
+const NIGHT_AMBIENT = 0.3; // daylight on the land at night, as a share of the day's
 const BACKGROUND_WALL = 'rgb(58, 46, 36)';
 const BACKGROUND_WALL_SHADE = 0.4;
 const HELD_TORCH_LIGHT = 10.5;
@@ -50,21 +54,47 @@ const HELD_ARM_WALK = 0.25;
 const GRASS_SIDES = ['top', 'right', 'bottom', 'left'];
 // Textures (not blocks) whose green pixels take on the local biome's grass colour. Blocks
 // say so themselves with `biomeTint: true`.
-const BIOME_TINTED = new Set([
-  'grass_corner',
-  'grass_overlay_top', 'grass_overlay_right', 'grass_overlay_bottom', 'grass_overlay_left'
-]);
+const BIOME_TINTED = new Set(['grass_corner', 'grass_overlay_top', 'grass_overlay_right', 'grass_overlay_bottom', 'grass_overlay_left']);
 // Plants that bend in the wind: the tip leans furthest, the base stays put.
-const WIND_MAX_BEND = 2.5;   // texels the tip of a plant bends in the strongest gust
-const WIND_SPEED = 14;       // tiles per second a gust travels across the land
-const TRUNK_MAX_BEND = 2.2;  // texels the top of a TRUNK_REF_HEIGHT-tall trunk bends in a gust
-const TRUNK_REF_HEIGHT = 9;   // trunk height (blocks) that reaches the full bend
-const LEAF_MAX_SWAY = 1.6;   // texels a leaf block shifts in the strongest gust
-const FOG_SMOOTH = 5;          // columns either side averaged for the fog's ground line
-const FOG_TEXELS_PER_TILE = 8; // mist texture texels per block column (texture is 256 wide)
-const FALL_SLIDE_MS = 120;   // matches world.js FALL_TICK_INTERVAL
+const WIND_MAX_BEND = 4.5; // texels the tip of a plant bends at wind strength 1 (about /wind 100)
+const TRUNK_MAX_BEND = 10; // texels the top of a TRUNK_REF_HEIGHT-tall trunk bends at wind strength 1
+const LEAF_FLUTTER = 2; // texels the crown's rows ripple on top of the trunk's bend in a strong wind
+const TRUNK_REF_HEIGHT = 9; // trunk height (blocks) that reaches the full bend
+const FOG_SMOOTH = 8; // columns either side averaged for the fog's ground line
+const FOG_WIND = 6; // how far the mist drifts with the wind
+const FOG_TEXELS_PER_TILE = 8; // mist texture texels per block column
+const FOG_TEX_W = 256; // width of the repeating part of the mist texture
+const FOG_TEX_PAD = 32; // extra columns copied from its start so slices never run off the end
+const FALL_SLIDE_MS = 120; // matches world.js FALL_TICK_INTERVAL
 const LEAF_FRINGE_DEPTH = 2;
+const SNOW_DEPTH = 6; // texels deep the lying snow gets once it's fully built up
+const SNOW_UNDER_TREES = 0.35; // share of it that gets through a tree's crown to the ground below
+const SNOW_COLOR = 'rgb(232, 239, 248)';
+const SNOW_TOP_COLOR = 'rgb(255, 255, 255)';
 
+// A tiny steady brightness difference between leaf blocks, so a canopy isn't one flat colour.
+function leafShade(x, y) {
+  return 0.8 + 0.2 * hash01(x * 3 + 1, y * 5 + 2);
+}
+
+// v wrapped into [0, m).
+function wrap(v, m) {
+  return ((v % m) + m) % m;
+}
+
+// A steady random number in [0, 1) for a block position.
+function hash01(x, y) {
+  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// How late (seconds) the trees at column tileX feel the gusts. It drifts smoothly across the
+// land, so a trunk and its leaves (and the leaves next to each other) keep together while
+// trees further apart move to their own rhythm.
+function treeLag(tileX) {
+  return 0.8 + 0.8 * Math.sin(tileX * 0.21 + Math.sin(tileX * 0.053) * 3);
+}
 
 // Images report `complete` once loaded; canvases (tinted textures) have no such flag.
 function isTextureReady(texture) {
@@ -74,16 +104,24 @@ function isTextureReady(texture) {
 function isGreenPixel(d, i) {
   return d[i + 3] !== 0 && d[i + 1] > d[i] && d[i + 1] > d[i + 2];
 }
-const LEAF_FRINGE_SIDES = [['top', 0, -1], ['bottom', 0, 1], ['left', -1, 0], ['right', 1, 0]];
-const TOOL_GRIP_ANGLE = 45 * Math.PI / 180;
+const LEAF_FRINGE_SIDES = [
+  ['top', 0, -1],
+  ['bottom', 0, 1],
+  ['left', -1, 0],
+  ['right', 1, 0]
+];
+const TOOL_GRIP_ANGLE = (45 * Math.PI) / 180;
 const MINE_BOB_SPEED = 0.018;
 const MINE_BOB_AMOUNT = 0.25;
 // How far each held tool sits out along its handle, as a fraction of its size.
 const TOOL_GRIP_OFFSETS = { sword: 0.36, pickaxe: 0.26, axe: 0.26, shovel: 0.26, hoe: 0.26, stick: 0.3 };
 const ARM_ACTIONS = {
   // duration in ms; curve(t) returns the arm angle offset for t in [0, 1]
-  attack: { duration: 260, curve: t => t < 0.3 ? -1.4 * (t / 0.3) : -1.4 + 2.0 * Math.sin(((t - 0.3) / 0.7) * Math.PI / 2) * (1 - (t - 0.3) / 0.7 * 0.3) },
-  place: { duration: 180, curve: t => -0.45 * Math.sin(t * Math.PI) }
+  attack: {
+    duration: 260,
+    curve: (t) => (t < 0.3 ? -1.4 * (t / 0.3) : -1.4 + 2.0 * Math.sin((((t - 0.3) / 0.7) * Math.PI) / 2) * (1 - ((t - 0.3) / 0.7) * 0.3))
+  },
+  place: { duration: 180, curve: (t) => -0.45 * Math.sin(t * Math.PI) }
 };
 const CROUCH_HIP_BACK = 0.1;
 const CROUCH_SINK = 0.2;
@@ -110,16 +148,19 @@ export class Renderer {
     this.fps = 0;
     this.frameCount = 0;
     this.lastFpsUpdate = 0;
+    // Set by the game: the blocks tiled behind the menus, and multiplayer (other players).
+    this.backgroundBlocks = ['dirt', 'coarse_dirt'];
+    this.multiplayer = null;
   }
 
   preloadTextures() {
-    const backgroundBlocks = Array.isArray(window.backgroundBlocks) ? window.backgroundBlocks : ['dirt', 'coarse_dirt'];
-    const ids = new Set([...backgroundBlocks, 'dirt', 'coarse_dirt', 'stone', 'grass']);
+    const ids = new Set([...this.backgroundBlocks, 'dirt', 'coarse_dirt', 'stone', 'grass']);
     for (const id of this.registry.map.keys()) ids.add(id);
     for (const [id, def] of this.registry.map) if (def.leaves) ids.add(`falling_leaf_${id}`);
     for (const [id, def] of this.registry.map) if (def.kind === 'chest') ids.add(`${id}_left`).add(`${id}_right`);
-    for (const id of ['oak_leaf_particle', 'falling_leaf', 'steve', 'no_texture', 'grass_corner']) ids.add(id);
+    for (const id of ['oak_leaf_particle', 'falling_leaf', 'steve', 'dummy', 'no_texture', 'grass_corner', 'earth']) ids.add(id);
     for (const side of GRASS_SIDES) ids.add(`grass_overlay_${side}`);
+    for (const side of ['top', 'right', 'bottom', 'left']) ids.add(`rock_overlay_${side}`);
     for (const [id, def] of this.registry.map) for (let i = 1; i <= (def.variants?.count ?? 0); i++) ids.add(`${id}_${i}`);
 
     for (const textureId of ids) {
@@ -176,11 +217,21 @@ export class Renderer {
       this.updateHeldLight(ui);
       this.drawSky();
       // Clouds drift across the sky behind everything else; dimmer at night.
-      if (!this.clouds) { this.clouds = new Clouds(); this.classicClouds = new ClassicClouds(); }
-      (polishOn('clouds') ? this.clouds : this.classicClouds).draw(ctx, this.camera, canvas, world.seed ?? 0, this.daylight?.base ?? 1);
+      const isMoon = this.world?.worldType === 'moon' || this.world?.dimensionId === 'moon' || this.world?.dimension?.id === 'moon';
+      const showClouds = !isMoon && (this.world?.hasClouds ?? this.world?.dimension?.hasClouds ?? true);
+      if (showClouds) {
+        if (!this.clouds) {
+          this.clouds = new Clouds();
+          this.classicClouds = new ClassicClouds();
+        }
+        (polishOn('clouds') ? this.clouds : this.classicClouds).draw(ctx, this.camera, canvas, world.seed ?? 0, (this.daylight?.base ?? 1) * (1 - 0.35 * weather.rain - 0.3 * weather.storm - 0.1 * weather.snow));
+      }
       const polish = ui?.textureQuality !== 'fast';
       this._polish = polish;
-      if (polish && polishOn('hills')) drawHills(ctx, this.camera, canvas, world.seed ?? 0, this._skyRGB, this.daylight?.base ?? 1);
+      const showHills = !isMoon && (this.world?.hasHills ?? this.world?.dimension?.hasHills ?? true);
+      if (polish && polishOn('hills') && showHills)
+        drawHills(ctx, this.camera, canvas, world.seed ?? 0, this._skyRGB, this.daylight?.base ?? 1, world.worldType ?? 'regular', world.height, this.hasWeather(isMoon) ? weather.snowCover : 0);
+      this.drawWeatherSky(isMoon);
       perf.endPhase('renderSkyHills');
 
       const shake = ui?.explosionFX ? ui.explosionFX.getShakeOffset() : null;
@@ -191,7 +242,7 @@ export class Renderer {
 
       const viewW = canvas.width / camera.zoom;
       const viewH = canvas.height / camera.zoom;
-      
+
       const margin = 2;
       const startX = Math.max(0, Math.floor(camera.x / TILE_SIZE) - margin);
       const endX = Math.min(this.world.width - 1, Math.ceil((camera.x + viewW) / TILE_SIZE) + margin);
@@ -211,6 +262,13 @@ export class Renderer {
       this.drawFog(startX, endX);
       perf.endPhase('renderFog');
 
+      // Everything in the world (blocks, walls, plants, water) is drawn on its own layer at full
+      // brightness, then the light is laid over just that layer: the sky behind it isn't
+      // darkened, and everything in front of it is lit the same way, day or night.
+      const worldLayer = this.terrainLayer('_worldLayer');
+      const wctx = worldLayer.getContext('2d');
+      wctx.setTransform(ctx.getTransform());
+      this.ctx = wctx;
       // Solid foreground blocks go on their own layer so their open corners can be rounded.
       const terrain = polish && (polishOn('outlines') || polishOn('rounding') || polishOn('seams') || polishOn('wallShadows')) ? this.terrainLayer() : null;
       const terrainCtx = terrain?.getContext('2d');
@@ -237,19 +295,25 @@ export class Renderer {
             if (bgType) {
               if (leafCtx && bgType.leaves) {
                 this.ctx = leafCtx;
-                this.drawBlock(x, y, bgType, { layer: 'bg' });
-                this.ctx = ctx;
+                this.drawBlock(x, y, bgType, { layer: 'bg', ...(cell.meta?.bgMeta || {}) });
+                this.ctx = wctx;
               } else {
-                this.drawBlock(x, y, bgType, { layer: 'bg' });
-                if (polish && bgType.solid && polishOn('seams')) this.seamTile(x, y);
+                this.drawBlock(x, y, bgType, { layer: 'bg', ...(cell.meta?.bgMeta || {}) });
+                if (polish && bgType.solid && (!bgType.shape || bgType.shape === 'full') && polishOn('seams')) this.seamTile(x, y);
               }
               renderedBlocksCount++;
             }
             // Lakes have a fixed sand backdrop where their water was generated; it stays put
             // whatever the water in front of it does.
-            else if (cell.meta?.noWall) { /* the natural wall here was mined out */ }
-            else if (this.isLakeBackdrop(x, y)) { this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand'); renderedBlocksCount++; }
-            else if (!this.isOpenSky(x, y)) { this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast'); renderedBlocksCount++; }
+            else if (cell.meta?.noWall) {
+              /* the natural wall here was mined out */
+            } else if (this.isLakeBackdrop(x, y)) {
+              this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
+              renderedBlocksCount++;
+            } else if (!this.isOpenSky(x, y)) {
+              this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
+              renderedBlocksCount++;
+            }
             if (cell.id === 'air') continue;
           }
           // A block still sliding into its cell leaves the cell's bottom uncovered: fill it.
@@ -262,12 +326,12 @@ export class Renderer {
           if (leafCtx && this.registry.get(cell.id)?.leaves) {
             this.ctx = leafCtx;
             this.drawBlock(x, y, t, cell.meta || {});
-            this.ctx = ctx;
+            this.ctx = wctx;
             renderedBlocksCount++;
           } else if (terrainCtx && isOutlined(t, cell.meta)) {
             this.ctx = terrainCtx;
             this.drawBlock(x, y, t, cell.meta || {});
-            this.ctx = ctx;
+            this.ctx = wctx;
             renderedBlocksCount++;
           } else {
             this.drawBlock(x, y, t, cell.meta || {});
@@ -280,31 +344,31 @@ export class Renderer {
       perf.startPhase('renderPolish');
       if (polish && polishOn('connectedGrass')) {
         perf.startPhase('renderGrassCorners');
-        this.drawGrassCorners(terrainCtx || ctx, startX, endX, startY, endY);
+        this.drawGrassCorners(terrainCtx || wctx, startX, endX, startY, endY);
         perf.endPhase('renderGrassCorners');
       }
       if (leafCtx) {
         perf.startPhase('renderLeafFringes');
         this.ctx = leafCtx;
         this.drawLeafFringes(startX, endX, startY, endY);
-        this.ctx = ctx;
+        this.ctx = wctx;
         perf.endPhase('renderLeafFringes');
 
         perf.startPhase('renderLeafOutlines');
         outlineLayer(leafLayer, camera.zoom);
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(leafLayer, 0, 0);
-        ctx.restore();
+        wctx.save();
+        wctx.setTransform(1, 0, 0, 1, 0, 0);
+        wctx.drawImage(leafLayer, 0, 0);
+        wctx.restore();
         perf.endPhase('renderLeafOutlines');
       }
       if (terrainCtx) {
         perf.startPhase('renderEdgePass');
-        edgePass(this, terrainCtx, ctx, startX, endX, startY, endY);
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(terrain, 0, 0);
-        ctx.restore();
+        edgePass(this, terrainCtx, wctx, startX, endX, startY, endY);
+        wctx.save();
+        wctx.setTransform(1, 0, 0, 1, 0, 0);
+        wctx.drawImage(terrain, 0, 0);
+        wctx.restore();
         perf.endPhase('renderEdgePass');
       }
       if (polish && polishOn('rounding') && !(shake && (shake.x || shake.y))) {
@@ -329,8 +393,18 @@ export class Renderer {
         perf.endPhase('renderLeafFringes');
       }
 
+      perf.startPhase('renderSnow');
+      this.drawSnowLayer(startX, endX, isMoon);
+      perf.endPhase('renderSnow');
+
       perf.startPhase('renderLightOverlay');
-      this.drawLightOverlay(startX, endX, startY, endY);
+      this.buildLightMap(startX, endX, startY, endY);
+      this.applyLightMap(wctx);
+      this.ctx = ctx;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(worldLayer, 0, 0);
+      ctx.restore();
       if (ui?.textureQuality !== 'fast') {
         perf.startPhase('renderLightTint');
         this.drawLightTint(startX, endX, startY, endY);
@@ -362,6 +436,8 @@ export class Renderer {
       this.ctx.globalCompositeOperation = 'source-atop';
       this.drawWaterOver(rects);
       this.ctx.globalCompositeOperation = 'source-over';
+      // Lit by the same light as the world around them.
+      this.applyLightMap(this.ctx);
       this.ctx = mainCtx;
       mainCtx.save();
       mainCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -371,6 +447,7 @@ export class Renderer {
 
       perf.startPhase('renderEffects');
       this.drawLeafParticles();
+      this.drawWeather(startX, endX, startY, endY, isMoon);
       this.drawPrimedExplosives(ui?.primedExplosives);
       this.drawHurtVignette();
       if (ui?.explosionFX) ui.explosionFX.draw(ctx, camera);
@@ -391,8 +468,320 @@ export class Renderer {
         dpr: window.devicePixelRatio || 1
       });
     } finally {
+      this.ctx = ctx;
       perf.endPhase('renderTotal');
     }
+  }
+
+  // Whether weather shows in this world (only on Earth).
+  hasWeather(isMoon) {
+    const w = this.world;
+    return !isMoon && (w?.dimensionId || 'earth') === 'earth' && w?.worldType !== 'moon' && w?.worldType !== 'mars';
+  }
+
+  // A grey, dark veil over the sky (and the distant land) when it rains.
+  drawWeatherSky(isMoon) {
+    const amount = 0.36 * weather.rain + 0.3 * weather.storm + 0.3 * weather.snow;
+    if (amount < 0.01 || !this.hasWeather(isMoon)) return;
+    const { ctx, canvas } = this;
+    // As dark as the sky it covers: grey by day, nearly black at night. Snow clouds are paler.
+    const l = 0.25 + 0.75 * (this.daylight?.base ?? 1);
+    const pale = weather.snow / (weather.snow + weather.rain + 0.001);
+    const r = (52 - 22 * weather.storm + 98 * pale) * l,
+      g = (62 - 24 * weather.storm + 96 * pale) * l,
+      b = (78 - 26 * weather.storm + 94 * pale) * l;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${amount.toFixed(3)})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
+
+  // For each block column on screen, the screen height where something covers it from the
+  // sky (the ground, a roof, a cave ceiling): rain stops there. Redone a few times a second.
+  rainCover(startX, endX, startY, endY) {
+    const { camera, world } = this;
+    const now = performance.now();
+    const c = this._rainCover;
+    if (c && c.startX === startX && c.endX === endX && c.startY === startY && c.endY === endY && now - c.time < 150 && c.zoom === camera.zoom && c.camY === camera.y) return c.list;
+    const list = [];
+    // Only front blocks stop rain; walls and background blocks behind don't.
+    const blocks = (x, y) => {
+      if (!world.inBounds(x, y)) return false;
+      const type = world.getBlockType(x, y);
+      return !!type && !!type.solid && world.getCell(x, y).meta?.layer !== 'bg';
+    };
+    const from = Math.max(0, startY - 24); // a roof a little above the screen still counts
+    for (let x = startX; x <= endX; x++) {
+      let top = Infinity;
+      for (let y = from; y <= endY; y++) {
+        if (blocks(x, y)) {
+          top = y < startY ? -Infinity : camera.worldToScreenY(y * TILE_SIZE);
+          break;
+        }
+      }
+      list.push(top);
+    }
+    this._rainCover = { startX, endX, startY, endY, time: now, zoom: camera.zoom, camY: camera.y, list };
+    return list;
+  }
+
+  // Rain: streaks that fall slanting with the wind and stop where something covers them,
+  // splashing there; and the flash of lightning. Nothing is stored per drop: where each one
+  // is comes from the time, so it costs only the drawing.
+  drawWeather(startX, endX, startY, endY, isMoon) {
+    if (!this.hasWeather(isMoon)) return;
+    const { ctx, canvas, camera } = this;
+    const rain = weather.rain;
+    if (rain > 0.02) {
+      const W = canvas.width,
+        H = canvas.height;
+      const zoom = camera.zoom;
+      const count = Math.min(900, Math.round(rain * (W * H) / 2200));
+      const cover = this.rainCover(startX, endX, startY, endY);
+      // Slanted by the wind at the camera, more as it blows harder.
+      const w = wind.direction * wind.strengthAt(gameClock.seconds(), Math.floor((camera.x + W / zoom / 2) / TILE_SIZE));
+      const slant = Math.max(-2.6, Math.min(2.6, w * 2.2));
+      // The rain's own clock, advanced by the frame time and the wind. (Scaling the time itself
+      // by the wind would make every drop jump whenever a gust changed it.)
+      const nowMs = performance.now();
+      const frame = this._rainTime ? Math.min(0.1, (nowMs - this._rainTime) / 1000) : 0;
+      this._rainTime = nowMs;
+      const tick = frame * (1 + 0.35 * Math.abs(w));
+      this._rainClock = (this._rainClock || 0) + tick;
+      // How far the wind has carried the rain sideways, as a share of how far it has fallen.
+      this._rainDrift = (this._rainDrift || 0) + tick * slant;
+      const t = this._rainClock;
+      const span = H + 80;
+      const wrapW = W + 240;
+      const len = (9 + 6 * weather.storm + 5 * Math.abs(w)) * Math.max(1, zoom * 0.7);
+      const streak = len / Math.hypot(1, slant * 0.6); // keeps a sideways streak from getting very long
+      // Lit like the land it falls on: bright by day, dim at night.
+      const l = this.effects?.light ? 1 : (this.daylight?.ambient ?? 1);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.lineWidth = Math.max(1, Math.round(zoom * 0.55));
+      ctx.lineCap = 'butt';
+      ctx.strokeStyle = `rgba(${Math.round(185 * l)}, ${Math.round(205 * l)}, ${Math.round(232 * l)}, ${(0.28 + 0.3 * rain).toFixed(2)})`;
+      ctx.fillStyle = `rgba(${Math.round(200 * l)}, ${Math.round(218 * l)}, ${Math.round(240 * l)}, ${(0.3 + 0.25 * rain).toFixed(2)})`;
+      ctx.beginPath();
+      const splashes = [];
+      for (let i = 0; i < count; i++) {
+        const h1 = hash01(i, 11),
+          h2 = hash01(i, 29),
+          h3 = hash01(i, 53);
+        const speed = (620 + 260 * h3) * Math.max(1, zoom * 0.6);
+        // Fixed to the world, not the screen: as the camera moves the drops pass by like the
+        // land does (they wrap around the screen, so there are always as many on it).
+        const y = wrap(h1 * span + t * speed - camera.y * zoom, span) - 40;
+        const x = wrap(h2 * wrapW + this._rainDrift * speed - camera.x * zoom, wrapW) - 120;
+        const col = Math.floor((camera.x + x / zoom) / TILE_SIZE) - startX;
+        const stop = cover[col] ?? Infinity;
+        if (y >= stop) {
+          if (y - stop < 18 * zoom && stop > -Infinity) splashes.push(x, stop);
+          continue;
+        }
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - slant * streak, y - streak);
+      }
+      ctx.stroke();
+      // Little splashes where the drops land.
+      const u = Math.max(1, Math.round(zoom));
+      for (let i = 0; i < splashes.length; i += 2) {
+        const x = Math.round(splashes[i]),
+          y = Math.round(splashes[i + 1]);
+        ctx.fillRect(x - u, y - u, u, u);
+        ctx.fillRect(x + u, y - u, u, u);
+        ctx.fillRect(x, y - 2 * u, u, u);
+      }
+      ctx.restore();
+    }
+    if (weather.snow > 0.02) this.drawSnowfall(startX, endX);
+    if (weather.flash > 0.02) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = `rgba(235, 240, 255, ${(weather.flash * 0.5).toFixed(3)})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+  }
+
+  // Where the falling snow comes to rest in each half-block column from startX to endX (two per
+  // block, so slabs and stair steps hold it right): `stop`, the world y where the flakes end,
+  // and `rest`, where it lies, as { top (world y), share (of the snow), leaf (the leaf block
+  // it lies on, so it sways with it) }. It lies on the first thing it meets coming down from
+  // the sky: the ground, a roof, a slab or step, the top of a tree (and some gets through the
+  // tree to the ground below). None where it falls into water. Redone a few times a second.
+  snowSurfaces(startX, endX) {
+    const now = performance.now();
+    const c = this._snowSurfaces;
+    if (c && c.world === this.world && c.startX === startX && c.endX === endX && now - c.time < 150) return c.list;
+    const { world } = this;
+    const list = [];
+    for (let x = startX; x <= endX; x++) {
+      const loaded = world.isChunkLoaded(world.chunkXFor(x));
+      for (let side = 0; side < 2; side++) list.push(loaded ? this.scanSnowColumn(x, side) : { stop: Infinity, rest: [] });
+    }
+    this._snowSurfaces = { world, startX, endX, time: now, list };
+    return list;
+  }
+
+  scanSnowColumn(x, side) {
+    const { world, registry } = this;
+    const water = world.water;
+    // The quarters of a cell in this half (see blockQuarters).
+    const upper = side ? 2 : 1,
+      lower = side ? 8 : 4;
+    const rest = [];
+    let share = 1;
+    let inTree = false; // passing down through a tree's leaves and trunk
+    for (let y = 0; y < world.height; y++) {
+      if (water && water.blockMass(x, y) > 0.3) return { stop: y * TILE_SIZE, rest };
+      const cell = world.getCell(x, y);
+      if (cell.id === 'air') {
+        inTree = false;
+        continue;
+      }
+      const type = registry.get(cell.id);
+      const front = cell.meta?.layer !== 'bg';
+      if (inTree) {
+        if (front && (type?.leaves || type?.trunk)) continue;
+        // The ground a trunk stands on is covered by the trunk.
+        if (this.blockQuarters(x, y)) return { stop: rest[0].top, rest };
+        inTree = false;
+      }
+      if (front && type?.leaves) {
+        rest.push({ top: y * TILE_SIZE, share, leaf: [x, y] });
+        share *= SNOW_UNDER_TREES;
+        inTree = true;
+        continue;
+      }
+      const q = this.blockQuarters(x, y);
+      const top = q & upper ? y * TILE_SIZE : q & lower ? (y + 0.5) * TILE_SIZE : null;
+      if (top !== null) {
+        rest.push({ top, share, leaf: null });
+        return { stop: rest[0].top, rest };
+      }
+    }
+    return { stop: rest.length ? rest[0].top : Infinity, rest };
+  }
+
+  // The snow lying on everything, up to SNOW_DEPTH texels deep, with a soft, uneven top. A thin
+  // first dusting comes and goes texel by texel, it thins out under trees and towards the edge
+  // of a drop, and it covers the bottom of the plants it settles around. Drawn on the world
+  // layer, so it's lit like everything else.
+  drawSnowLayer(startX, endX, isMoon) {
+    const cover = weather.snowCover;
+    if (cover < 0.005 || !this.hasWeather(isMoon)) return;
+    const { ctx, camera } = this;
+    const columns = this.snowSurfaces(startX, endX);
+    const u = Math.max(1, Math.round(camera.zoom));
+    const size = Math.round(TILE_SIZE * camera.zoom);
+    const body = new Path2D();
+    const tops = new Path2D();
+    // How much of the snow lies at height `top` in half-column h: its share there, the same
+    // as at h itself where something stands higher (it piles up against it), and none where
+    // the ground drops away.
+    const shareNear = (h, top, own) => {
+      const col = columns[h];
+      if (!col) return own;
+      for (const r of col.rest) if (r.top === top) return r.share;
+      return col.rest.length && col.rest[0].top < top ? own : 0;
+    };
+    for (let h = 0; h < columns.length; h++) {
+      const tileX = startX + (h >> 1);
+      for (const r of columns[h].rest) {
+        const left = shareNear(h - 1, r.top, r.share),
+          right = shareNear(h + 1, r.top, r.share);
+        const sway = r.leaf ? this.leafSwayOffset(r.leaf[0], r.leaf[1], size) : 0;
+        const bottom = Math.round(camera.worldToScreenY(r.top));
+        for (let k = 0; k < 8; k++) {
+          // Texel across the world, and where it sits in its half-column (0..1).
+          const g = tileX * 16 + (h & 1) * 8 + k;
+          const t = (k + 0.5) / 8;
+          const share = t < 0.5 ? left + (r.share - left) * (t + 0.5) : r.share + (right - r.share) * (t - 0.5);
+          // A gentle swell along the ground, and a ragged top texel by texel.
+          const n0 = hash01(Math.floor(g / 6), 41),
+            n1 = hash01(Math.floor(g / 6) + 1, 41);
+          const f = (g % 6) / 6;
+          const swell = n0 + (n1 - n0) * f * f * (3 - 2 * f);
+          const depth = Math.floor(cover * share * SNOW_DEPTH * (0.65 + 0.5 * swell) + hash01(g, 97));
+          if (depth <= 0) continue;
+          const x0 = Math.round(camera.worldToScreenX((g * TILE_SIZE) / 16)) + sway;
+          const x1 = Math.round(camera.worldToScreenX(((g + 1) * TILE_SIZE) / 16)) + sway;
+          body.rect(x0, bottom - depth * u, x1 - x0, depth * u);
+          tops.rect(x0, bottom - depth * u, x1 - x0, u);
+        }
+      }
+    }
+    ctx.save();
+    ctx.fillStyle = SNOW_COLOR;
+    ctx.fill(body);
+    ctx.fillStyle = SNOW_TOP_COLOR;
+    ctx.fill(tops);
+    ctx.restore();
+  }
+
+  // Snowflakes: specks drifting down, swaying side to side and carried along by the wind, that
+  // stop where the snow settles. Like the rain, each one's place comes from the time, and
+  // they're fixed to the world, so they pass by as you move. In a snowstorm there are more of
+  // them, blown along by the gale, and a pale haze hides the distance while you're out in it.
+  drawSnowfall(startX, endX) {
+    const { ctx, canvas, camera } = this;
+    const W = canvas.width,
+      H = canvas.height;
+    const zoom = camera.zoom;
+    const u = Math.max(1, Math.round(zoom));
+    const storm = weather.storm;
+    const count = Math.min(1200, Math.round((weather.snow * (1 + 0.8 * storm) * (W * H)) / 2600));
+    const columns = this.snowSurfaces(startX, endX);
+    const w = wind.direction * wind.strengthAt(gameClock.seconds(), Math.floor((camera.x + W / zoom / 2) / TILE_SIZE));
+    const drift = Math.max(-4, Math.min(4, w * 3)) * (0.35 + 0.65 * storm);
+    // Its own clock, advanced by the frame time (see drawWeather's rain).
+    const nowMs = performance.now();
+    const frame = this._snowTime ? Math.min(0.1, (nowMs - this._snowTime) / 1000) : 0;
+    this._snowTime = nowMs;
+    const tick = frame * (1 + 0.6 * storm);
+    this._snowClock = (this._snowClock || 0) + tick;
+    this._snowDrift = (this._snowDrift || 0) + tick * drift; // as for the rain
+    const t = this._snowClock;
+    const span = H + 40;
+    const wrapW = W + 240;
+    // Lit like the land it falls on.
+    const l = this.effects?.light ? 1 : (this.daylight?.ambient ?? 1);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (storm > 0.01) {
+      // As much haze as there's open sky on screen: none down in a cave.
+      let open = 0;
+      for (const col of columns) if (camera.worldToScreenY(col.stop) > 0) open++;
+      const haze = 0.3 * storm * weather.snow * (columns.length ? open / columns.length : 0);
+      if (haze > 0.005) {
+        ctx.fillStyle = `rgba(${Math.round(214 * l)}, ${Math.round(222 * l)}, ${Math.round(234 * l)}, ${haze.toFixed(3)})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+    const near = new Path2D(),
+      far = new Path2D();
+    for (let i = 0; i < count; i++) {
+      const h1 = hash01(i, 13),
+        h2 = hash01(i, 31),
+        h3 = hash01(i, 59),
+        h4 = hash01(i, 71);
+      const speed = (1.6 + 1.6 * h3) * TILE_SIZE * zoom; // screen px a second
+      const y = wrap(h1 * span + t * speed - camera.y * zoom, span) - 20;
+      const sway = Math.sin(t * (0.8 + h4 * 1.4) + i) * 5 * zoom;
+      const x = wrap(h2 * wrapW + this._snowDrift * speed + sway - camera.x * zoom, wrapW) - 120;
+      const col = columns[Math.floor(((camera.x + x / zoom) / TILE_SIZE - startX) * 2)];
+      if (col && y >= camera.worldToScreenY(col.stop)) continue;
+      // A few bigger, nearer flakes among the small ones.
+      if (h4 > 0.75) near.rect(Math.round(x), Math.round(y), 2 * u, 2 * u);
+      else far.rect(Math.round(x), Math.round(y), u, u);
+    }
+    ctx.fillStyle = `rgba(${Math.round(245 * l)}, ${Math.round(248 * l)}, ${Math.round(255 * l)}, ${(0.55 + 0.3 * weather.snow).toFixed(2)})`;
+    ctx.fill(far);
+    ctx.fill(near);
+    ctx.restore();
   }
 
   // A canvas the size of the screen, cleared, for the solid blocks.
@@ -400,7 +789,10 @@ export class Renderer {
     const { canvas } = this;
     if (!this[key]) this[key] = document.createElement('canvas');
     const c = this[key];
-    if (c.width !== canvas.width || c.height !== canvas.height) { c.width = canvas.width; c.height = canvas.height; }
+    if (c.width !== canvas.width || c.height !== canvas.height) {
+      c.width = canvas.width;
+      c.height = canvas.height;
+    }
     const tctx = c.getContext('2d');
     tctx.setTransform(1, 0, 0, 1, 0, 0);
     tctx.clearRect(0, 0, c.width, c.height);
@@ -437,12 +829,16 @@ export class Renderer {
   // open, a grass patch is laid over that corner so the two bands join.
   drawGrassCorners(target, startX, endX, startY, endY) {
     const { world, camera } = this;
+    const isMoon = world?.worldType === 'moon' || world?.dimensionId === 'moon';
+    const isMars = world?.worldType === 'mars' || world?.dimensionId === 'mars';
+    if (isMoon || isMars) return;
     const base = this.textures.grass_corner;
     if (!base) return;
 
     const spanX = endX - startX + 5;
     const spanY = endY - startY + 5;
-    const ox = startX - 2, oy = startY - 2;
+    const ox = startX - 2,
+      oy = startY - 2;
     const totalCells = spanX * spanY;
     if (!this._qCache || this._qCache.length < totalCells) {
       this._qCache = new Int16Array(totalCells);
@@ -451,7 +847,8 @@ export class Renderer {
     const qCache = this._qCache;
 
     const quartersAt = (bx, by) => {
-      const ix = bx - ox, iy = by - oy;
+      const ix = bx - ox,
+        iy = by - oy;
       if (ix < 0 || ix >= spanX || iy < 0 || iy >= spanY) return 0;
       const idx = iy * spanX + ix;
       let q = qCache[idx];
@@ -467,26 +864,33 @@ export class Renderer {
     const at = (gx, gy) => {
       const q = quartersAt(Math.floor(gx / 2), Math.floor(gy / 2));
       const bit = 1 << ((gy & 1) * 2 + (gx & 1));
-      return (q & (bit << 4)) ? 2 : (q & bit) ? 1 : 0;
+      return q & (bit << 4) ? 2 : q & bit ? 1 : 0;
     };
 
     target.imageSmoothingEnabled = false;
     for (let x = startX; x <= endX; x++) {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
       for (let y = startY; y <= endY; y++) {
-        if (!(quartersAt(x, y) & 15)) continue;
+        const qCenter = quartersAt(x, y);
+        if (!(qCenter & 15)) continue;
+        // Fast-path: grass corners strictly require at least one grassy quarter nearby
+        if (!(qCenter >> 4) && !(quartersAt(x - 1, y) >> 4) && !(quartersAt(x + 1, y) >> 4) && !(quartersAt(x, y - 1) >> 4) && !(quartersAt(x, y + 1) >> 4)) {
+          continue;
+        }
         const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
         const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
         const size = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE)) - sx;
         const half = size / 2;
         for (let q = 0; q < 4; q++) {
-          const gx = x * 2 + (q & 1), gy = y * 2 + (q >> 1);
+          const gx = x * 2 + (q & 1),
+            gy = y * 2 + (q >> 1);
           if (!at(gx, gy)) continue;
           for (const dy of [-1, 1]) {
             for (const dx of [-1, 1]) {
               if (at(gx + dx, gy + dy) || at(gx + dx, gy) !== 2 || at(gx, gy + dy) !== 2) continue;
               const tex = this.biomeTexture('grass_corner', base, x);
-              const qx = sx + (q & 1) * half, qy = sy + (q >> 1) * half;
+              const qx = sx + (q & 1) * half,
+                qy = sy + (q >> 1) * half;
               const sprite = this.getOrientedCorner(tex, dx, dy);
               target.drawImage(sprite, qx, qy, half, half);
             }
@@ -520,19 +924,33 @@ export class Renderer {
     const grown = meta?.sides ?? 15;
     const near = {
       0: own,
-      up: this.blockQuarters(tileX, tileY - 1), down: this.blockQuarters(tileX, tileY + 1),
-      left: this.blockQuarters(tileX - 1, tileY), right: this.blockQuarters(tileX + 1, tileY)
+      up: this.blockQuarters(tileX, tileY - 1),
+      down: this.blockQuarters(tileX, tileY + 1),
+      left: this.blockQuarters(tileX - 1, tileY),
+      right: this.blockQuarters(tileX + 1, tileY)
     };
     const filled = (qx, qy) => {
       let cell = 0;
-      if (qy < 0) { cell = 'up'; qy += 2; } else if (qy > 1) { cell = 'down'; qy -= 2; }
-      else if (qx < 0) { cell = 'left'; qx += 2; } else if (qx > 1) { cell = 'right'; qx -= 2; }
+      if (qy < 0) {
+        cell = 'up';
+        qy += 2;
+      } else if (qy > 1) {
+        cell = 'down';
+        qy -= 2;
+      } else if (qx < 0) {
+        cell = 'left';
+        qx += 2;
+      } else if (qx > 1) {
+        cell = 'right';
+        qx -= 2;
+      }
       return near[cell] & (1 << (qy * 2 + qx));
     };
     const edges = [];
     for (let q = 0; q < 4; q++) {
       if (!(own & (1 << q))) continue;
-      const qx = q & 1, qy = q >> 1;
+      const qx = q & 1,
+        qy = q >> 1;
       // Edges inside the cell (a stair's riser) grow along with the top.
       const has = (bit, inside) => grown & (inside ? 1 : bit);
       if (has(1, qy > 0) && !filled(qx, qy - 1)) edges.push(`t${q}`);
@@ -546,11 +964,14 @@ export class Renderer {
     const bands = { t: 'top', r: 'right', b: 'bottom', l: 'left' };
     for (const side of GRASS_SIDES) if (!isTextureReady(this.textures[`grass_overlay_${side}`])) return null;
     const c = document.createElement('canvas');
-    c.width = 16; c.height = 16;
+    c.width = 16;
+    c.height = 16;
     const g = c.getContext('2d');
     g.imageSmoothingEnabled = false;
     for (const e of edges) {
-      const q = +e[1], qx = (q & 1) * 8, qy = (q >> 1) * 8;
+      const q = +e[1],
+        qx = (q & 1) * 8,
+        qy = (q >> 1) * 8;
       // Shift the band so it sits on this quarter's edge, then keep only this quarter.
       const dx = e[0] === 'l' ? qx : e[0] === 'r' ? qx - 8 : 0;
       const dy = e[0] === 't' ? qy : e[0] === 'b' ? qy - 8 : 0;
@@ -566,6 +987,84 @@ export class Renderer {
     return id;
   }
 
+  // Connected rock overlay: small rocks/pebbles laid along edges facing open air.
+  rockOverlay(tileX, tileY, meta) {
+    const own = this.blockQuarters(tileX, tileY);
+    const near = {
+      0: own,
+      up: this.blockQuarters(tileX, tileY - 1),
+      down: this.blockQuarters(tileX, tileY + 1),
+      left: this.blockQuarters(tileX - 1, tileY),
+      right: this.blockQuarters(tileX + 1, tileY)
+    };
+    const filled = (qx, qy) => {
+      let cell = 0;
+      if (qy < 0) {
+        cell = 'up';
+        qy += 2;
+      } else if (qy > 1) {
+        cell = 'down';
+        qy -= 2;
+      } else if (qx < 0) {
+        cell = 'left';
+        qx += 2;
+      } else if (qx > 1) {
+        cell = 'right';
+        qx -= 2;
+      }
+      return near[cell] & (1 << (qy * 2 + qx));
+    };
+    const edges = [];
+    for (let q = 0; q < 4; q++) {
+      if (!(own & (1 << q))) continue;
+      const qx = q & 1,
+        qy = q >> 1;
+      if (!filled(qx, qy - 1)) edges.push(`t${q}`);
+      if (!filled(qx + 1, qy)) edges.push(`r${q}`);
+      if (!filled(qx, qy + 1)) edges.push(`b${q}`);
+      if (!filled(qx - 1, qy)) edges.push(`l${q}`);
+    }
+    if (!edges.length) return null;
+    const id = `rock_overlay|${edges.join(',')}`;
+    if (this.textures[id]) return id;
+    const bands = { t: 'top', r: 'right', b: 'bottom', l: 'left' };
+    const sides = ['top', 'right', 'bottom', 'left'];
+    for (const side of sides) {
+      const key = `rock_overlay_${side}`;
+      if (!this.textures[key] && !this.missingTextures?.has(key)) {
+        const img = new Image();
+        img.onload = () => {
+          this.textures[key] = img;
+        };
+        img.onerror = () => {
+          this.missingTextures?.add(key);
+        };
+        img.src = `assets/textures/${key}.png`;
+      }
+      if (!isTextureReady(this.textures[key])) return null;
+    }
+    const c = document.createElement('canvas');
+    c.width = 16;
+    c.height = 16;
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    for (const e of edges) {
+      const q = +e[1],
+        qx = (q & 1) * 8,
+        qy = (q >> 1) * 8;
+      const dx = e[0] === 'l' ? qx : e[0] === 'r' ? qx - 8 : 0;
+      const dy = e[0] === 't' ? qy : e[0] === 'b' ? qy - 8 : 0;
+      g.save();
+      g.beginPath();
+      g.rect(qx, qy, 8, 8);
+      g.clip();
+      g.drawImage(this.textures[`rock_overlay_${bands[e[0]]}`], dx, dy);
+      g.restore();
+    }
+    this.textures[id] = c;
+    return id;
+  }
+
   leafFoot(texture, rotation, size) {
     this._leafPixels ??= new Map();
     let pts = this._leafPixels.get(texture);
@@ -574,19 +1073,23 @@ export class Renderer {
       pts = [];
       try {
         const c = document.createElement('canvas');
-        c.width = 16; c.height = 16;
+        c.width = 16;
+        c.height = 16;
         const x = c.getContext('2d');
         x.drawImage(texture, 0, 0, 16, 16);
         const d = x.getImageData(0, 0, 16, 16).data;
         for (let j = 0; j < 16; j++) for (let i = 0; i < 16; i++) if (d[(j * 16 + i) * 4 + 3] > 128) pts.push([i + 0.5 - 8, j + 1 - 8]);
-      } catch { /* leave empty */ }
+      } catch {
+        /* leave empty */
+      }
       this._leafPixels.set(texture, pts);
     }
     if (!pts.length) return size / 2;
-    const sin = Math.sin(rotation), cos = Math.cos(rotation);
+    const sin = Math.sin(rotation),
+      cos = Math.cos(rotation);
     let foot = -Infinity;
     for (const [px, py] of pts) foot = Math.max(foot, px * sin + py * cos);
-    return foot * size / 16;
+    return (foot * size) / 16;
   }
 
   // Average colour of a texture's opaque pixels, cached per texture.
@@ -598,14 +1101,26 @@ export class Renderer {
       c = [80, 120, 60];
       try {
         const cv = document.createElement('canvas');
-        cv.width = 16; cv.height = 16;
+        cv.width = 16;
+        cv.height = 16;
         const x = cv.getContext('2d');
         x.drawImage(texture, 0, 0, 16, 16);
         const d = x.getImageData(0, 0, 16, 16).data;
-        let r = 0, g = 0, b = 0, n = 0;
-        for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 128) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+        let r = 0,
+          g = 0,
+          b = 0,
+          n = 0;
+        for (let i = 0; i < d.length; i += 4)
+          if (d[i + 3] > 128) {
+            r += d[i];
+            g += d[i + 1];
+            b += d[i + 2];
+            n++;
+          }
         if (n) c = [r / n, g / n, b / n];
-      } catch { /* not loaded yet */ }
+      } catch {
+        /* not loaded yet */
+      }
       if (this._avgColors.size > 256) this._avgColors.clear();
       this._avgColors.set(texture, c);
     }
@@ -614,6 +1129,10 @@ export class Renderer {
 
   updateDaylight() {
     const world = this.world;
+    if (world?.worldType === 'moon' || world?.dimensionId === 'moon') {
+      this.daylight = { sunVisible: true, travelT: 0.5, base: 0.9, ambient: 0.55 };
+      return;
+    }
     const timeOfDay = (world.time % world.dayLength) / world.dayLength;
     const sunPhase = (timeOfDay - 0.25 + 1) % 1;
     const sunVisible = sunPhase <= 0.5;
@@ -622,10 +1141,17 @@ export class Renderer {
     // One smooth curve on the sun's height (negative below the horizon) so light eases
     // through dusk and dawn instead of jumping when the sun sets.
     const elevation = sunVisible ? s : -s;
-    const smooth = (a, b, v) => { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
-    const ambient = NIGHT_LIGHT + (1 - NIGHT_LIGHT) * smooth(-0.45, 0.45, elevation);
+    const smooth = (a, b, v) => {
+      const t = Math.max(0, Math.min(1, (v - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    // ambient: how bright the daylight is on the land (the world is lit just as by day, only
+    // less); base: how bright the sky and what's far off in it are.
+    const ambient = NIGHT_AMBIENT + (1 - NIGHT_AMBIENT) * smooth(-0.45, 0.45, elevation);
     const base = NIGHT_LIGHT + (1 - NIGHT_LIGHT) * smooth(-0.3, 1, elevation);
-    this.daylight = { sunVisible, travelT, base, ambient };
+    // Rain, storms and snow dim the day.
+    const dim = 1 - 0.28 * weather.rain - 0.3 * weather.storm - 0.12 * weather.snow;
+    this.daylight = { sunVisible, travelT, base: Math.max(NIGHT_LIGHT, base * dim), ambient: ambient * dim };
   }
 
   lightFactorAt(tileX, tileY, dayBoost) {
@@ -634,11 +1160,14 @@ export class Renderer {
     const world = this.world;
     const { ambient } = this.daylight;
     const sky = (world.getDisplaySkyLight(tileX, tileY) / 15) * ambient;
-    return Math.min(1, Math.max(MIN_BRIGHTNESS, sky, this.blockLightFactor(tileX, tileY)));
+    // Torchlight adds to whatever daylight there is (so it still shows at dusk and on a dim
+    // night), and never makes anything darker than the daylight alone.
+    const block = this.blockLightFactor(tileX, tileY);
+    return Math.max(MIN_BRIGHTNESS, 1 - (1 - sky) * (1 - block));
   }
 
   getHeldSlot(ui = this.getUI?.()) {
-    const inv = this.inventory || window.inventory;
+    const inv = this.inventory;
     if (!inv || typeof inv.getSlot !== 'function') return null;
     const index = Number.isInteger(ui?.selectedIndex) ? ui.selectedIndex : 0;
     return inv.getSlot(index);
@@ -651,14 +1180,17 @@ export class Renderer {
     if (!player) return;
     // Torches held by other players in multiplayer light the world too.
     const holders = [[player, this.getHeldSlot(ui)]];
-    const mp = typeof window !== 'undefined' ? window.multiplayer : null;
+    const mp = this.multiplayer;
     if (mp?.active) for (const rp of mp.remotePlayers.values()) holders.push([rp, rp.held]);
     for (const [p, slot] of holders) {
       const type = this.registry.get(slot?.blockId || slot?.itemId);
       if (type?.shape !== 'torch') continue;
       if (!this.heldLightColor) this.heldLightColor = type.lightColor || null;
       const levels = this.floodHeldLight((p.x + p.width / 2) / TILE_SIZE, (p.y + p.height * 0.4) / TILE_SIZE, HELD_LIGHT_RANGE);
-      if (!this.heldLight) { this.heldLight = levels; continue; }
+      if (!this.heldLight) {
+        this.heldLight = levels;
+        continue;
+      }
       for (const [k, v] of levels) if ((this.heldLight.get(k) ?? 0) < v) this.heldLight.set(k, v);
     }
   }
@@ -697,7 +1229,12 @@ export class Renderer {
       const y = queue[head + 1];
       const value = queue[head + 2];
       if (levels.get(x * HELD_LIGHT_KEY + y) !== value) continue;
-      for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+      for (const [nx, ny] of [
+        [x + 1, y],
+        [x - 1, y],
+        [x, y + 1],
+        [x, y - 1]
+      ]) {
         const next = value - this.heldLightCost(nx, ny, wallCost);
         if (next <= 0) continue;
         const key = nx * HELD_LIGHT_KEY + ny;
@@ -711,7 +1248,8 @@ export class Renderer {
 
   updatePlacedLight(startX, endX, startY, endY) {
     const world = this.world;
-    const key = `${world.blockVersion || 0}:${world.chunks.size}`;
+    // Only redone when something that changes how lights spread has changed (see World._affectsLight).
+    const key = `${world.lightVersion || 0}:${world.chunks.size}`;
     const c = this.placedLightCache;
     if (c && c.world === world && c.key === key && startX >= c.x0 && endX <= c.x1 && startY >= c.y0 && endY <= c.y1) return;
     const x0 = startX - PLACED_LIGHT_MARGIN;
@@ -726,7 +1264,7 @@ export class Renderer {
       for (let y = Math.max(0, y0 - PLACED_LIGHT_RANGE); y <= Math.min(world.height - 1, y1 + PLACED_LIGHT_RANGE); y++) {
         const type = world.getBlockType(x, y);
         if (!type || !(type.lightLevel > 0)) continue;
-        const range = PLACED_LIGHT_RANGE * type.lightLevel / 15;
+        const range = (PLACED_LIGHT_RANGE * type.lightLevel) / 15;
         const flood = this.floodHeldLight(x + 0.5, y + 0.5, range, PLACED_LIGHT_WALL_COST);
         const [r, g, b] = type.lightColor || WHITE_LIGHT;
         if (type.lightColor) colored = true;
@@ -735,7 +1273,10 @@ export class Renderer {
           if (level > (levels.get(k) ?? 0)) levels.set(k, level);
           const sum = colors.get(k);
           if (sum) {
-            sum[0] += r * level; sum[1] += g * level; sum[2] += b * level; sum[3] += level;
+            sum[0] += r * level;
+            sum[1] += g * level;
+            sum[2] += b * level;
+            sum[3] += level;
           } else {
             colors.set(k, [r * level, g * level, b * level, level]);
           }
@@ -748,15 +1289,25 @@ export class Renderer {
   lightTintAt(tileX, tileY, out) {
     const k = tileX * HELD_LIGHT_KEY + tileY;
     const sum = this.placedLightCache?.colors.get(k);
-    let r = 0, g = 0, b = 0, w = 0, peak = 0;
+    let r = 0,
+      g = 0,
+      b = 0,
+      w = 0,
+      peak = 0;
     if (sum) {
-      r = sum[0]; g = sum[1]; b = sum[2]; w = sum[3];
+      r = sum[0];
+      g = sum[1];
+      b = sum[2];
+      w = sum[3];
       peak = this.placedLightCache.levels.get(k) ?? 0;
     }
     const held = this.heldLightLevel(tileX, tileY);
     if (held > 0) {
       const [hr, hg, hb] = this.heldLightColor || WHITE_LIGHT;
-      r += hr * held; g += hg * held; b += hb * held; w += held;
+      r += hr * held;
+      g += hg * held;
+      b += hb * held;
+      w += held;
       peak = Math.max(peak, held);
     }
     out[0] = out[1] = out[2] = 255;
@@ -765,7 +1316,9 @@ export class Renderer {
     const { ambient } = this.daylight;
     const dark = this.effects?.light ? 0 : 1 - Math.min(1, (this.world.getDisplaySkyLight(tileX, tileY) / 15) * ambient);
     if (dark <= 0) return;
-    const cr = r / w, cg = g / w, cb = b / w;
+    const cr = r / w,
+      cg = g / w,
+      cb = b / w;
     const openAir = this.isOpenSky(tileX, tileY);
     const amount = Math.min(1, peak / LIGHT_TINT_FULL) * dark * (openAir ? OPEN_AIR_TINT : 1);
     const strength = LIGHT_TINT_STRENGTH * amount;
@@ -804,8 +1357,14 @@ export class Renderer {
       for (let i = 0; i < w; i++) {
         this.lightTintAt(startX + i, startY + j, out);
         const o = (j * w + i) * 4;
-        tint[o] = out[0]; tint[o + 1] = out[1]; tint[o + 2] = out[2]; tint[o + 3] = 255;
-        glow[o] = out[3]; glow[o + 1] = out[4]; glow[o + 2] = out[5]; glow[o + 3] = 255;
+        tint[o] = out[0];
+        tint[o + 1] = out[1];
+        tint[o + 2] = out[2];
+        tint[o + 3] = 255;
+        glow[o] = out[3];
+        glow[o + 1] = out[4];
+        glow[o + 2] = out[5];
+        glow[o + 3] = 255;
       }
     }
     this._tintCtx.putImageData(this._tintImage, 0, 0);
@@ -889,12 +1448,30 @@ export class Renderer {
     return this.backgroundWallId(tileX, tileY);
   }
 
+  // The texel of the natural wall behind the full block at (tileX, tileY) that sits in its corner
+  // (dx, dy: 1 for the left/top corner, -1 for the right/bottom one), drawn at (x, y) on ctx.
+  // Only where there's wall on both open sides of the corner (in a cave, not on a hilltop
+  // against the sky), and none behind blocks above the ground or where the wall was dug out.
+  drawWallBehindCorner(ctx, tileX, tileY, x, y, dx, dy, u) {
+    if (!this.hasBackdrop(tileX - dx, tileY) || !this.hasBackdrop(tileX, tileY - dy)) return;
+    if (this.world.getCell(tileX, tileY).meta?.noWall) return;
+    const lake = this.isLakeBackdrop(tileX, tileY);
+    if (!lake && tileY < this.naturalSurfaceAt(tileX)) return;
+    const texture = this.textures[lake ? 'sand' : this.backgroundWallId(tileX, tileY)];
+    if (!isTextureReady(texture)) return;
+    const tinted = this.getTintedTexture(texture, BACKGROUND_WALL_SHADE);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tinted, dx > 0 ? 0 : tinted.width - 1, dy > 0 ? 0 : tinted.height - 1, 1, 1, x, y, u, u);
+  }
+
   backgroundWallTexture(tileX, tileY) {
     return this.textures[this.backgroundWallId(tileX, tileY)] || null;
   }
 
   backgroundWallId(tileX, tileY) {
     const world = this.world;
+    if (world?.worldType === 'moon' || world?.dimensionId === 'moon') return 'lunar_rock';
+    if (world?.worldType === 'mars' || world?.dimensionId === 'mars') return 'mars_sandstone';
     // Dug-out beaches keep a sand wall behind them rather than dirt.
     if (this._wallWorld !== world) {
       this._wallWorld = world;
@@ -926,9 +1503,9 @@ export class Renderer {
 
   // Rounds the corners where background walls meet open sky: an inside corner (sky cell
   // walled on two sides) gets a dark pixel filling its corner; an outside corner (wall
-  // cell with sky on two sides) gets its corner pixel replaced by the sky beside it.
+  // cell with sky on two sides) gets its corner pixel cut out, so the sky shows through.
   roundWallCorners(startX, endX, startY, endY) {
-    const { ctx, camera, canvas, world } = this;
+    const { ctx, camera, world } = this;
     const u = Math.max(1, Math.round(camera.zoom));
     const isWall = (x, y) => {
       const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null;
@@ -950,15 +1527,13 @@ export class Renderer {
         const ey = Math.round(camera.worldToScreenY((y + 1) * TILE_SIZE));
         for (const dy of [-1, 1]) {
           for (const dx of [-1, 1]) {
-            const cx = dx < 0 ? sx : ex - u, cy = dy < 0 ? sy : ey - u;
+            const cx = dx < 0 ? sx : ex - u,
+              cy = dy < 0 ? sy : ey - u;
             if (sky && this.hasBackdrop(x + dx, y) && this.hasBackdrop(x, y + dy)) {
               ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
               ctx.fillRect(cx, cy, u, u);
             } else if (wall && !this.hasBackdrop(x + dx, y) && !this.hasBackdrop(x, y + dy) && !this.hasBackdrop(x + dx, y + dy)) {
-              // Copy the sky from just outside the corner over the corner pixel.
-              const ox = cx + dx * u, oy = cy;
-              if (ox < 0 || ox + u > canvas.width || oy < 0 || oy + u > canvas.height) continue;
-              ctx.drawImage(canvas, ox, oy, u, u, cx, cy, u, u);
+              ctx.clearRect(cx, cy, u, u);
               ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
               ctx.fillRect(cx - dx * u, cy - dy * u, u, u);
             }
@@ -984,8 +1559,14 @@ export class Renderer {
     const { camera } = this;
     const left = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
     const top = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
-    blockSeams(this.ctx, left, top, Math.round(camera.worldToScreenX((tileX + 1) * TILE_SIZE)) - left,
-      Math.round(camera.worldToScreenY((tileY + 1) * TILE_SIZE)) - top, Math.max(1, Math.round(camera.zoom)));
+    blockSeams(
+      this.ctx,
+      left,
+      top,
+      Math.round(camera.worldToScreenX((tileX + 1) * TILE_SIZE)) - left,
+      Math.round(camera.worldToScreenY((tileY + 1) * TILE_SIZE)) - top,
+      Math.max(1, Math.round(camera.zoom))
+    );
   }
 
   // fill (0..1) draws only the bottom part of the wall, e.g. behind a partly filled water cell.
@@ -995,119 +1576,95 @@ export class Renderer {
     const top = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
     const width = Math.round(camera.worldToScreenX((tileX + 1) * TILE_SIZE)) - left;
     const height = Math.round(camera.worldToScreenY((tileY + 1) * TILE_SIZE)) - top;
-    const texture = flat ? null : (wallId && this.textures[wallId]) || this.backgroundWallTexture(tileX, tileY);
+    const isMoon = this.world?.worldType === 'moon';
+    const isMars = this.world?.worldType === 'mars';
+    const fallbackWallId = isMoon ? 'lunar_rock' : isMars ? 'mars_sandstone' : null;
+    const texture = flat
+      ? null
+      : (wallId && this.textures[wallId]) || this.backgroundWallTexture(tileX, tileY) || (fallbackWallId && this.textures[fallbackWallId]);
     if (texture) {
       ctx.imageSmoothingEnabled = false;
       const rows = Math.max(1, Math.round(16 * fill));
-      const y0 = top + height - Math.round(height * rows / 16);
+      const y0 = top + height - Math.round((height * rows) / 16);
       ctx.drawImage(this.getTintedTexture(texture, BACKGROUND_WALL_SHADE), 0, 16 - rows, 16, rows, left, y0, width, top + height - y0);
       if (this._polish && rows === 16 && polishOn('seams')) blockSeams(ctx, left, top, width, height, Math.max(1, Math.round(camera.zoom)));
       if (this._polish && rows === 16 && polishOn('outlines')) this.outlineWall(tileX, tileY, left, top, width, height);
     } else {
-      ctx.fillStyle = BACKGROUND_WALL;
+      ctx.fillStyle = isMoon ? 'rgb(145, 150, 160)' : isMars ? 'rgb(160, 85, 45)' : BACKGROUND_WALL;
       const y0 = top + height - Math.round(height * fill);
       ctx.fillRect(left, y0, width, top + height - y0);
     }
   }
 
-  isShadedTile(tileX, tileY) {
-    const world = this.world;
-    if (!world.isChunkLoaded(world.chunkXFor(tileX))) return false;
-    return !this.isOpenSky(tileX, tileY);
-  }
-
-  overlayAlphaAt(tileX, tileY) {
-    const world = this.world;
-    if (!world.isChunkLoaded(world.chunkXFor(tileX))) return 0;
-    if (this.isOpenSky(tileX, tileY)) return 0;
-    return 1 - this.lightFactorAt(tileX, tileY, true);
-  }
-
-  drawLightOverlay(startX, endX, startY, endY) {
-    if (polishOn('smoothLight')) { this.drawSmoothLightOverlay(startX, endX, startY, endY); return; }
-    const { ctx, camera } = this;
-    ctx.save();
-    ctx.fillStyle = '#000';
-    for (let ty = startY; ty <= endY; ty++) {
-      const top = Math.round(camera.worldToScreenY(ty * TILE_SIZE));
-      const bottom = Math.round(camera.worldToScreenY((ty + 1) * TILE_SIZE));
-      let runStart = null;
-      let runAlpha = 0;
-      for (let tx = startX; tx <= endX + 1; tx++) {
-        let alpha = 0;
-        if (tx <= endX && this.isShadedTile(tx, ty)) {
-          alpha = Math.round(Math.max(0, Math.min(1, this.overlayAlphaAt(tx, ty))) * 255) / 255;
-        }
-        if (runStart !== null && alpha !== runAlpha) {
-          const left = Math.round(camera.worldToScreenX(runStart * TILE_SIZE));
-          ctx.globalAlpha = runAlpha;
-          ctx.fillRect(left, top, Math.round(camera.worldToScreenX(tx * TILE_SIZE)) - left, bottom - top);
-          runStart = null;
-        }
-        if (runStart === null && alpha > 0) {
-          runStart = tx;
-          runAlpha = alpha;
-        }
-      }
+  // The light on screen as one pixel per block (how dark each block is), for applyLightMap.
+  buildLightMap(startX, endX, startY, endY) {
+    const w = endX - startX + 1,
+      h = endY - startY + 1;
+    if (!this._lightCanvas) this._lightCanvas = document.createElement('canvas');
+    const c = this._lightCanvas;
+    if (c.width !== w || c.height !== h) {
+      c.width = w;
+      c.height = h;
+      this._lightImg = c.getContext('2d').createImageData(w, h);
     }
-    ctx.restore();
-  }
-
-  // The darkness as one pixel per block, scaled up smoothly, so light fades across blocks
-  // instead of stepping block by block.
-  drawSmoothLightOverlay(startX, endX, startY, endY) {
-    const { ctx, camera } = this;
-    const w = endX - startX + 1, h = endY - startY + 1;
-    if (!this._darkCanvas) this._darkCanvas = document.createElement('canvas');
-    const c = this._darkCanvas;
-    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; this._darkImg = c.getContext('2d').createImageData(w, h); }
-    const d = this._darkImg.data;
+    const d = this._lightImg.data;
     for (let j = 0; j < h; j++) {
       for (let i = 0; i < w; i++) {
-        const tx = startX + i, ty = startY + j;
-        const a = this.isShadedTile(tx, ty) ? Math.max(0, Math.min(1, this.overlayAlphaAt(tx, ty))) : 0;
         const o = (j * w + i) * 4;
-        d[o] = d[o + 1] = d[o + 2] = 0;
-        d[o + 3] = Math.round(a * 255);
+        d[o + 3] = Math.round((1 - Math.min(1, this.lightFactorAt(startX + i, startY + j, true))) * 255);
       }
     }
-    c.getContext('2d').putImageData(this._darkImg, 0, 0);
+    c.getContext('2d').putImageData(this._lightImg, 0, 0);
+    this._lightMap = { startX, startY, w, h };
+  }
+
+  // Darkens what's already drawn on a layer (the world, or the players and items) by the light
+  // map, leaving its empty pixels empty. With smooth lighting the map is scaled up smoothly, so
+  // light fades across blocks instead of stepping block by block.
+  applyLightMap(target) {
+    const map = this._lightMap;
+    if (!map) return;
+    const { camera } = this;
     const tile = TILE_SIZE * camera.zoom;
-    ctx.save();
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    // Pixel centres sit on block centres, so the fades run from the middle of one block to
-    // the middle of the next.
-    ctx.drawImage(c, camera.worldToScreenX(startX * TILE_SIZE), camera.worldToScreenY(startY * TILE_SIZE), w * tile, h * tile);
-    ctx.restore();
+    const left = camera.worldToScreenX(map.startX * TILE_SIZE);
+    const top = camera.worldToScreenY(map.startY * TILE_SIZE);
+    target.save();
+    target.globalCompositeOperation = 'source-atop';
+    target.imageSmoothingEnabled = polishOn('smoothLight');
+    target.imageSmoothingQuality = 'high';
+    target.drawImage(this._lightCanvas, left, top, map.w * tile, map.h * tile);
+    target.restore();
   }
 
   renderMenuBackground() {
     const { ctx, canvas } = this;
-    
+
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    const backgroundBlocks = window.backgroundBlocks || ['dirt', 'coarse_dirt'];
-    
+
+    // Other players' name tags are page elements: none while in the menus.
+    this.pruneNameTags([]);
+    const backgroundBlocks = this.backgroundBlocks;
+
     if (backgroundBlocks.length > 0) {
-      if (!this.menuBackgroundPatterns || 
-          this.menuBackgroundPatterns.canvasWidth !== canvas.width || 
-          this.menuBackgroundPatterns.canvasHeight !== canvas.height ||
-          this.menuBackgroundPatterns.lastConfig !== JSON.stringify(backgroundBlocks)) {
-        
+      if (
+        !this.menuBackgroundPatterns ||
+        this.menuBackgroundPatterns.canvasWidth !== canvas.width ||
+        this.menuBackgroundPatterns.canvasHeight !== canvas.height ||
+        this.menuBackgroundPatterns.lastConfig !== JSON.stringify(backgroundBlocks)
+      ) {
         this.menuBackgroundPatterns = {
           canvasWidth: canvas.width,
           canvasHeight: canvas.height,
           grid: [],
           lastConfig: JSON.stringify(backgroundBlocks)
         };
-        
+
         const tileSize = 64;
-        
+
         const tilesX = Math.ceil(canvas.width / tileSize) + 1;
         const tilesY = Math.ceil(canvas.height / tileSize) + 1;
-        
+
         for (let y = 0; y < tilesY; y++) {
           this.menuBackgroundPatterns.grid[y] = [];
           for (let x = 0; x < tilesX; x++) {
@@ -1116,19 +1673,18 @@ export class Renderer {
           }
         }
       }
-      
+
       const tileSize = 64;
-      
+
       for (let x = 0; x < canvas.width + tileSize; x += tileSize) {
         for (let y = 0; y < canvas.height + tileSize; y += tileSize) {
           const tileX = Math.floor(x / tileSize);
           const tileY = Math.floor(y / tileSize);
-          
-          if (this.menuBackgroundPatterns.grid[tileY] && 
-              this.menuBackgroundPatterns.grid[tileY][tileX]) {
+
+          if (this.menuBackgroundPatterns.grid[tileY] && this.menuBackgroundPatterns.grid[tileY][tileX]) {
             const blockId = this.menuBackgroundPatterns.grid[tileY][tileX];
             const texture = this.textures[blockId];
-            
+
             if (texture) {
               ctx.drawImage(texture, x, y, tileSize, tileSize);
               if (polishOn('seams')) blockSeams(ctx, x, y, tileSize, tileSize, tileSize / 16, true);
@@ -1142,7 +1698,7 @@ export class Renderer {
     } else {
       ctx.fillStyle = '#2d1810';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
+
       ctx.fillStyle = '#3d2810';
       for (let x = 0; x < canvas.width; x += 128) {
         for (let y = 0; y < canvas.height; y += 128) {
@@ -1151,7 +1707,7 @@ export class Renderer {
           }
         }
       }
-      
+
       ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
@@ -1165,39 +1721,79 @@ export class Renderer {
 
   drawSky() {
     const { ctx, canvas, world, camera } = this;
-    
+
+    const isMoon = world?.worldType === 'moon' || world?.dimension?.id === 'moon' || world?.dimensionId === 'moon';
+    const isMars = world?.worldType === 'mars' || world?.dimension?.id === 'mars' || world?.dimensionId === 'mars';
+    if (isMoon || isMars || world?.skyColor || world?.dimension?.skyColor) {
+      const color = isMoon ? [0, 0, 0] : isMars ? [195, 115, 75] : world?.skyColor || world?.dimension?.skyColor || [0, 0, 0];
+      const [r, g, b] = color;
+      this._skyRGB = [r, g, b];
+      if (isMars && polishOn('sky')) {
+        drawSkyGradient(ctx, canvas, r, g, b, this.daylight?.base ?? 1);
+      } else {
+        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      if (isMoon || (isMars && (this.daylight?.base ?? 1) < 0.6)) {
+        this.drawStars();
+      }
+      if (isMoon) {
+        this.drawPixelEarth();
+        // Slight glow from the moon: soft silvery-cyan luminescence rising from the lunar ground
+        // One gradient, made once and moved to the horizon, rather than a new one each frame.
+        const horizonY = Math.round(canvas.height * 0.72 - (camera.y - 50 * TILE_SIZE) * 0.18 * camera.zoom);
+        if (!this._moonGlow) {
+          this._moonGlow = ctx.createLinearGradient(0, -140, 0, 80);
+          this._moonGlow.addColorStop(0, 'rgba(170, 210, 255, 0)');
+          this._moonGlow.addColorStop(0.65, 'rgba(180, 220, 255, 0.04)');
+          this._moonGlow.addColorStop(1, 'rgba(200, 235, 255, 0.09)');
+        }
+        const glowTop = Math.max(0, horizonY - 140);
+        ctx.save();
+        ctx.translate(0, horizonY);
+        ctx.fillStyle = this._moonGlow;
+        ctx.fillRect(0, glowTop - horizonY, canvas.width, canvas.height - glowTop);
+        ctx.restore();
+      }
+      return;
+    }
+
     const timeOfDay = (world.time % world.dayLength) / world.dayLength;
     const sunPhase = (timeOfDay - 0.25 + 1) % 1;
     const sunVisible = sunPhase >= 0 && sunPhase <= 0.5;
-    
+
     let r, g, b;
-    
+
     if (timeOfDay < 0.15 || timeOfDay > 0.85) {
-      r = NIGHT_SKY[0]; g = NIGHT_SKY[1]; b = NIGHT_SKY[2];
+      r = NIGHT_SKY[0];
+      g = NIGHT_SKY[1];
+      b = NIGHT_SKY[2];
     } else if (timeOfDay < 0.25) {
       const t = (timeOfDay - 0.15) / 0.1;
-      r = Math.floor(NIGHT_SKY[0] * (1 - t) + 100 * t);
-      g = Math.floor(NIGHT_SKY[1] * (1 - t) + 70 * t);
-      b = Math.floor(NIGHT_SKY[2] * (1 - t) + 140 * t);
+      r = Math.floor(NIGHT_SKY[0] * (1 - t) + TWILIGHT_SKY[0] * t);
+      g = Math.floor(NIGHT_SKY[1] * (1 - t) + TWILIGHT_SKY[1] * t);
+      b = Math.floor(NIGHT_SKY[2] * (1 - t) + TWILIGHT_SKY[2] * t);
     } else if (timeOfDay < 0.35) {
       const t = (timeOfDay - 0.25) / 0.1;
-      r = Math.floor(100 * (1 - t) + 135 * t);
-      g = Math.floor(70 * (1 - t) + 200 * t);
-      b = Math.floor(140 * (1 - t) + 255 * t);
+      r = Math.floor(TWILIGHT_SKY[0] * (1 - t) + 135 * t);
+      g = Math.floor(TWILIGHT_SKY[1] * (1 - t) + 200 * t);
+      b = Math.floor(TWILIGHT_SKY[2] * (1 - t) + 255 * t);
     } else if (timeOfDay < 0.65) {
-      r = 135; g = 200; b = 255;
+      r = 135;
+      g = 200;
+      b = 255;
     } else if (timeOfDay < 0.75) {
       const t = (timeOfDay - 0.65) / 0.1;
-      r = Math.floor(135 * (1 - t) + 100 * t);
-      g = Math.floor(200 * (1 - t) + 70 * t);
-      b = Math.floor(255 * (1 - t) + 140 * t);
+      r = Math.floor(135 * (1 - t) + TWILIGHT_SKY[0] * t);
+      g = Math.floor(200 * (1 - t) + TWILIGHT_SKY[1] * t);
+      b = Math.floor(255 * (1 - t) + TWILIGHT_SKY[2] * t);
     } else {
       const t = (timeOfDay - 0.75) / 0.1;
-      r = Math.floor(100 * (1 - t) + NIGHT_SKY[0] * t);
-      g = Math.floor(70 * (1 - t) + NIGHT_SKY[1] * t);
-      b = Math.floor(140 * (1 - t) + NIGHT_SKY[2] * t);
+      r = Math.floor(TWILIGHT_SKY[0] * (1 - t) + NIGHT_SKY[0] * t);
+      g = Math.floor(TWILIGHT_SKY[1] * (1 - t) + NIGHT_SKY[1] * t);
+      b = Math.floor(TWILIGHT_SKY[2] * (1 - t) + NIGHT_SKY[2] * t);
     }
-    
+
     this._skyRGB = [r, g, b];
     if (polishOn('sky')) drawSkyGradient(ctx, canvas, r, g, b, this.daylight?.base ?? 1);
     else {
@@ -1209,86 +1805,155 @@ export class Renderer {
       this.drawStars();
     }
   }
-  
-drawStars() {
-  const { ctx, canvas, world, camera } = this;
-  const time = world.time;
-  
-  ctx.save();
-  for (const star of world.stars) {
-    const parallaxFactor = 0.1;
-    let starX = (star.x - camera.x * parallaxFactor) % canvas.width;
-    if (starX < 0) starX += canvas.width;
-    let starY = (star.y - camera.y * parallaxFactor) % canvas.height;
-    if (starY < 0) starY += canvas.height;
-    
-    const twinkle = Math.sin(time * star.speed + star.phase) * 0.3 + 0.7;
-    const opacity = star.opacity * twinkle;
-    
-    ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
-    ctx.fillRect(starX - star.size / 2, starY - star.size / 2, star.size, star.size);
+
+  drawStars() {
+    const { ctx, canvas, world, camera } = this;
+    const time = world.time;
+
+    ctx.save();
+    for (const star of world.stars) {
+      const parallaxFactor = 0.1;
+      let starX = (star.x - camera.x * parallaxFactor) % canvas.width;
+      if (starX < 0) starX += canvas.width;
+      let starY = (star.y - camera.y * parallaxFactor) % canvas.height;
+      if (starY < 0) starY += canvas.height;
+
+      const twinkle = Math.sin(time * star.speed + star.phase) * 0.3 + 0.7;
+      const opacity = star.opacity * twinkle;
+
+      ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+      ctx.fillRect(starX - star.size / 2, starY - star.size / 2, star.size, star.size);
+    }
+    ctx.restore();
   }
-  ctx.restore();
-}
 
-   drawItems() {
-     const items = this.world.items || [];
-     
-     if (!items || items.length === 0) {
-       return;
-     }
+  drawPixelEarth() {
+    const { ctx, canvas, camera, world } = this;
+    // Parallax: Earth sits very far in space, subtle parallax as player moves
+    const parallaxFactorX = 0.025;
+    const parallaxFactorY = 0.012;
 
-     const ctx = this.ctx;
-     const camera = this.camera;
-     
-     for (const item of items) {
-       const size = Math.max(6, Math.round(7.5 * camera.zoom));
-       const itemW = item.width || 6;
-       const itemH = item.height || 6;
-       const screenCenterX = camera.worldToScreenX(item.x + itemW / 2);
-       const screenBottomY = camera.worldToScreenY(item.y + itemH);
-       const sx = Math.round(screenCenterX - size / 2);
-       const sy = Math.round(screenBottomY - size);
-       
-       const tileX = Math.floor(item.x / 16);
-       const tileY = Math.floor(item.y / 16);
-       const combinedLightFactor = this.lightFactorAt(tileX, tileY, false);
-       
-       const itemId = item.blockId || item.itemId;
-       const texture = this.biomeTexture(itemId, this.textures[itemId], tileX);
-       
-       if (texture) {
-         this.drawBlockTexture(texture, sx, sy, size, combinedLightFactor);
-       } else {
-         const blockType = this.registry.get(itemId);
-         const color = blockType?.color || '#ff0000';
-         
-         const lightIntensity = Math.max(0.2, combinedLightFactor);
-         
-         ctx.fillStyle = color;
-         const rgb = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(color);
-         if (rgb) {
-           const r = Math.min(255, parseInt(rgb[1], 16) * lightIntensity);
-           const g = Math.min(255, parseInt(rgb[2], 16) * lightIntensity);
-           const b = Math.min(255, parseInt(rgb[3], 16) * lightIntensity);
-           ctx.fillStyle = `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
-         }
-         
-         ctx.fillRect(sx, sy, size, size);
-         
-         ctx.strokeStyle = '#000000';
-         ctx.lineWidth = 1;
-         ctx.strokeRect(sx, sy, size, size);
-       }
-     }
-   }
+    const focusX = camera.x + canvas.width / camera.zoom / 2;
+    const focusY = camera.y + canvas.height / camera.zoom / 2;
+
+    // Anchor position in the sky (upper right quadrant)
+    let cx = Math.round((canvas.width * 0.76 - focusX * parallaxFactorX) % (canvas.width + 160));
+    if (cx < -80) cx += canvas.width + 160;
+    let cy = Math.round(canvas.height * 0.18 - focusY * parallaxFactorY);
+    cy = Math.max(28, Math.min(canvas.height * 0.38, cy));
+
+    const pixelSize = 4; // 14 x 4 = 56px width (prominent celestial body in the lunar sky)
+    const halfSize = (14 * pixelSize) / 2;
+    const startX = cx - halfSize;
+    const startY = cy - halfSize;
+    const earthWidth = 14 * pixelSize;
+    const earthHeight = 14 * pixelSize;
+
+    // Continuously query Earth's world time from DimensionManager or current world
+    const earthWorld = world?.dimensionManager?.getDimensionWorld?.('earth') || world;
+    const dayLength = earthWorld?.dayLength ?? world?.dayLength ?? 1440;
+    const currentTime = earthWorld?.time ?? world?.time ?? 0;
+    // Exact cycle position (0.0 = midnight, 0.25 = dawn, 0.5 = noon, 0.75 = dusk)
+    const timeOfDay = (((currentTime % dayLength) + dayLength) % dayLength) / dayLength;
+
+    ctx.save();
+
+    // Atmospheric outer soft square halo (scaled proportionally to Earth size)
+    const glowPads = [14, 10, 6, 2];
+    const glowAlphas = [0.05, 0.1, 0.18, 0.32];
+    for (let i = 0; i < glowPads.length; i++) {
+      const pad = glowPads[i];
+      ctx.fillStyle = `rgba(64, 150, 255, ${glowAlphas[i]})`;
+      ctx.fillRect(startX - pad, startY - pad, earthWidth + pad * 2, earthHeight + pad * 2);
+    }
+
+    // Strictly clip the rotating planet surface to the Earth square
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(startX, startY, earthWidth, earthHeight);
+    ctx.clip();
+
+    // Ensure assets/textures/earth.png is loaded
+    if (!this.textures['earth'] && !this.missingTextures?.has('earth')) {
+      const img = new Image();
+      img.onload = () => {
+        this.textures['earth'] = img;
+      };
+      img.onerror = () => {
+        this.missingTextures?.add('earth');
+      };
+      img.src = 'assets/textures/earth.png';
+    }
+
+    const earthTex = this.textures['earth'];
+    const TEXTURE_WIDTH = 56;
+    const TEXTURE_HEIGHT = 14;
+
+    // Slide exactly one pixel at a time based on time
+    // At noon (timeOfDay = 0.5), slideColumn = 7 (centers the 14-column window around col 14: full daytime)
+    // At sunset (timeOfDay = 0.75), slideColumn = 21 (centers around col 28: sunset transition)
+    // At midnight (timeOfDay = 0.0), slideColumn = 35 (centers around col 42: full night with glowing city lights)
+    // At dawn (timeOfDay = 0.25), slideColumn = 49 (centers around col 0: dawn transition)
+    const slideColumn = Math.floor((((timeOfDay * TEXTURE_WIDTH + 35) % TEXTURE_WIDTH) + TEXTURE_WIDTH) % TEXTURE_WIDTH);
+
+    if (earthTex && earthTex.complete && earthTex.naturalWidth > 0) {
+      ctx.imageSmoothingEnabled = false;
+      // Draw 14 pixel columns starting at slideColumn, stepping exactly 1 pixel column at a time
+      for (let c = 0; c < 14; c++) {
+        const srcCol = (slideColumn + c) % TEXTURE_WIDTH;
+        ctx.drawImage(earthTex, srcCol, 0, 1, TEXTURE_HEIGHT, startX + c * pixelSize, startY, pixelSize, earthHeight);
+      }
+    }
+
+    ctx.restore(); // Restore clipping
+    ctx.restore(); // Restore outer save
+  }
+
+  drawItems() {
+    const items = this.world.items || [];
+
+    if (!items || items.length === 0) {
+      return;
+    }
+
+    const ctx = this.ctx;
+    const camera = this.camera;
+
+    for (const item of items) {
+      const size = Math.max(7, Math.round(9 * camera.zoom));
+      const itemW = item.width || 6;
+      const itemH = item.height || 6;
+      const screenCenterX = camera.worldToScreenX(item.x + itemW / 2);
+      const screenBottomY = camera.worldToScreenY(item.y + itemH);
+      const sx = Math.round(screenCenterX - size / 2);
+      const sy = Math.round(screenBottomY - size);
+
+      const tileX = Math.floor(item.x / 16);
+
+      const itemId = item.blockId || item.itemId;
+      const blockType = this.registry.get(itemId);
+      const texture = this.biomeTexture(itemId, this.textures[itemId], tileX);
+
+      // At full brightness: the light is laid over the players' and items' layer afterwards.
+      if (texture) {
+        this.drawBlockTexture(texture, sx, sy, size);
+      } else {
+        ctx.fillStyle = blockType?.color || '#ff0000';
+        ctx.fillRect(sx, sy, size, size);
+
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sx, sy, size, size);
+      }
+    }
+  }
 
   drawLeafParticles() {
     const ui = this.getUI();
-     const leafParticles = ui && ui.leafParticles ? ui.leafParticles : null;
+    const leafParticles = ui && ui.leafParticles ? ui.leafParticles : null;
     if (!leafParticles || leafParticles.length === 0) return;
 
-    const { ctx, camera, world } = this;
+    const { ctx, camera } = this;
     ctx.imageSmoothingEnabled = false;
 
     for (const particle of leafParticles) {
@@ -1299,9 +1964,9 @@ drawStars() {
       const tileX = Math.floor(particle.x / TILE_SIZE);
       const tileY = Math.floor(particle.y / TILE_SIZE);
       const combinedLightFactor = this.lightFactorAt(tileX, tileY, false);
-      
+
       const alpha = particle.alpha ?? 1;
-      
+
       let texture = this.textures[`falling_leaf_${particle.blockId}`] || this.textures['falling_leaf'] || this.textures['oak_leaf_particle'] || null;
       if (texture && particle.blockId && biomeHasLeafTint(particle.blockId)) {
         texture = this.getBiomeTinted(`falling_leaf_${particle.blockId}`, texture, Math.floor(particle.x / TILE_SIZE), particle.blockId);
@@ -1314,9 +1979,9 @@ drawStars() {
       if (texture) {
         ctx.save();
         ctx.globalAlpha = alpha;
-        
+
         const tintedLightFactor = combinedLightFactor * particle.tintFactor;
-        
+
         this.drawBlockTexture(texture, sx - size / 2, sy - size / 2, size, tintedLightFactor, particle.rotation);
         ctx.restore();
       } else {
@@ -1324,17 +1989,17 @@ drawStars() {
         ctx.globalAlpha = alpha;
         const leafDef = this.registry.get(particle.blockId);
         let c = leafDef?.leaves?.particleColor || leafDef?.color || '#5a9e5a';
-        
+
         const tintedLightFactor = Math.min(1.0, combinedLightFactor * particle.tintFactor);
         c = darkenHex(c, tintedLightFactor);
-        
+
         ctx.fillStyle = c;
         ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
-        
+
         ctx.strokeStyle = darkenHex(c, 0.7);
         ctx.lineWidth = 1;
         ctx.strokeRect(sx - size / 2, sy - size / 2, size, size);
-        
+
         ctx.restore();
       }
     }
@@ -1349,13 +2014,14 @@ drawStars() {
       for (let y = startY; y <= endY; y++) {
         const cell = world.getCell(x, y);
         const isBg = cell.meta?.layer === 'bg' || (!this.registry.get(cell.id)?.leaves && cell.meta?.bgId);
-        const id = this.registry.get(cell.id)?.leaves ? cell.id : (cell.meta?.bgId && this.registry.get(cell.meta.bgId)?.leaves ? cell.meta.bgId : null);
+        const id = this.registry.get(cell.id)?.leaves ? cell.id : cell.meta?.bgId && this.registry.get(cell.meta.bgId)?.leaves ? cell.meta.bgId : null;
         if (!id) continue;
         let texture = this.textures[id];
         if (!texture) continue;
         if (biomeHasLeafTint(id)) texture = this.getBiomeTinted(id, texture, x);
         for (const [side, dx, dy] of LEAF_FRINGE_SIDES) {
-          const nx = x + dx, ny = y + dy;
+          const nx = x + dx,
+            ny = y + dy;
           if (!world.inBounds(nx, ny)) continue;
           const nCell = world.getCell(nx, ny);
           const nType = world.getBlockType(nx, ny);
@@ -1364,114 +2030,134 @@ drawStars() {
           if (!fringe) continue;
           const sx = Math.round(camera.worldToScreenX(nx * TILE_SIZE)) + this.leafSwayOffset(x, y, size);
           const sy = Math.round(camera.worldToScreenY(ny * TILE_SIZE));
-          const light = (this.isOpenSky(nx, ny) ? this.lightFactorAt(nx, ny, true) : 1.0) * (isBg ? BACKGROUND_WALL_SHADE : 1.0);
+          const light = (isBg ? BACKGROUND_WALL_SHADE : 1.0) * leafShade(x, y);
           this.drawBlockTexture(fringe, sx, sy, size, light);
         }
       }
     }
   }
 
-  // A tileable strip of soft, chunky-pixel mist: dense at the bottom, wispy on top.
+  // A tileable strip of soft mist: dense at the bottom, wispy on top. It's FOG_TEX_W texels
+  // wide plus a copy of its first FOG_TEX_PAD columns on the end, so a slice that runs past the
+  // edge still has mist to take (no seam where it wraps).
   getFogTexture(layer) {
     const key = `fog|${layer}`;
     let tex = this._imageCache.get(key);
     if (tex) return tex;
-    const W = 256, H = 64, CELL = 4;
+    const W = FOG_TEX_W,
+      H = 64;
     tex = document.createElement('canvas');
-    tex.width = W; tex.height = H;
+    tex.width = W + FOG_TEX_PAD;
+    tex.height = H;
     const tctx = tex.getContext('2d');
+    const img = tctx.createImageData(tex.width, H);
     let seed = 1234 + layer * 977;
     const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) >>> 8) / 16777216;
-    const cols = W / CELL, rows = H / CELL;
-    // Wrapping 2D value noise stretched sideways, so the mist forms long horizontal wisps.
-    const GX = 12, GY = 5;
-    const lattice = Array.from({ length: GX * GY }, rand);
-    const smooth = k => k * k * (3 - 2 * k);
-    const noise = (u, v) => {
-      const fx = u * GX, fy = v * (GY - 1);
-      const ix = Math.floor(fx), iy = Math.min(GY - 2, Math.floor(fy));
-      const kx = smooth(fx - ix), ky = smooth(fy - iy);
-      const at = (i, j) => lattice[j * GX + (i % GX)];
-      const top = at(ix, iy) * (1 - kx) + at(ix + 1, iy) * kx;
-      const bot = at(ix, iy + 1) * (1 - kx) + at(ix + 1, iy + 1) * kx;
-      return top * (1 - ky) + bot * ky;
+    // Wrapping 2D value noise stretched sideways, in two scales, so the mist forms long
+    // horizontal wisps with finer wisps inside them.
+    const octave = (GX, GY) => {
+      const lattice = Array.from({ length: GX * GY }, rand);
+      const smooth = (k) => k * k * (3 - 2 * k);
+      return (u, v) => {
+        const fx = u * GX,
+          fy = v * (GY - 1);
+        const ix = Math.floor(fx),
+          iy = Math.min(GY - 2, Math.floor(fy));
+        const kx = smooth(fx - ix),
+          ky = smooth(fy - iy);
+        const at = (i, j) => lattice[j * GX + (i % GX)];
+        const top = at(ix, iy) * (1 - kx) + at(ix + 1, iy) * kx;
+        const bot = at(ix, iy + 1) * (1 - kx) + at(ix + 1, iy + 1) * kx;
+        return top * (1 - ky) + bot * ky;
+      };
     };
-    for (let cx = 0; cx < cols; cx++) {
-      for (let cy = 0; cy < rows; cy++) {
-        const u = cx / cols, v = cy / rows;
+    const coarse = octave(10, 5),
+      fine = octave(26, 8);
+    for (let x = 0; x < tex.width; x++) {
+      const u = (x % W) / W;
+      for (let y = 0; y < H; y++) {
+        const v = y / H;
         // Denser towards the ground (bottom), breaking into wisps higher up.
-        const a = Math.max(0, Math.min(1, (noise(u, v) * 0.9 + v * 0.9 - 0.6) * 2.2));
-        if (a <= 0.02) continue;
-        tctx.fillStyle = `rgba(255,255,255,${(a * 0.75).toFixed(3)})`;
-        tctx.fillRect(cx * CELL, cy * CELL, CELL, CELL);
+        const n = coarse(u, v) * 0.72 + fine(u, v) * 0.28;
+        const a = Math.max(0, Math.min(1, (n * 0.9 + v * 0.9 - 0.6) * 2));
+        const i = (y * tex.width + x) * 4;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = 255;
+        img.data[i + 3] = Math.round(a * a * (3 - 2 * a) * 0.75 * 255); // eased, so no hard edges
       }
     }
+    tctx.putImageData(img, 0, 0);
     this._imageCache.set(key, tex);
     return tex;
   }
 
-  // Low mist that settles over the terrain in foggy biomes (Taiga), drawn behind the blocks. Drawn in vertical
-  // slices so it follows the ground and fades in across biome edges.
+  // Low mist that settles over the terrain in foggy biomes (Taiga).
+  // Drawn behind the blocks in thin slices that follow a smooth ground line and density, so
+  // it flows over hills and fades in and out at biome edges without stepping per block.
   drawFog(startX, endX) {
     const { ctx, camera, world } = this;
+    if (world?.worldType === 'moon' || world?.dimensionId === 'moon') return;
     const seed = world.seed ?? 0;
-    const t = gameClock.seconds();
     const size = TILE_SIZE * camera.zoom;
     const dl = this.daylight || { base: 1, sunVisible: true, travelT: 0.5 };
     // Thickest around dawn and through the night, thinnest at midday.
     const timeFactor = dl.sunVisible ? 0.7 + 0.3 * Math.max(0, 1 - dl.travelT * 3) : 0.9;
-    const shade = Math.round(150 + 90 * dl.base);
+    const shade = Math.round(28 + 212 * dl.base); // dark at night: open air isn't darkened by the light overlay, so the mist has to be
     let any = false;
     for (let x = startX; x <= endX && !any; x++) any = fogAt(x, seed) > 0.01;
     if (!any) return;
 
-    // Fog follows a smoothed ground line so it flows over hills as one sheet instead of
-    // stepping at every column.
-    const heights = [];
-    for (let x = startX - FOG_SMOOTH; x <= endX + FOG_SMOOTH; x++) heights.push(naturalHeightAt(x, seed, world.height, world.worldType));
-    const smoothGround = [];
-    for (let i = 0; i <= endX - startX; i++) {
+    // Per column (a few either side of the screen): a smoothed ground line, and the mist's
+    // density, nothing over a column whose ground block has been dug out. Slices between
+    // columns blend these linearly.
+    const lo = startX - 1,
+      hi = endX + 2;
+    const raw = [];
+    for (let x = lo - FOG_SMOOTH; x <= hi + FOG_SMOOTH; x++) raw.push(naturalHeightAt(x, seed, world.height, world.worldType));
+    const ground = [],
+      density = [];
+    for (let x = lo; x <= hi; x++) {
       let sum = 0;
-      for (let k = 0; k <= FOG_SMOOTH * 2; k++) sum += heights[i + k];
-      smoothGround.push(sum / (FOG_SMOOTH * 2 + 1));
-    }
-
-    // Whether each column still has its ground block (the mist rests on it).
-    const fogGroundAt = [];
-    for (let x = startX; x <= endX; x++) {
-      const top = Math.floor(naturalHeightAt(x, seed, world.height, world.worldType));
-      fogGroundAt.push(!world.isChunkLoaded(world.chunkXFor(x)) || !!world.getBlockType(x, top)?.solid);
+      for (let k = 0; k <= FOG_SMOOTH * 2; k++) sum += raw[x - lo + k];
+      ground.push(sum / (FOG_SMOOTH * 2 + 1));
+      const top = Math.floor(raw[x - lo + FOG_SMOOTH]);
+      const dug = world.isChunkLoaded(world.chunkXFor(x)) && !world.getBlockType(x, top)?.solid;
+      density.push(dug ? 0 : fogAt(x, seed) * timeFactor);
     }
 
     ctx.save();
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     const layers = [
       { speed: 2.0, parallax: 0.6, height: 3.5, alpha: 0.85 },
       { speed: 3.5, parallax: 0.8, height: 2.6, alpha: 0.9 },
       { speed: 6.0, parallax: 1.0, height: 1.8, alpha: 1.0 }
     ];
+    const slice = Math.max(2, Math.round(camera.zoom * 2)); // screen px a slice is wide
+    const left = Math.floor(camera.worldToScreenX(startX * TILE_SIZE));
+    const right = Math.ceil(camera.worldToScreenX((endX + 1) * TILE_SIZE));
     for (let li = 0; li < layers.length; li++) {
       const L = layers[li];
       const tex = this.getFogTexture(li);
       // Colour the white mist to suit the light (bright by day, dim blue-grey at night).
       const tinted = this.getTintedFog(tex, li, shade);
-      for (let x = startX; x <= endX; x++) {
-        const density = fogAt(x, seed) * timeFactor * L.alpha;
-        if (density < 0.02) continue;
-        // No mist over a column whose ground block has been dug out.
-        if (!fogGroundAt[x - startX]) continue;
-        // Sit on this column's real ground (the bottom hides behind the block), never above it.
-        const ground = Math.max(smoothGround[x - startX], naturalHeightAt(x, seed, world.height, world.worldType));
-        const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
-        const bandH = Math.round(L.height * size);
-        const bandBottom = Math.round(camera.worldToScreenY((ground + 1) * TILE_SIZE));
-        // Each column takes the next FOG_TEXELS_PER_TILE texels of the strip, so the mist is
-        // continuous; layers drift at their own speed and slide slightly against the camera.
-        const drift = t * L.speed + camera.x / TILE_SIZE * (1 - L.parallax) * FOG_TEXELS_PER_TILE;
-        const srcX = (((x * FOG_TEXELS_PER_TILE + Math.floor(drift)) % tex.width) + tex.width) % tex.width;
-        const nextSx = Math.round(camera.worldToScreenX((x + 1) * TILE_SIZE));
-        ctx.globalAlpha = Math.min(1, density);
-        ctx.drawImage(tinted, srcX, 0, FOG_TEXELS_PER_TILE, tex.height, sx, bandBottom - bandH, nextSx - sx, bandH);
+      // Layers drift with the wind at their own speed and slide slightly against the camera.
+      const drift = -wind.travelled * L.speed * FOG_WIND + (camera.x / TILE_SIZE) * (1 - L.parallax) * FOG_TEXELS_PER_TILE;
+      const bandH = Math.round(L.height * size);
+      const texelsPerPx = FOG_TEXELS_PER_TILE / size;
+      for (let sxp = left; sxp < right; sxp += slice) {
+        const wx = camera.x / TILE_SIZE + (sxp + slice / 2) / size; // block position of the slice's middle
+        const f = Math.min(hi - lo - 1, Math.max(0, wx - 0.5 - lo));
+        const i = Math.floor(f),
+          k = f - i;
+        const d = (density[i] * (1 - k) + density[i + 1] * k) * L.alpha;
+        if (d < 0.01) continue;
+        const g = ground[i] * (1 - k) + ground[i + 1] * k;
+        // The mist rests on the ground line; its bottom tucks behind the blocks.
+        const bottom = Math.round(camera.worldToScreenY((g + 1.5) * TILE_SIZE));
+        const srcW = slice * texelsPerPx;
+        const srcX = (((wx * FOG_TEXELS_PER_TILE - srcW / 2 + drift) % FOG_TEX_W) + FOG_TEX_W) % FOG_TEX_W;
+        ctx.globalAlpha = Math.min(1, d);
+        ctx.drawImage(tinted, srcX, 0, srcW, tex.height, sxp, bottom - bandH, slice, bandH);
       }
     }
     ctx.restore();
@@ -1483,7 +2169,8 @@ drawStars() {
     let c = this._imageCache.get(key);
     if (c) return c;
     c = document.createElement('canvas');
-    c.width = tex.width; c.height = tex.height;
+    c.width = tex.width;
+    c.height = tex.height;
     const cctx = c.getContext('2d');
     cctx.drawImage(tex, 0, 0);
     cctx.globalCompositeOperation = 'source-in';
@@ -1525,21 +2212,27 @@ drawStars() {
   drawWaterLayer(startX, endX, startY, endY) {
     const { ctx, camera, world } = this;
     const sim = world.water;
-    if (!sim) { this._waterShown = null; return; }
+    if (!sim) {
+      this._waterShown = null;
+      return;
+    }
     const particlePos = sim.particles?.positions();
     waterPerf.startRender();
     try {
       const PER = WATER_SQ;
-      const cols = endX - startX + 1, rows = endY - startY + 1;
-      const gw = cols * PER, gh = rows * PER;
+      const cols = endX - startX + 1,
+        rows = endY - startY + 1;
+      const gw = cols * PER,
+        gh = rows * PER;
       if (!this._waterCanvas || this._waterCanvas.width !== gw || this._waterCanvas.height !== gh) {
         this._waterCanvas = document.createElement('canvas');
-        this._waterCanvas.width = gw; this._waterCanvas.height = gh;
+        this._waterCanvas.width = gw;
+        this._waterCanvas.height = gh;
       }
       const wc = this._waterCanvas.getContext('2d');
       wc.clearRect(0, 0, gw, gh);
-      const lightAt = (tx, ty) => (this.isOpenSky(tx, ty) ? Math.max(MIN_BRIGHTNESS, this.lightFactorAt(tx, ty, true)) : 1);
-      const shown = this.drawParticleWater(wc, sim, particlePos, startX, startY, cols, rows, PER, lightAt);
+      // At full brightness: the light is laid over it with the rest of the world.
+      const shown = this.drawParticleWater(wc, sim, particlePos, startX, startY, cols, rows, PER);
       if (!shown) {
         this._waterShown = null;
         return;
@@ -1562,9 +2255,11 @@ drawStars() {
 
   // Water rendering: 8x8 water pixels per block (each 2x2 texture pixels);
   // Draws both resting block water (Terraria-style) and moving particles seamlessly.
-  drawParticleWater(wc, sim, pos, startX, startY, cols, rows, per, lightAt) {
-    const WPX = 8, sc = per / WPX;
-    const GW = cols * WPX, GH = rows * WPX;
+  drawParticleWater(wc, sim, pos, startX, startY, cols, rows, per) {
+    const WPX = 8,
+      sc = per / WPX;
+    const GW = cols * WPX,
+      GH = rows * WPX;
     if (!this._pGrid || this._pGrid.length !== GW * GH) {
       this._pGrid = new Uint8Array(GW * GH);
       this._pTmp = new Uint8Array(GW * GH);
@@ -1572,7 +2267,8 @@ drawStars() {
       this._pFill = new Float32Array(GW);
       this._pSmooth = new Float32Array(GW);
       this._pCanvas = document.createElement('canvas');
-      this._pCanvas.width = GW; this._pCanvas.height = GH;
+      this._pCanvas.width = GW;
+      this._pCanvas.height = GH;
       this._pImg = this._pCanvas.getContext('2d').createImageData(GW, GH);
       this._pImg32 = new Uint32Array(this._pImg.data.buffer);
       this._pActiveBBox = null;
@@ -1590,14 +2286,20 @@ drawStars() {
       }
     }
 
-    let minGx = GW, maxGx = -1, minGy = GH, maxGy = -1;
+    let minGx = GW,
+      maxGx = -1,
+      minGy = GH,
+      maxGy = -1;
     let visibleParticles = 0;
-    const minPx = startX - 1, maxPx = startX + cols + 1;
-    const minPy = startY - 1, maxPy = startY + rows + 1;
+    const minPx = startX - 1,
+      maxPx = startX + cols + 1;
+    const minPy = startY - 1,
+      maxPy = startY + rows + 1;
 
     waterPerf.time('renderParticleSplat', () => {
       // 1. Fill from resting block water (seamless across all chunks, 0ms physics)
-      const cs = sim.cs, h = sim.h;
+      const cs = sim.cs,
+        h = sim.h;
       for (let tx = 0; tx < cols; tx++) {
         const bx = startX + tx;
         const slot = sim.slotAt(bx);
@@ -1619,8 +2321,14 @@ drawStars() {
           if (gyEnd > maxGy) maxGy = gyEnd;
           for (let gy = gyStart; gy <= gyEnd; gy++) {
             const off = gy * GW + gx;
-            grid[off] = 1; grid[off + 1] = 1; grid[off + 2] = 1; grid[off + 3] = 1;
-            grid[off + 4] = 1; grid[off + 5] = 1; grid[off + 6] = 1; grid[off + 7] = 1;
+            grid[off] = 1;
+            grid[off + 1] = 1;
+            grid[off + 2] = 1;
+            grid[off + 3] = 1;
+            grid[off + 4] = 1;
+            grid[off + 5] = 1;
+            grid[off + 6] = 1;
+            grid[off + 7] = 1;
           }
         }
       }
@@ -1628,16 +2336,19 @@ drawStars() {
       // 2. Splat moving particles (buckets, waterfalls, splashes)
       if (pos && pos.length) {
         for (let p = 0; p < pos.length; p += 2) {
-          const px = pos[p], py = pos[p + 1];
+          const px = pos[p],
+            py = pos[p + 1];
           if (px < minPx || px > maxPx || py < minPy || py > maxPy) continue;
           visibleParticles++;
-          const gx = Math.floor((px - startX) * WPX), gy = Math.floor((py - startY) * WPX);
+          const gx = Math.floor((px - startX) * WPX),
+            gy = Math.floor((py - startY) * WPX);
           if (gx < minGx) minGx = gx;
           if (gx > maxGx) maxGx = gx;
           if (gy < minGy) minGy = gy;
           if (gy > maxGy) maxGy = gy;
           for (let s = 0; s < SPLAT_LEN; s++) {
-            const x = gx + SPLAT_DX[s], y = gy + SPLAT_DY[s];
+            const x = gx + SPLAT_DX[s],
+              y = gy + SPLAT_DY[s];
             if (x >= 0 && y >= 0 && x < GW && y < GH) grid[y * GW + x] = 1;
           }
         }
@@ -1662,17 +2373,17 @@ drawStars() {
     this._pActiveBBox = { x0: bx0, x1: bx1, y0: by0, y1: by1 };
 
     const solid = this._pSolid && this._pSolid.length === cols * rows ? this._pSolid : (this._pSolid = new Uint8Array(cols * rows));
-    const blockLight = this._pBlockLight && this._pBlockLight.length === cols * rows ? this._pBlockLight : (this._pBlockLight = new Float32Array(cols * rows));
 
-    // Precompute block solid and lighting only for intersecting blocks in the bounding box
+    // Precompute which blocks are solid, only for those in the bounding box
     waterPerf.time('renderSolidLight', () => {
-      const btx0 = bx0 >> 3, btx1 = Math.min(cols - 1, bx1 >> 3);
-      const bty0 = by0 >> 3, bty1 = Math.min(rows - 1, by1 >> 3);
+      const btx0 = bx0 >> 3,
+        btx1 = Math.min(cols - 1, bx1 >> 3);
+      const bty0 = by0 >> 3,
+        bty1 = Math.min(rows - 1, by1 >> 3);
       for (let j = bty0; j <= bty1; j++) {
         const rowOffset = j * cols;
         for (let i = btx0; i <= btx1; i++) {
           solid[rowOffset + i] = sim.closed(startX + i, startY + j) ? 1 : 0;
-          blockLight[rowOffset + i] = lightAt(startX + i, startY + j);
         }
       }
     });
@@ -1688,20 +2399,30 @@ drawStars() {
         for (let x = bx0; x <= bx1; x++) {
           const colBlock = x >> 3;
           const k = rowOffset + x;
-          if (solid[rowSolid + colBlock] === 1) { tmp[k] = 0; continue; }
+          if (solid[rowSolid + colBlock] === 1) {
+            tmp[k] = 0;
+            continue;
+          }
           const wallBelow = belowSolidRow >= 0 && solid[belowSolidRow + colBlock] === 1;
           // If resting right on the solid floor with water above it, fill flush against the ground
-          if (wallBelow && y > 0 && grid[k - GW] === 1) { tmp[k] = 1; continue; }
-          if (x === 0 || y === 0 || x === GW - 1 || y === GH - 1) { tmp[k] = grid[k]; continue; }
+          if (wallBelow && y > 0 && grid[k - GW] === 1) {
+            tmp[k] = 1;
+            continue;
+          }
+          if (x === 0 || y === 0 || x === GW - 1 || y === GH - 1) {
+            tmp[k] = grid[k];
+            continue;
+          }
           const gk = grid[k];
-          const gLeft = grid[k - 1], gUp = grid[k - GW];
+          const gLeft = grid[k - 1],
+            gUp = grid[k - GW];
           if (gk === 1) {
             const n = gLeft + grid[k + 1] + gUp + grid[k + GW];
             if (n > 1) {
               tmp[k] = 1;
             } else {
               const wallTouch = wallBelow || (x > 0 && solid[rowSolid + ((x - 1) >> 3)] === 1) || (x + 1 < GW && solid[rowSolid + ((x + 1) >> 3)] === 1);
-              tmp[k] = (n >= 1 && wallTouch) ? 1 : 0;
+              tmp[k] = n >= 1 && wallTouch ? 1 : 0;
             }
           } else {
             // Gap fill: needs at least 3 neighbors (requires at least one of left or up to be 1)
@@ -1722,15 +2443,23 @@ drawStars() {
     });
 
     // Each column's surface (first water pixel with open air above), gaps bridged, smoothed.
-    const tops = this._pTops, filled = this._pFill, smooth = this._pSmooth;
+    const tops = this._pTops,
+      filled = this._pFill,
+      smooth = this._pSmooth;
     waterPerf.time('renderSurfaceDetect', () => {
       for (let x = bx0; x <= bx1; x++) {
         tops[x] = NaN;
         let capped = false;
         const colBlock = x >> 3;
         for (let y = by0; y <= by1; y++) {
-          if (solid[(y >> 3) * cols + colBlock] === 1) { capped = true; continue; }
-          if (grid[y * GW + x]) { if (!capped) tops[x] = y; break; }
+          if (solid[(y >> 3) * cols + colBlock] === 1) {
+            capped = true;
+            continue;
+          }
+          if (grid[y * GW + x]) {
+            if (!capped) tops[x] = y;
+            break;
+          }
           capped = false;
         }
       }
@@ -1739,7 +2468,7 @@ drawStars() {
       for (let x = bx0; x <= bx1 + 1; x++) {
         if (x <= bx1 && Number.isNaN(tops[x])) continue;
         for (let g = prev + 1; g < x; g++) {
-          filled[g] = prev < bx0 ? (x <= bx1 ? tops[x] : NaN) : x > bx1 ? tops[prev] : tops[prev] + (tops[x] - tops[prev]) * (g - prev) / (x - prev);
+          filled[g] = prev < bx0 ? (x <= bx1 ? tops[x] : NaN) : x > bx1 ? tops[prev] : tops[prev] + ((tops[x] - tops[prev]) * (g - prev)) / (x - prev);
         }
         if (x <= bx1) filled[x] = tops[x];
         prev = x;
@@ -1747,20 +2476,31 @@ drawStars() {
     });
 
     // Fast sliding-window surface smoothing (O(N) instead of O(N * window))
-    const SM = 2 * WPX, DEPTH = Math.round(7.5 * WPX);
+    const SM = 2 * WPX,
+      DEPTH = Math.round(7.5 * WPX);
     waterPerf.time('renderSurfaceSmooth', () => {
-      let winSum = 0, winCount = 0;
+      let winSum = 0,
+        winCount = 0;
       const initRight = Math.min(bx1, bx0 + SM);
       for (let k = Math.max(bx0, bx0 - SM); k <= initRight; k++) {
-        if (!Number.isNaN(filled[k])) { winSum += filled[k]; winCount++; }
+        if (!Number.isNaN(filled[k])) {
+          winSum += filled[k];
+          winCount++;
+        }
       }
       smooth[bx0] = winCount ? winSum / winCount : NaN;
 
       for (let x = bx0 + 1; x <= bx1; x++) {
         const addIdx = x + SM;
-        if (addIdx <= bx1 && !Number.isNaN(filled[addIdx])) { winSum += filled[addIdx]; winCount++; }
+        if (addIdx <= bx1 && !Number.isNaN(filled[addIdx])) {
+          winSum += filled[addIdx];
+          winCount++;
+        }
         const subIdx = x - SM - 1;
-        if (subIdx >= bx0 && !Number.isNaN(filled[subIdx])) { winSum -= filled[subIdx]; winCount--; }
+        if (subIdx >= bx0 && !Number.isNaN(filled[subIdx])) {
+          winSum -= filled[subIdx];
+          winCount--;
+        }
         smooth[x] = winCount ? winSum / winCount : NaN;
       }
     });
@@ -1768,48 +2508,33 @@ drawStars() {
     // Precompute color LUT
     if (!this._pColorLut || this._pColorLut.length !== DEPTH + 1) {
       this._pColorLut = new Uint32Array(DEPTH + 1);
-      this._pColorRGB = new Uint8Array((DEPTH + 1) * 3);
       for (let d = 0; d <= DEPTH; d++) {
         const t = d / DEPTH;
         const r = Math.round(80 - 56 * t);
         const g = Math.round(150 - 92 * t);
         const b = Math.round(232 - 104 * t);
         this._pColorLut[d] = (225 << 24) | (b << 16) | (g << 8) | r;
-        this._pColorRGB[d * 3] = r;
-        this._pColorRGB[d * 3 + 1] = g;
-        this._pColorRGB[d * 3 + 2] = b;
       }
     }
     const colorLut = this._pColorLut;
-    const colorRGB = this._pColorRGB;
 
     // Fast 32-bit pixel rendering inside bounding box with LUT & dirty rect blit
     let activePixels = 0;
     waterPerf.time('renderPixelShading', () => {
       for (let y = by0; y <= by1; y++) {
         const rowOffset = y * GW;
-        const bRow = (y >> 3) * cols;
         for (let x = bx0; x <= bx1; x++) {
           const k = rowOffset + x;
           if (!grid[k]) continue;
           activePixels++;
-          const light = blockLight[bRow + (x >> 3)];
           const sm = smooth[x];
-          const d = Number.isNaN(sm) ? (DEPTH >> 1) : ((y - sm) | 0);
-          const lutIdx = d <= 0 ? 0 : d >= DEPTH ? DEPTH : d;
-          if (light >= 0.99) {
-            d32[k] = colorLut[lutIdx];
-          } else {
-            const base = lutIdx * 3;
-            const lr = (colorRGB[base] * light) | 0;
-            const lg = (colorRGB[base + 1] * light) | 0;
-            const lb = (colorRGB[base + 2] * light) | 0;
-            d32[k] = (225 << 24) | (lb << 16) | (lg << 8) | lr;
-          }
+          const d = Number.isNaN(sm) ? DEPTH >> 1 : (y - sm) | 0;
+          d32[k] = colorLut[d <= 0 ? 0 : d >= DEPTH ? DEPTH : d];
         }
       }
 
-      const dirtyW = bx1 - bx0 + 1, dirtyH = by1 - by0 + 1;
+      const dirtyW = bx1 - bx0 + 1,
+        dirtyH = by1 - by0 + 1;
       const pctx = this._pCanvas.getContext('2d');
       pctx.putImageData(this._pImg, 0, 0, bx0, by0, dirtyW, dirtyH);
       wc.imageSmoothingEnabled = false;
@@ -1821,40 +2546,35 @@ drawStars() {
   }
 
   // Water in front of the players and items (they look submerged): the same water image,
-  // fainter, over just their pixels (the caller draws with source-atop).
+  // fainter, over just their pixels (the caller draws with source-atop). It's at full
+  // brightness, like the players: the light is laid over their layer afterwards.
   drawWaterOver(rects) {
     const shown = this._waterShown;
     if (!shown || !this._waterCanvas) return;
     const { ctx, camera } = this;
-    // Each one separately, darkened by the light where it is (the water image is drawn at
-    // full brightness underground, where the light overlay darkens it later, but these are
-    // drawn after that overlay).
     for (const [rx, ry, rw, rh] of rects) {
-      const light = this.lightFactorAt(Math.floor((rx + rw / 2) / TILE_SIZE), Math.floor((ry + rh / 2) / TILE_SIZE), false);
       ctx.save();
       ctx.beginPath();
       ctx.rect(camera.worldToScreenX(rx), camera.worldToScreenY(ry), rw * camera.zoom, rh * camera.zoom);
       ctx.clip();
       ctx.imageSmoothingEnabled = false;
       ctx.globalAlpha = 0.6;
-      if (light < 1) ctx.filter = `brightness(${Math.max(MIN_BRIGHTNESS, light).toFixed(2)})`;
       ctx.drawImage(this._waterCanvas, shown.x0, shown.y0, shown.x1 - shown.x0, shown.y1 - shown.y0);
       ctx.restore();
     }
   }
-
 
   // Where a stream lands in water: churning foam on the surface, droplets thrown up and
   // bubbles rising back up through the pool beneath.
   drawSplashes() {
     const ctx = this.ctx;
     const t = gameClock.seconds();
-    const hash = n => (((n * 2654435761) >>> 0) % 1000) / 1000;
+    const hash = (n) => (((n * 2654435761) >>> 0) % 1000) / 1000;
     for (const sp of this._splashes || []) {
       const { cx, surfaceY, half, px, size, quant, tileX, minX, maxX } = sp;
       const p = Math.max(1, Math.round(px));
       const light = Math.max(0.75, quant);
-      const foamC = a => `rgba(${Math.round(235 * light)}, ${Math.round(245 * light)}, ${Math.round(255 * light)}, ${a.toFixed(2)})`;
+      const foamC = (a) => `rgba(${Math.round(235 * light)}, ${Math.round(245 * light)}, ${Math.round(255 * light)}, ${a.toFixed(2)})`;
       const dot = (x, y, a) => {
         if (x < minX || x + p > maxX || a <= 0.04) return;
         ctx.fillStyle = foamC(a);
@@ -1889,64 +2609,118 @@ drawStars() {
     }
   }
 
-  // Global wind strength (0..1) as felt at `t`: slow swells with occasional gusts on top.
-  windStrength(t) {
-    const swell = 0.5 + 0.5 * Math.sin(t * 0.23) * Math.sin(t * 0.071 + 1.3);
-    const gust = Math.max(0, Math.sin(t * 0.9 + Math.sin(t * 0.31) * 2)) ** 3;
-    return Math.min(1, 0.2 + swell * 0.45 + gust * 0.6);
+  // How hard the wind blows on block (tileX, tileY) right now, signed (negative blows left):
+  // the world's wind with its gusts, less in sheltered places and none underground. `lag`
+  // (seconds) lets each thing feel the gusts a little before or after its neighbours.
+  windAt(tileX, tileY, lag = 0) {
+    const w = wind.direction * wind.strengthAt(gameClock.seconds() - lag, tileX);
+    return w ? w * exposureAt(this.world, tileX, tileY) : 0;
   }
 
-  // How far (in texels, at the plant's tip) the plant in column tileX is bent right now.
-  // Gusts roll across the land at WIND_SPEED, plants lean with the wind and flutter
-  // around that lean, each with its own speed and phase so nothing moves in lockstep.
-  windSwayAt(tileX) {
+  // How far (in texels, at the plant's tip) the plant at (tileX, tileY) is bent right now.
+  // Each plant has its own stiffness, its own timing in the gusts and its own flutter (speed
+  // and phase), so a meadow ripples rather than moving as one. Calm air leaves them still.
+  windSwayAt(tileX, tileY) {
+    const h = hash01(tileX, tileY);
+    const h2 = hash01(tileX + 7919, tileY);
+    const w = this.windAt(tileX, tileY, h * 1.2);
+    if (!w) return 0;
     const t = gameClock.seconds();
-    const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
-    const strength = this.windStrength(t - tileX / WIND_SPEED);
-    const h = ((tileX * 2654435761) >>> 0) / 4294967296;
-    const flutter = Math.sin(t * (2.6 + h * 1.8) + h * 40) + 0.45 * Math.sin(t * (6.3 + h * 2.5) + h * 17);
-    // A slight lean with the wind plus a back-and-forth flutter around it.
-    return dir * strength * (0.15 + 0.75 * flutter) * WIND_MAX_BEND;
+    const flutter = Math.sin(t * (2.2 + h * 2.4) + h * 40) + 0.5 * Math.sin(t * (5.1 + h2 * 3.5) + h2 * 17);
+    const stiffness = 0.7 + 0.6 * h2;
+    // Leans with the wind, and flutters more the harder it blows.
+    // Past a stiff breeze they whip over much further.
+    const whip = 1 + Math.max(0, Math.abs(w) - 0.5) * 1.2;
+    return w * stiffness * (0.5 + 0.5 * flutter * Math.min(1, Math.abs(w) * 1.5 + 0.3)) * WIND_MAX_BEND * whip;
   }
 
-  // Screen-pixel shift for the leaf block at (tileX, tileY). It follows the same gusts as
-  // the plants but varies smoothly across the canopy, so neighbouring leaves move almost
-  // together (no gaps) and a whole crown ripples as a gust passes.
+  // The tree a leaf belongs to: the nearest trunk standing on the ground within a few columns
+  // (its column and where it meets the ground), so every leaf of a tree follows the same
+  // trunk. Cached for the frame: leaves are many.
+  treeAt(tileX) {
+    const stamp = Math.floor(performance.now() / 50);
+    if (this._treeStamp !== stamp) {
+      this._treeStamp = stamp;
+      this._trees = new Map();
+    }
+    let tree = this._trees.get(tileX);
+    if (tree !== undefined) return tree;
+    const { world } = this;
+    tree = null;
+    for (let d = 0; d <= 6 && !tree; d++) {
+      for (const c of d ? [tileX - d, tileX + d] : [tileX]) {
+        if (!world.isChunkLoaded(world.chunkXFor(c))) continue;
+        const y = this.naturalSurfaceAt(c) - 1;
+        if (world.inBounds(c, y) && world.getBlockType(c, y)?.trunk && world.getCell(c, y).meta?.axis !== 'x') {
+          tree = { x: c, y };
+          break;
+        }
+      }
+    }
+    // No standing trunk near (a fallen tree's crown lying on the ground): sway as a tree
+    // standing here would. The rhythm drifts slowly from column to column, so the crown moves as one.
+    if (!tree && world.isChunkLoaded(world.chunkXFor(tileX))) tree = { x: tileX, y: this.naturalSurfaceAt(tileX) - 1, lying: true };
+    this._trees.set(tileX, tree);
+    return tree;
+  }
+
+  // Screen-pixel shift for the leaf block at (tileX, tileY). Leaves ride their tree's trunk:
+  // they move as far as the trunk does at their height, plus a ripple that runs up the crown
+  // with the wind. The ripple depends only on the row, so every leaf in a row moves together
+  // (nothing squeezes or opens gaps sideways), and it only shows up as the wind gets strong.
   leafSwayOffset(tileX, tileY, size) {
+    const tree = this.treeAt(tileX);
+    if (!tree) return 0;
+    const sway = this.trunkSwayAt(tree.x, tree.y);
+    if (!sway) return 0;
+    // A crown lying on the ground is low, so it's treated as a few blocks higher to still move.
+    const height = Math.max(0, tree.y + 1 - tileY - 0.5) + (tree.lying ? 3 : 0);
+    const k = Math.min(1.4, height / TRUNK_REF_HEIGHT);
+    const strength = Math.min(1, Math.abs(sway) / TRUNK_MAX_BEND);
     const t = gameClock.seconds();
-    const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
-    const strength = this.windStrength(t - tileX / WIND_SPEED);
-    const ripple = 0.65 + 0.35 * Math.sin(t * 1.9 - tileX * 0.35 + tileY * 0.45);
-    return Math.round(dir * strength * ripple * LEAF_MAX_SWAY * size / 16);
+    const wave = Math.sin(t * 2.2 + tileY * 0.45 + tree.x * (tree.lying ? 0.04 : 0.3)); // a steady rate: tying it to the wind multiplied by the game time would make it shake
+    const flutter = wave * strength * strength * LEAF_FLUTTER * Math.min(1, k + 0.3);
+    return Math.round(((sway * k * k + flutter) * size) / 16);
   }
 
-  // How far (texels) a trunk in column tileX leans at TRUNK_REF_HEIGHT: slow and stiff,
-  // following the same travelling gusts as the leaves above it.
-  trunkSwayAt(tileX) {
+  // How far (texels) a trunk at (tileX, tileY) leans at TRUNK_REF_HEIGHT: slow and stiff,
+  // each tree with its own rhythm.
+  trunkSwayAt(tileX, tileY) {
+    const w = this.windAt(tileX, tileY, treeLag(tileX));
+    if (!w) return 0;
     const t = gameClock.seconds();
-    const dir = Math.tanh(Math.sin(t * 0.021 + 0.7) * 4);
-    const strength = this.windStrength(t - tileX / WIND_SPEED);
-    const sway = 0.55 + 0.45 * Math.sin(t * 1.3 + tileX * 0.9);
-    return dir * strength * sway * TRUNK_MAX_BEND;
+    // Leans with the wind and swings back and forth around that lean, more as it gets windier.
+    const swing = Math.sin(t * (1.1 + 0.3 * Math.sin(tileX * 0.11)) + tileX * 0.1) + 0.35 * Math.sin(t * 2.3 + tileX * 0.17);
+    const sway = 0.3 + 0.7 * swing * Math.min(1, Math.abs(w) * 1.6 + 0.2);
+    return w * sway * TRUNK_MAX_BEND;
   }
 
   // Draws a standing log bent by the wind. Its height up the trunk (logs below it) sets
   // how far it moves, so the base stays rooted and the bend grows towards the top.
-  drawTrunk(texture, tileX, tileY, sx, sy, size, lightFactor) {
+  // Per-row sideways shift (screen px) of the standing trunk block at (tileX, tileY), or null
+  // when it isn't bent. Row 0 is the top of the block. The outline follows this too.
+  trunkOffsetFn(tileX, tileY, size) {
     const { world } = this;
+    const type = world.getBlockType(tileX, tileY);
+    const cell = world.getCell(tileX, tileY);
+    if (!type?.trunk || cell.meta?.axis === 'x' || cell.meta?.layer === 'bg') return null;
     let below = 0;
     while (below < 16 && world.inBounds(tileX, tileY + below + 1)) {
-      const cell = world.getCell(tileX, tileY + below + 1);
-      if (!this.registry.get(cell.id)?.trunk || cell.meta?.axis === 'x') break;
+      const c = world.getCell(tileX, tileY + below + 1);
+      if (!this.registry.get(c.id)?.trunk || c.meta?.axis === 'x') break;
       below++;
     }
-    const px = size / 16;
-    const sway = this.trunkSwayAt(tileX) * px;
-    const offsetAt = row => {
+    const sway = this.trunkSwayAt(tileX, tileY + below) * (size / 16);
+    const offsetAt = (row) => {
       const height = below + (16 - row) / 16;
       const k = Math.min(1.4, height / TRUNK_REF_HEIGHT);
       return Math.round(sway * k * k);
     };
+    return offsetAt(0) === 0 && offsetAt(15) === 0 ? null : offsetAt;
+  }
+
+  drawTrunk(texture, tileX, tileY, sx, sy, size, lightFactor) {
+    const offsetAt = this.trunkOffsetFn(tileX, tileY, size) || (() => 0);
     if (offsetAt(0) === 0) {
       this.drawBlockTexture(texture, sx, sy, size, lightFactor);
       return;
@@ -1982,7 +2756,7 @@ drawStars() {
     ctx.imageSmoothingEnabled = false;
     if (box.y > 0) ctx.drawImage(image, 0, 0, image.width, box.y, sx, sy, size, Math.round(box.y * scale));
     const bottom = box.y + box.h;
-    const offsetAt = row => {
+    const offsetAt = (row) => {
       // 0 at the base, 1 at the tip; curved so the bend grows towards the top like a stem.
       const height = (bottom - row) / box.h;
       return Math.round(sway * stiffness * px * Math.pow(height, 1.3));
@@ -1997,7 +2771,8 @@ drawStars() {
       ctx.drawImage(image, 0, row, image.width, end - row, sx + offset, y0, size, y1 - y0);
       row = end;
     }
-    if (bottom < image.height) ctx.drawImage(image, 0, bottom, image.width, image.height - bottom, sx, Math.round(sy + bottom * scale), size, size - Math.round(bottom * scale));
+    if (bottom < image.height)
+      ctx.drawImage(image, 0, bottom, image.width, image.height - bottom, sx, Math.round(sy + bottom * scale), size, size - Math.round(bottom * scale));
   }
 
   // Draws a rock/pebble scaled by meta.size, slid sideways by meta.offset, mirrored by meta.flip, resting on the block's floor.
@@ -2026,24 +2801,32 @@ drawStars() {
     }
   }
 
+  // Kept per texture object: tinted canvases have no src, so a src key would mix them up.
   getOpaqueBounds(texture) {
-    const key = `bounds|${texture.src}`;
-    if (this._imageCache.has(key)) return this._imageCache.get(key);
+    this._boundsCache ??= new WeakMap();
+    if (this._boundsCache.has(texture)) return this._boundsCache.get(texture);
     if (!isTextureReady(texture)) return null;
     const c = document.createElement('canvas');
-    c.width = texture.width; c.height = texture.height;
+    c.width = texture.width;
+    c.height = texture.height;
     const cctx = c.getContext('2d');
     cctx.drawImage(texture, 0, 0);
     const d = cctx.getImageData(0, 0, c.width, c.height).data;
-    let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1;
+    let x0 = c.width,
+      y0 = c.height,
+      x1 = -1,
+      y1 = -1;
     for (let y = 0; y < c.height; y++) {
       for (let x = 0; x < c.width; x++) {
         if (d[(y * c.width + x) * 4 + 3] === 0) continue;
-        x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y);
       }
     }
     const box = x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
-    this._imageCache.set(key, box);
+    this._boundsCache.set(texture, box);
     return box;
   }
 
@@ -2071,7 +2854,8 @@ drawStars() {
     let avg = this._imageCache.get(key);
     if (avg) return avg;
     const c = document.createElement('canvas');
-    c.width = texture.width; c.height = texture.height;
+    c.width = texture.width;
+    c.height = texture.height;
     const cctx = c.getContext('2d');
     cctx.drawImage(texture, 0, 0);
     const d = cctx.getImageData(0, 0, c.width, c.height).data;
@@ -2079,9 +2863,12 @@ drawStars() {
     let n = 0;
     for (let i = 0; i < d.length; i += 4) {
       if (!isGreenPixel(d, i)) continue;
-      sum[0] += d[i]; sum[1] += d[i + 1]; sum[2] += d[i + 2]; n++;
+      sum[0] += d[i];
+      sum[1] += d[i + 1];
+      sum[2] += d[i + 2];
+      n++;
     }
-    avg = n ? sum.map(v => Math.round(v / n)) : [128, 128, 128];
+    avg = n ? sum.map((v) => Math.round(v / n)) : [128, 128, 128];
     this._imageCache.set(key, avg);
     return avg;
   }
@@ -2123,13 +2910,15 @@ drawStars() {
     if (!isTextureReady(texture)) return null;
 
     const src = document.createElement('canvas');
-    src.width = 16; src.height = 16;
+    src.width = 16;
+    src.height = 16;
     const sctx = src.getContext('2d');
     sctx.drawImage(texture, 0, 0, 16, 16);
     const pixels = sctx.getImageData(0, 0, 16, 16).data;
 
     fringe = document.createElement('canvas');
-    fringe.width = 16; fringe.height = 16;
+    fringe.width = 16;
+    fringe.height = 16;
     fringe.src = key;
     const fctx = fringe.getContext('2d');
     const out = fctx.createImageData(16, 16);
@@ -2147,11 +2936,29 @@ drawStars() {
       for (let d = 0; d < depth; d++) {
         // (fx, fy) is the fringe pixel in the neighbour tile; (tx, ty) the leaf texel it copies.
         let fx, fy, tx, ty;
-        if (side === 'top') { fx = i; fy = 15 - d; tx = i; ty = d; }
-        else if (side === 'bottom') { fx = i; fy = d; tx = i; ty = 15 - d; }
-        else if (side === 'left') { fx = 15 - d; fy = i; tx = d; ty = i; }
-        else { fx = d; fy = i; tx = 15 - d; ty = i; }
-        const si = (ty * 16 + tx) * 4, oi = (fy * 16 + fx) * 4;
+        if (side === 'top') {
+          fx = i;
+          fy = 15 - d;
+          tx = i;
+          ty = d;
+        } else if (side === 'bottom') {
+          fx = i;
+          fy = d;
+          tx = i;
+          ty = 15 - d;
+        } else if (side === 'left') {
+          fx = 15 - d;
+          fy = i;
+          tx = d;
+          ty = i;
+        } else {
+          fx = d;
+          fy = i;
+          tx = 15 - d;
+          ty = i;
+        }
+        const si = (ty * 16 + tx) * 4,
+          oi = (fy * 16 + fx) * 4;
         if (pixels[si + 3] === 0) continue;
         out.data[oi] = pixels[si];
         out.data[oi + 1] = pixels[si + 1];
@@ -2165,7 +2972,8 @@ drawStars() {
   }
 
   getTintedTexture(texture, quant) {
-    const cacheKey = `${texture.src}|${quant}`;
+    const key = texture.src || texture._cacheId || (texture._cacheId = `tex_${Math.random()}`);
+    const cacheKey = `${key}|${quant}`;
     let tinted = this._imageCache.get(cacheKey);
     if (!tinted) {
       tinted = document.createElement('canvas');
@@ -2186,7 +2994,6 @@ drawStars() {
     const { ctx } = this;
     const quant = Math.max(MIN_BRIGHTNESS, Math.min(1, Math.round(lightFactor * 50) / 50));
     const image = quant >= 1 ? texture : this.getTintedTexture(texture, quant);
-    ctx.imageSmoothingEnabled = false;
     if (rotation !== 0) {
       ctx.save();
       ctx.translate(x + size / 2, y + size / 2);
@@ -2237,7 +3044,10 @@ drawStars() {
     const { ctx } = this;
     const px = size / 16;
     const frame = Math.floor(performance.now() / 170);
-    const hash = n => { n = Math.imul(n ^ (n >>> 13), 0x5bd1e995); return ((n ^ (n >>> 15)) >>> 0) / 4294967296; };
+    const hash = (n) => {
+      n = Math.imul(n ^ (n >>> 13), 0x5bd1e995);
+      return ((n ^ (n >>> 15)) >>> 0) / 4294967296;
+    };
     const RAMP = ['#7a1d0e', '#c2381a', '#f06a1c', '#ffa62b', '#ffd85a', '#fff6c4'];
     ctx.save();
     for (let x = 4; x <= 11; x++) {
@@ -2282,20 +3092,18 @@ drawStars() {
       const t = Math.max(0, (gameClock.now() - meta.fellAt) / (meta.slideMs || FALL_SLIDE_MS));
       if (t < 1) sy -= Math.round((1 - t) * size);
     }
-    
+
+    // Drawn at full brightness: the light is laid over the whole world layer afterwards.
     const isLightSource = type.lightLevel > 0;
-    const finalLightFactor = !isLightSource && (!type.solid || (type.shape && type.shape !== 'full')) && this.isOpenSky(tileX, tileY)
-      ? this.lightFactorAt(tileX, tileY, true)
-      : 1.0;
 
     // Blocks with several looks (bush sizes, shells...) pick a texture from their meta.
     const textureId = type.variants ? `${type.id}_${meta?.[type.variants.key] ?? type.variants.count}` : type.id;
     if (type.id === 'double_slab') {
-      const shade = meta?.layer === 'bg' ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor;
+      const shade = meta?.layer === 'bg' ? BACKGROUND_WALL_SHADE : 1;
       const half = Math.floor(size / 2);
       // A grass slab under another slab is covered, so it shows its bare soil.
       // Grass slab halves show their bare soil; grass goes on as an overlay like other grass.
-      const halfId = (id) => this.registry.get(id)?.grassy ? bareIdOf(id) : id;
+      const halfId = (id) => (this.registry.get(id)?.grassy ? bareIdOf(id) : id);
       const bottomId = halfId(meta?.bottom);
       const topId = halfId(meta?.top);
       const bottom = bottomId && this.textures[bottomId];
@@ -2326,10 +3134,10 @@ drawStars() {
         ctx.save();
         ctx.translate(flip ? sx + size : sx, sy - shiftUp);
         if (flip) ctx.scale(-1, 1);
-        this.drawBlockTexture(soil, 0, 0, size, finalLightFactor);
+        this.drawBlockTexture(soil, 0, 0, size);
         ctx.restore();
         const overlayId = this.grassOverlay(tileX, tileY, meta);
-        if (overlayId) this.drawBlockTexture(this.biomeTexture(overlayId, this.textures[overlayId], tileX), sx, sy, size, finalLightFactor);
+        if (overlayId) this.drawBlockTexture(this.biomeTexture(overlayId, this.textures[overlayId], tileX), sx, sy, size);
         return;
       }
     }
@@ -2338,13 +3146,22 @@ drawStars() {
     if (type.id === 'water') {
       return;
     }
-    if ((type.id === 'rock' || type.id === 'pebble') && texture) {
-      this.drawRock(texture, sx, sy, size, meta, finalLightFactor);
+    if (
+      (type.isRock ||
+        type.id === 'rock' ||
+        type.id === 'pebble' ||
+        type.id === 'lunar_rock_decor' ||
+        type.id === 'lunar_pebble' ||
+        type.id === 'mars_rock_decor' ||
+        type.id === 'mars_pebble') &&
+      texture
+    ) {
+      this.drawRock(texture, sx, sy, size, meta, 1);
       return;
     }
     if (type.leaves && texture) {
       const isBg = meta?.layer === 'bg';
-      const leafLight = isBg ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor;
+      const leafLight = (isBg ? BACKGROUND_WALL_SHADE : 1) * leafShade(tileX, tileY);
       const lx = sx + this.leafSwayOffset(tileX, tileY, size);
       // Solid shaded foliage behind the holey leaf texture, so canopies don't look see-through.
       if (!polishOn('leaves')) {
@@ -2360,23 +3177,25 @@ drawStars() {
         const c = world.getCell(x, y);
         return !!t && (t.solid || !!t.leaves || (c?.meta?.bgId && this.registry.get(c.meta.bgId)?.leaves) || t.id.endsWith('_log'));
       };
-      const inset = Math.round(size * 4 / 16);
-      const l0 = leafy(tileX - 1, tileY) ? 0 : inset, r0 = leafy(tileX + 1, tileY) ? 0 : inset;
-      const t0 = leafy(tileX, tileY - 1) ? 0 : inset, b0 = leafy(tileX, tileY + 1) ? 0 : inset;
+      const inset = Math.round((size * 4) / 16);
+      const l0 = leafy(tileX - 1, tileY) ? 0 : inset,
+        r0 = leafy(tileX + 1, tileY) ? 0 : inset;
+      const t0 = leafy(tileX, tileY - 1) ? 0 : inset,
+        b0 = leafy(tileX, tileY + 1) ? 0 : inset;
       ctx.fillRect(lx + l0, sy + t0, size - l0 - r0, size - t0 - b0);
       this.drawBlockTexture(texture, lx, sy, size, leafLight);
       return;
     }
     if (type.windSway && texture && meta?.layer !== 'bg') {
-      this.drawSwaying(texture, sx, sy, size, finalLightFactor, this.windSwayAt(tileX), type.windSway);
+      this.drawSwaying(texture, sx, sy, size, 1, this.windSwayAt(tileX, tileY), type.windSway);
       return;
     }
     if (texture && meta?.axis !== 'x' && meta?.layer !== 'bg' && type.trunk) {
-      this.drawTrunk(texture, tileX, tileY, sx, sy, size, finalLightFactor);
+      this.drawTrunk(texture, tileX, tileY, sx, sy, size, 1);
       // Inside the crown: leaves in front of the trunk.
       const leafId = keptLeafCover(world, tileX, tileY);
       const leafTexture = leafId && this.biomeTexture(leafId, this.textures[leafId], tileX);
-      if (leafTexture) this.drawBlockTexture(leafTexture, sx + this.leafSwayOffset(tileX, tileY, size), sy, size, finalLightFactor);
+      if (leafTexture) this.drawBlockTexture(leafTexture, sx + this.leafSwayOffset(tileX, tileY, size), sy, size, leafShade(tileX, tileY));
       return;
     }
     if (meta?.axis === 'x' && texture) {
@@ -2384,7 +3203,7 @@ drawStars() {
       ctx.save();
       ctx.translate(sx + size / 2, sy + size / 2);
       ctx.rotate(Math.PI / 2);
-      this.drawBlockTexture(texture, -size / 2, -size / 2, size, finalLightFactor);
+      this.drawBlockTexture(texture, -size / 2, -size / 2, size);
       ctx.restore();
       return;
     }
@@ -2394,20 +3213,20 @@ drawStars() {
       const pivotX = dir === 1 ? sx + size * (8 / 16 - 7 / 16) : sx + size - size * (10 / 16 - 8 / 16);
       ctx.translate(pivotX, sy + size * 0.85);
       ctx.rotate(dir * WALL_TORCH_ANGLE);
-      ctx.drawImage(texture, -size * 8 / 16, -size, size, size);
+      ctx.drawImage(texture, (-size * 8) / 16, -size, size, size);
       ctx.restore();
       return;
     }
-    
+
     if (type.climbable && texture) {
       if (meta?.wall === 'right') {
         ctx.save();
         ctx.translate(sx + size, sy);
         ctx.scale(-1, 1);
-        this.drawBlockTexture(texture, 0, 0, size, finalLightFactor);
+        this.drawBlockTexture(texture, 0, 0, size);
         ctx.restore();
       } else {
-        this.drawBlockTexture(texture, sx, sy, size, finalLightFactor);
+        this.drawBlockTexture(texture, sx, sy, size);
       }
       return;
     }
@@ -2419,7 +3238,7 @@ drawStars() {
 
     // An open trapdoor stands on end against one side of its cell.
     if (type.kind === 'trapdoor' && meta?.open && texture) {
-      const half = Math.floor(size * (type.thickness ?? 8) / 16);
+      const half = Math.floor((size * (type.thickness ?? 8)) / 16);
       ctx.save();
       // Rotate the hatch (drawn along the bottom of its texture) a quarter turn.
       if (meta.hinge === 'left') {
@@ -2431,7 +3250,7 @@ drawStars() {
         ctx.rotate(-Math.PI / 2);
         ctx.translate(0, -size + half);
       }
-      this.drawBlockTexture(texture, 0, 0, size, finalLightFactor);
+      this.drawBlockTexture(texture, 0, 0, size);
       ctx.restore();
       return;
     }
@@ -2439,20 +3258,45 @@ drawStars() {
     if (texture || chestTexture) {
       const drawTexture = chestTexture || texture;
       const flip = type.shape === 'stairs' && meta?.orient === 'left';
-      const shiftUp = type.shape === 'slab' && meta?.slabPos === 'top' ? Math.floor(size * (16 - (type.thickness ?? 8)) / 16) : 0;
+      const shiftUp = type.shape === 'slab' && meta?.slabPos === 'top' ? Math.floor((size * (16 - (type.thickness ?? 8))) / 16) : 0;
       const isBg = meta?.layer === 'bg';
 
-      ctx.save();
-      ctx.translate(flip ? sx + size : sx, sy - shiftUp);
-      if (flip) ctx.scale(-1, 1);
-      this.drawBlockTexture(drawTexture, 0, 0, size, isBg ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor);
-      ctx.restore();
+      if (flip || shiftUp !== 0) {
+        ctx.save();
+        ctx.translate(flip ? sx + size : sx, sy - shiftUp);
+        if (flip) ctx.scale(-1, 1);
+        this.drawBlockTexture(drawTexture, 0, 0, size, isBg ? BACKGROUND_WALL_SHADE : 1);
+        ctx.restore();
+      } else {
+        this.drawBlockTexture(drawTexture, sx, sy, size, isBg ? BACKGROUND_WALL_SHADE : 1);
+      }
       if (type.id === 'furnace' && meta?.burn > 0 && !isBg) this.drawFurnaceFire(tileX, sx, sy, size);
+      if (!isBg && (type.rockOverlay || type.id === 'lunar_rock' || type.id === 'lunarstone' || type.id === 'mars_sandstone') && polishOn('rockOverlay')) {
+        const u = world.getBlockType(tileX, tileY - 1);
+        const d = world.getBlockType(tileX, tileY + 1);
+        const l = world.getBlockType(tileX - 1, tileY);
+        const r = world.getBlockType(tileX + 1, tileY);
+        const surrounded =
+          u?.solid &&
+          (!u.shape || u.shape === 'full') &&
+          d?.solid &&
+          (!d.shape || d.shape === 'full') &&
+          l?.solid &&
+          (!l.shape || l.shape === 'full') &&
+          r?.solid &&
+          (!r.shape || r.shape === 'full');
+        if (!surrounded) {
+          const overlayId = this.rockOverlay(tileX, tileY, meta);
+          if (overlayId && this.textures[overlayId]) {
+            this.drawBlockTexture(this.textures[overlayId], sx, sy, size);
+          }
+        }
+      }
       return;
     }
 
     const isBackground = meta?.layer === 'bg' && !isLightSource;
-    const c = darkenHex(type.color || '#999999', isBackground ? finalLightFactor * BACKGROUND_WALL_SHADE : finalLightFactor);
+    const c = darkenHex(type.color || '#999999', isBackground ? BACKGROUND_WALL_SHADE : 1);
 
     ctx.save();
     ctx.translate(sx, sy);
@@ -2493,18 +3337,16 @@ drawStars() {
       ctx.strokeStyle = '#00000020';
       ctx.strokeRect(0.5, 0.5, size - 1, size - 1);
     } else if (type.shape === 'torch') {
-      const torchBrightness = 1.0;
-      
       const flameColor = '#ff6b35';
       ctx.fillStyle = flameColor;
       ctx.beginPath();
       ctx.arc(size / 2, size / 2, size / 4, 0, Math.PI * 2);
       ctx.fill();
-      
+
       const handleColor = '#8b4513';
       ctx.fillStyle = handleColor;
       ctx.fillRect(size / 2 - 2, size / 2 + size / 4, 4, size / 3);
-      
+
       ctx.save();
       ctx.globalAlpha = 0.3;
       const glowColor = '#ffaa00';
@@ -2522,11 +3364,14 @@ drawStars() {
   // player drawing at them (their aim stands in for the mouse, their held item for the
   // hotbar), then a name tag above their head. Returns who was drawn.
   drawRemotePlayers() {
-    const mp = typeof window !== 'undefined' ? window.multiplayer : null;
-    if (!mp?.remotePlayers.size) { this.pruneNameTags([]); return []; }
+    const mp = this.multiplayer;
+    if (!mp?.remotePlayers.size) {
+      this.pruneNameTags([]);
+      return [];
+    }
     const saved = { player: this.player, input: this.input, inventory: this.inventory, getUI: this.getUI, breaker: this.breaker };
     const drawn = [];
-    const { camera, ctx } = this;
+    const { camera } = this;
     for (const rp of mp.remotePlayers.values()) {
       const sx = camera.worldToScreenX(rp.x);
       if (sx < -200 || sx > this.canvas.width + 200) continue;
@@ -2544,7 +3389,7 @@ drawStars() {
       drawn.push(rp);
       // Blocks between you and them, centre to centre.
       const me = saved.player;
-      const dist = me ? Math.hypot((rp.x + rp.width / 2) - (me.x + me.width / 2), (rp.y + rp.height / 2) - (me.y + me.height / 2)) / TILE_SIZE : 0;
+      const dist = me ? Math.hypot(rp.x + rp.width / 2 - (me.x + me.width / 2), rp.y + rp.height / 2 - (me.y + me.height / 2)) / TILE_SIZE : 0;
       this.placeNameTag(rp, camera.worldToScreenX(rp.x + rp.width / 2), camera.worldToScreenY(rp.y), dist);
     }
     this.pruneNameTags(drawn);
@@ -2589,9 +3434,12 @@ drawStars() {
 
   pruneNameTags(drawn) {
     if (!this.nameTags?.size) return;
-    const keep = new Set(drawn.map(rp => rp.id));
+    const keep = new Set(drawn.map((rp) => rp.id));
     for (const [id, el] of this.nameTags) {
-      if (!keep.has(id)) { el.remove(); this.nameTags.delete(id); }
+      if (!keep.has(id)) {
+        el.remove();
+        this.nameTags.delete(id);
+      }
     }
   }
 
@@ -2600,13 +3448,19 @@ drawStars() {
     const since = this.player?.hurtAt ? performance.now() - this.player.hurtAt : Infinity;
     if (since > 500) return;
     const { ctx, canvas } = this;
+    // The gradient is made once per screen size at full strength and faded with globalAlpha.
+    const key = `${canvas.width}x${canvas.height}`;
+    if (this._hurtVignetteKey !== key) {
+      const r = Math.hypot(canvas.width, canvas.height) / 2;
+      this._hurtVignette = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, r * 0.45, canvas.width / 2, canvas.height / 2, r);
+      this._hurtVignette.addColorStop(0, 'rgba(255, 0, 0, 0)');
+      this._hurtVignette.addColorStop(1, 'rgba(200, 0, 0, 0.5)');
+      this._hurtVignetteKey = key;
+    }
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    const r = Math.hypot(canvas.width, canvas.height) / 2;
-    const g = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, r * 0.45, canvas.width / 2, canvas.height / 2, r);
-    g.addColorStop(0, 'rgba(255, 0, 0, 0)');
-    g.addColorStop(1, `rgba(200, 0, 0, ${0.5 * (1 - since / 500)})`);
-    ctx.fillStyle = g;
+    ctx.globalAlpha = 1 - since / 500;
+    ctx.fillStyle = this._hurtVignette;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
   }
@@ -2627,19 +3481,28 @@ drawStars() {
   }
 
   drawPlayer() {
-    const { ctx, camera, player, world } = this;
+    const { ctx, camera, player } = this;
     const centerX = Math.round(camera.worldToScreenX(player.x + player.width / 2));
-    
-    const playerTileX = Math.floor((player.x + player.width / 2) / TILE_SIZE);
-    const playerTileY = Math.floor((player.y + player.height / 2) / TILE_SIZE);
-    
-    const combinedLightFactor = this.lightFactorAt(playerTileX, playerTileY, false);
+
+    // At full brightness: the light is laid over the players' layer afterwards.
     ctx.save();
-    if (combinedLightFactor < 1) ctx.filter = `brightness(${combinedLightFactor.toFixed(2)})`;
-    
+
     // The player's chosen skin: an imported PNG, a built-in texture, or Steve.
-    const steveSkin = player.skinImage || this.textures[player.skin] || this.textures['steve'];
-    
+    if (player.dummy && !this.textures['dummy'] && !this.missingTextures?.has('dummy')) {
+      const img = new Image();
+      img.onload = () => {
+        this.textures['dummy'] = img;
+      };
+      img.onerror = () => {
+        this.missingTextures?.add('dummy');
+      };
+      img.src = 'assets/textures/dummy.png';
+    }
+    const steveSkin =
+      (player.dummy ? this.textures['dummy'] || player.skinImage || this.textures[player.skin] : player.skinImage || this.textures[player.skin]) ||
+      this.textures['dummy'] ||
+      this.textures['steve'];
+
     const headSize = 8;
     const torsoWidth = 4;
     const torsoHeight = 12;
@@ -2647,7 +3510,7 @@ drawStars() {
     const armHeight = 12;
     const legWidth = 4;
     const legHeight = 12;
-    
+
     // The player is drawn at the camera's zoom like everything else (3 = normal zoom).
     const scale = camera.zoom;
     const scaledHead = headSize * scale;
@@ -2657,9 +3520,9 @@ drawStars() {
     const scaledArmHeight = armHeight * scale;
     const scaledLegWidth = legWidth * scale;
     const scaledLegHeight = legHeight * scale;
-    
+
     const centerY = Math.round(camera.worldToScreenY(player.y + player.height));
-    
+
     const torsoX = centerX - scaledTorsoWidth / 2;
     const crouchLean = player.crouching ? CROUCH_LEAN : 0;
     const hipShift = player.crouching ? scaledLegHeight * CROUCH_HIP_BACK : 0;
@@ -2681,26 +3544,19 @@ drawStars() {
 
     const headX = centerX - scaledHead / 2;
     const headY = torsoY - scaledHead;
-    
+
     const input = this.input;
-    let mouseWorldX = player.x + player.width / 2 + 100;
-    let mouseWorldY = player.y + player.height / 2;
-    let facingRight = true;
-    
-    if (input && input.mouse) {
-      mouseWorldX = this.camera.screenToWorldX(input.mouse.x);
-      mouseWorldY = this.camera.screenToWorldY(input.mouse.y);
-      facingRight = mouseWorldX > (player.x + player.width / 2);
-    }
-    
+    // Facing the mouse (or the aim, for other players).
+    const facingRight = !(input && input.mouse) || this.camera.screenToWorldX(input.mouse.x) > player.x + player.width / 2;
+
     if (input && input.mouse) {
       const headCenterX = headX + scaledHead / 2;
       const headCenterY = headY + scaledHead / 2;
       const dx = input.mouse.x - headCenterX;
       const dy = input.mouse.y - headCenterY;
-      
+
       const headAngle = Math.atan2(dy, dx);
-      
+
       ctx.save();
       if (!facingRight) {
         ctx.scale(-1, 1);
@@ -2709,7 +3565,7 @@ drawStars() {
       headLean();
       ctx.translate(headCenterX, headY + scaledHead);
       ctx.rotate(facingRight ? headAngle : Math.PI - headAngle);
-      drawSkinPart(0, 8, headSize, headSize, -scaledHead/2, -scaledHead, scaledHead, scaledHead);
+      drawSkinPart(0, 8, headSize, headSize, -scaledHead / 2, -scaledHead, scaledHead, scaledHead);
       ctx.restore();
     } else {
       ctx.save();
@@ -2721,15 +3577,15 @@ drawStars() {
       drawSkinPart(0, 8, headSize, headSize, headX, headY, scaledHead, scaledHead);
       ctx.restore();
     }
-    
-     const walkSpeed = 1.2;
-     let effectiveSpeedFactor = player.walkingSpeedFactor;
-     if (player.creativeFlying) {
-       effectiveSpeedFactor = Math.min(0.8, player.walkingSpeedFactor);
-     }
-     const armSwing = Math.sin(player.walkCycle) * walkSpeed * effectiveSpeedFactor;
-     const legSwing = Math.sin(player.walkCycle + Math.PI) * walkSpeed * effectiveSpeedFactor;
-    
+
+    const walkSpeed = 1.2;
+    let effectiveSpeedFactor = player.walkingSpeedFactor;
+    if (player.creativeFlying) {
+      effectiveSpeedFactor = Math.min(0.8, player.walkingSpeedFactor);
+    }
+    const armSwing = Math.sin(player.walkCycle) * walkSpeed * effectiveSpeedFactor;
+    const legSwing = Math.sin(player.walkCycle + Math.PI) * walkSpeed * effectiveSpeedFactor;
+
     function drawSkinPart(sx, sy, sw, sh, dx, dy, dw, dh) {
       if (steveSkin) {
         ctx.drawImage(steveSkin, sx, sy, sw, sh, dx, dy, dw, dh);
@@ -2744,26 +3600,26 @@ drawStars() {
       ctx.scale(-1, 1);
       ctx.translate(-centerX * 2, 0);
     }
-    
+
     ctx.save();
     lean();
-    ctx.translate(torsoX + scaledTorsoWidth/2, torsoY);
+    ctx.translate(torsoX + scaledTorsoWidth / 2, torsoY);
     ctx.rotate(-armSwing);
-    drawSkinPart(40, 20, armWidth, armHeight, -scaledArmWidth/2, 0, scaledArmWidth, scaledArmHeight);
+    drawSkinPart(40, 20, armWidth, armHeight, -scaledArmWidth / 2, 0, scaledArmWidth, scaledArmHeight);
     ctx.restore();
-    
+
     ctx.save();
     ctx.translate(hipX - hipShift, hipY);
     ctx.rotate(-legSwing);
-    drawSkinPart(4, 20, legWidth, legHeight, -scaledLegWidth/2, 0, scaledLegWidth, scaledLegHeight);
+    drawSkinPart(4, 20, legWidth, legHeight, -scaledLegWidth / 2, 0, scaledLegWidth, scaledLegHeight);
     ctx.restore();
-    
+
     ctx.save();
     ctx.translate(hipX - hipShift, hipY);
     ctx.rotate(legSwing);
-    drawSkinPart(8, 20, legWidth, legHeight, -scaledLegWidth/2, 0, scaledLegWidth, scaledLegHeight);
+    drawSkinPart(8, 20, legWidth, legHeight, -scaledLegWidth / 2, 0, scaledLegWidth, scaledLegHeight);
     ctx.restore();
-    
+
     ctx.save();
     lean();
     drawSkinPart(32, 20, torsoWidth, torsoHeight, torsoX, torsoY, scaledTorsoWidth, scaledTorsoHeight);
@@ -2776,7 +3632,7 @@ drawStars() {
       const aim = Math.atan2(lookDy, lookDx) - Math.PI / 2;
       rightArmAngle = HELD_ARM_ANGLE + (aim - HELD_ARM_ANGLE) * HELD_ARM_LOOK + armSwing * HELD_ARM_WALK;
     }
-    
+
     const mining = this.breaker?.state?.active || (input.mouse.leftDown && !this.getUI?.()?.inventoryOpen);
     if (player.swingingArm > 0 || mining) {
       const shoulderScreenX = centerX;
@@ -2788,7 +3644,7 @@ drawStars() {
       if (mining) {
         swingMovement = Math.sin(performance.now() * MINE_BOB_SPEED) * MINE_BOB_AMOUNT;
       }
-      
+
       if (facingRight) {
         rightArmAngle = armAngle + swingMovement;
       } else {
@@ -2797,7 +3653,7 @@ drawStars() {
         rightArmAngle = flippedArmAngle + swingMovement;
       }
     }
-    
+
     const action = player.armAction && ARM_ACTIONS[player.armAction.type];
     if (action) {
       const t = (performance.now() - player.armAction.start) / action.duration;
@@ -2805,14 +3661,14 @@ drawStars() {
       else rightArmAngle += action.curve(t);
     }
 
-    const armPivotX = torsoX + scaledTorsoWidth/2;
+    const armPivotX = torsoX + scaledTorsoWidth / 2;
     const armPivotY = torsoY + scaledTorsoHeight * 0.15;
     const armTopOffset = -scaledTorsoHeight * 0.15;
     ctx.save();
     lean();
     ctx.translate(armPivotX, armPivotY);
     ctx.rotate(rightArmAngle);
-    drawSkinPart(44, 20, armWidth, armHeight, -scaledArmWidth/2, armTopOffset, scaledArmWidth, scaledArmHeight);
+    drawSkinPart(44, 20, armWidth, armHeight, -scaledArmWidth / 2, armTopOffset, scaledArmWidth, scaledArmHeight);
     ctx.restore();
 
     ctx.save();
@@ -2830,114 +3686,83 @@ drawStars() {
     ctx.restore();
   }
 
-drawHeldItem(pose = null) {
-      const { ctx, camera, player, inventory, input } = this;
-      const ui = this.getUI?.() ?? {};
-      const selectedIndex = Number.isInteger(ui.selectedIndex) ? ui.selectedIndex : 0;
-      
-      let currentInventory = inventory;
-      if (!currentInventory && typeof window !== 'undefined' && window.inventory) {
-        currentInventory = window.inventory;
-      }
-      
-      if (!currentInventory) {
-        return;
-      }
-      
-      this.inventory = currentInventory;
-      
-      if (typeof currentInventory.getSlot !== 'function') {
-        return;
-      }
-      
-      const mouseWorldX = camera.screenToWorldX(input.mouse.x);
-      const mouseWorldY = camera.screenToWorldY(input.mouse.y);
-      player.updateMousePosition(mouseWorldX, mouseWorldY);
-      
-      const selectedSlot = currentInventory.getSlot(selectedIndex);
-      if (!selectedSlot) {
-        return;
-      }
-     
-     const playerCenterX = player.x + player.width / 2;
-     const shoulderY = player.y + player.height * 0.3;
-     const facingRight = mouseWorldX >= playerCenterX;
-      const handX = playerCenterX + (facingRight ? 28 : -28);
-      const handY = player.y + player.height * 0.48 + Math.sin(player.walkCycle || 0) * 2;
-     const angle = pose?.angle ?? (facingRight ? 0 : Math.PI);
-     
-      let textureId = null;
-      
-      if (selectedSlot.type === 'block') {
-        textureId = selectedSlot.blockId;
-      } else if (selectedSlot.type === 'item') {
-        textureId = selectedSlot.itemId;
-      }
-      
-      const isTool = /(_(pickaxe|axe|shovel|sword|hoe)|^stick)$/.test(textureId || '');
-      const baseSize = Math.round(8 * camera.zoom);
-      const itemSize = isTool ? Math.round(baseSize * 1.75) : baseSize;
-      
-      ctx.save();
-      
-      const combinedLightFactor = 1;
-      ctx.globalAlpha = 1.0;
-      
-      if (textureId && this.textures[textureId]) {
-        if (pose) {
-          const handDist = pose.armTopOffset + pose.armLength - baseSize * 0.45 + 10 * this.camera.zoom / 3;
-          // Rotate with the arm; tools are gripped near the bottom of their handle.
-          if (isTool) {
-            const toolOffset = itemSize * (TOOL_GRIP_OFFSETS[textureId.split('_').pop()] ?? 0.3);
-            ctx.translate(pose.pivotX, pose.pivotY);
-            ctx.rotate(pose.angle);
-            ctx.translate(0, handDist - 8);
-            ctx.rotate(TOOL_GRIP_ANGLE);
-            this.drawBlockTexture(this.biomeTexture(textureId, this.textures[textureId], Math.floor((player.x + player.width / 2) / TILE_SIZE)), Math.round(toolOffset - itemSize/2), Math.round(-toolOffset - itemSize/2), itemSize, combinedLightFactor);
-          } else {
-            const screenX = Math.round(pose.pivotX - handDist * Math.sin(pose.angle));
-            const screenY = Math.round(pose.pivotY + handDist * Math.cos(pose.angle) - 8);
-            this.drawBlockTexture(this.biomeTexture(textureId, this.textures[textureId], Math.floor((player.x + player.width / 2) / TILE_SIZE)), screenX - itemSize/2, screenY - itemSize/2, itemSize, combinedLightFactor);
-          }
+  drawHeldItem(pose = null) {
+    const { ctx, camera, player, inventory, input } = this;
+    const ui = this.getUI?.() ?? {};
+    const selectedIndex = Number.isInteger(ui.selectedIndex) ? ui.selectedIndex : 0;
+
+    const currentInventory = inventory;
+    if (!currentInventory || typeof currentInventory.getSlot !== 'function') return;
+
+    const mouseWorldX = camera.screenToWorldX(input.mouse.x);
+    const mouseWorldY = camera.screenToWorldY(input.mouse.y);
+    player.updateMousePosition(mouseWorldX, mouseWorldY);
+
+    const selectedSlot = currentInventory.getSlot(selectedIndex);
+    if (!selectedSlot) {
+      return;
+    }
+
+    const playerCenterX = player.x + player.width / 2;
+    const facingRight = mouseWorldX >= playerCenterX;
+    const handX = playerCenterX + (facingRight ? 28 : -28);
+    const handY = player.y + player.height * 0.48 + Math.sin(player.walkCycle || 0) * 2;
+
+    let textureId = null;
+
+    if (selectedSlot.type === 'block') {
+      textureId = selectedSlot.blockId;
+    } else if (selectedSlot.type === 'item') {
+      textureId = selectedSlot.itemId;
+    }
+
+    const isTool = /(_(pickaxe|axe|shovel|sword|hoe)|^stick)$/.test(textureId || '');
+    const baseSize = Math.round(8 * camera.zoom);
+    const itemSize = isTool ? Math.round(baseSize * 1.75) : baseSize;
+
+    ctx.save();
+
+    const combinedLightFactor = 1;
+    ctx.globalAlpha = 1.0;
+
+    if (textureId && this.textures[textureId]) {
+      const tex = this.biomeTexture(textureId, this.textures[textureId], Math.floor((player.x + player.width / 2) / TILE_SIZE));
+      if (pose) {
+        const handDist = pose.armTopOffset + pose.armLength - baseSize * 0.45 + (10 * this.camera.zoom) / 3;
+        // Rotate with the arm; tools are gripped near the bottom of their handle.
+        if (isTool) {
+          const toolOffset = itemSize * (TOOL_GRIP_OFFSETS[textureId.split('_').pop()] ?? 0.3);
+          ctx.translate(pose.pivotX, pose.pivotY);
+          ctx.rotate(pose.angle);
+          ctx.translate(0, handDist - 8);
+          ctx.rotate(TOOL_GRIP_ANGLE);
+          this.drawBlockTexture(tex, Math.round(toolOffset - itemSize / 2), Math.round(-toolOffset - itemSize / 2), itemSize, combinedLightFactor);
         } else {
-          const screenX = Math.round(camera.worldToScreenX(handX));
-          const screenY = Math.round(camera.worldToScreenY(handY));
-          this.drawBlockTexture(this.biomeTexture(textureId, this.textures[textureId], Math.floor((player.x + player.width / 2) / TILE_SIZE)), screenX - itemSize/2, screenY - itemSize/2, itemSize, combinedLightFactor);
-        }
-      } else {
-        const lightIntensity = Math.max(0.2, combinedLightFactor);
-        if (pose) {
-          const handDist = pose.armTopOffset + pose.armLength - itemSize * 0.45 + 10 * this.camera.zoom / 3;
           const screenX = Math.round(pose.pivotX - handDist * Math.sin(pose.angle));
           const screenY = Math.round(pose.pivotY + handDist * Math.cos(pose.angle) - 8);
-          const rgb = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec('#8B4513');
-          if (rgb) {
-            const r = Math.min(255, parseInt(rgb[1], 16) * lightIntensity);
-            const g = Math.min(255, parseInt(rgb[2], 16) * lightIntensity);
-            const b = Math.min(255, parseInt(rgb[3], 16) * lightIntensity);
-            ctx.fillStyle = `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
-          } else {
-            ctx.fillStyle = '#8B4513';
-          }
-          ctx.fillRect(screenX - itemSize/2, screenY - itemSize/2, itemSize, itemSize);
-        } else {
-          const screenX = Math.round(camera.worldToScreenX(handX));
-          const screenY = Math.round(camera.worldToScreenY(handY));
-          const rgb = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec('#8B4513');
-          if (rgb) {
-            const r = Math.min(255, parseInt(rgb[1], 16) * lightIntensity);
-            const g = Math.min(255, parseInt(rgb[2], 16) * lightIntensity);
-            const b = Math.min(255, parseInt(rgb[3], 16) * lightIntensity);
-            ctx.fillStyle = `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
-          } else {
-            ctx.fillStyle = '#8B4513';
-          }
-          ctx.fillRect(screenX - itemSize/2, screenY - itemSize/2, itemSize, itemSize);
+          this.drawBlockTexture(tex, screenX - itemSize / 2, screenY - itemSize / 2, itemSize, combinedLightFactor);
         }
+      } else {
+        const screenX = Math.round(camera.worldToScreenX(handX));
+        const screenY = Math.round(camera.worldToScreenY(handY));
+        this.drawBlockTexture(tex, screenX - itemSize / 2, screenY - itemSize / 2, itemSize, combinedLightFactor);
       }
-     
-     ctx.restore();
-}
+    } else {
+      // No texture (yet): a plain brown square where it would be.
+      let screenX, screenY;
+      if (pose) {
+        const handDist = pose.armTopOffset + pose.armLength - itemSize * 0.45 + (10 * this.camera.zoom) / 3;
+        screenX = Math.round(pose.pivotX - handDist * Math.sin(pose.angle));
+        screenY = Math.round(pose.pivotY + handDist * Math.cos(pose.angle) - 8);
+      } else {
+        screenX = Math.round(camera.worldToScreenX(handX));
+        screenY = Math.round(camera.worldToScreenY(handY));
+      }
+      ctx.fillStyle = '#8B4513';
+      ctx.fillRect(screenX - itemSize / 2, screenY - itemSize / 2, itemSize, itemSize);
+    }
+    ctx.restore();
+  }
 
   drawBreakingProgress() {
     const state = this.breaker.getState();
@@ -2947,31 +3772,31 @@ drawHeldItem(pose = null) {
     const sx = Math.round(camera.worldToScreenX(state.x * TILE_SIZE));
     const sy = Math.round(camera.worldToScreenY(state.y * TILE_SIZE));
     const type = registry.get(state.wall || world.getBlockId(state.x, state.y)) || registry.get(state.id);
-    
+
     if (!type) return;
-    
+
     const progress = Math.min(1, state.progress);
     const size = Math.round(TILE_SIZE * camera.zoom);
-    
+
     ctx.save();
-    
+
     const barHeight = 4;
     const barY = sy + size - barHeight - 2;
     const barWidth = size - 4;
     const progressWidth = barWidth * progress;
-    
+
     ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
     ctx.fillRect(sx + 2, barY, barWidth, barHeight);
-    
+
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(sx + 2, barY, progressWidth, barHeight);
-    
+
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
     ctx.globalAlpha = 0.6;
     if (polishOn('rounding')) cornerRect(ctx, sx, sy, size, '#ffffff', 2);
     else ctx.strokeRect(sx, sy, size, size);
-    
+
     ctx.restore();
   }
 
@@ -2982,14 +3807,14 @@ drawHeldItem(pose = null) {
     const world = this.world;
     const ctx = this.ctx;
     const player = this.player;
-    
+
     if (!ui.showOutline) return;
-    
+
     const worldX = camera.screenToWorldX(input.mouse.x);
     const worldY = camera.screenToWorldY(input.mouse.y);
     const tileX = Math.floor(worldX / TILE_SIZE);
     const tileY = Math.floor(worldY / TILE_SIZE);
-    
+
     if (!world.inBounds(tileX, tileY)) return;
     // An empty cell gets a fainter outline when the held block can go there.
     const empty = world.getBlockId(tileX, tileY) === 'air' || world.getCell(tileX, tileY)?.meta?.layer === 'bg';
@@ -2997,16 +3822,16 @@ drawHeldItem(pose = null) {
     if (!empty || placeable) {
       const playerCenterX = player.x + player.width / 2;
       const playerCenterY = player.y + player.height / 2;
-      const dx = (tileX * TILE_SIZE + TILE_SIZE / 2) - playerCenterX;
-      const dy = (tileY * TILE_SIZE + TILE_SIZE / 2) - playerCenterY;
+      const dx = tileX * TILE_SIZE + TILE_SIZE / 2 - playerCenterX;
+      const dy = tileY * TILE_SIZE + TILE_SIZE / 2 - playerCenterY;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      
+
       if (distance <= (ui.reach ?? 5) * TILE_SIZE) {
         if (placeable) ctx.globalAlpha = 0.55;
         const sx = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
         const sy = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
         const size = Math.round(TILE_SIZE * camera.zoom);
-        
+
         ctx.strokeStyle = '#888888';
         ctx.lineWidth = 2;
         if (polishOn('rounding')) cornerRect(ctx, sx, sy, size, '#888888', 2);
@@ -3019,31 +3844,31 @@ drawHeldItem(pose = null) {
   drawPositionOutlines() {
     const { camera, ctx } = this;
     const ui = this.getUI();
-    
+
     const setPosition1 = ui?.setPosition1;
     const setPosition2 = ui?.setPosition2;
-    
+
     const outlineColor1 = '#00ff00';
     const outlineColor2 = '#ff0000';
     const outlineWidth = 2;
-    
+
     if (setPosition1) {
       const sx = Math.round(camera.worldToScreenX(setPosition1.x * TILE_SIZE));
       const sy = Math.round(camera.worldToScreenY(setPosition1.y * TILE_SIZE));
       const size = Math.round(TILE_SIZE * camera.zoom);
-      
+
       ctx.save();
       ctx.strokeStyle = outlineColor1;
       ctx.lineWidth = outlineWidth;
       ctx.strokeRect(sx, sy, size, size);
       ctx.restore();
     }
-    
+
     if (setPosition2) {
       const sx = Math.round(camera.worldToScreenX(setPosition2.x * TILE_SIZE));
       const sy = Math.round(camera.worldToScreenY(setPosition2.y * TILE_SIZE));
       const size = Math.round(TILE_SIZE * camera.zoom);
-      
+
       ctx.save();
       ctx.strokeStyle = outlineColor2;
       ctx.lineWidth = outlineWidth;

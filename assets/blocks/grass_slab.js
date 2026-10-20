@@ -6,7 +6,8 @@ export default {
   material: 'grass',
   kind: 'slab',
   tab: 'nature',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['pp', 'pp'], ingredients: { p: 'grass' }, count: 6 }
   ],
   tool: 'shovel', // mined fastest with this

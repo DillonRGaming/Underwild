@@ -5,7 +5,8 @@ export default {
   kind: 'shovel',
   tab: 'tools',
   burnTime: 5, // seconds it burns as furnace fuel
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: [' p ', ' s ', ' s '], ingredients: { p: 'planks', s: 'stick' }, count: 1 }
   ],
   maxStack: 1,

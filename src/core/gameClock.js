@@ -3,6 +3,10 @@
 // keeps pace with the world. Saved with the world so timestamps in block data stay valid.
 export const gameClock = {
   ms: 0,
-  now() { return this.ms; },
-  seconds() { return this.ms / 1000; }
+  now() {
+    return this.ms;
+  },
+  seconds() {
+    return this.ms / 1000;
+  }
 };

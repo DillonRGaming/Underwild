@@ -1,6 +1,6 @@
 import { sampleBlockAt } from './terrainGen.js';
 
-self.onmessage = function(e) {
+self.onmessage = function (e) {
   const msg = e.data;
   if (!msg || msg.cmd !== 'generateChunk') return;
   const { chunkX, chunkSize, height, seed, worldWidth, worldType, superflatLayers, generation } = msg;

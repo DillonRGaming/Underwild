@@ -17,7 +17,8 @@ export default {
   tab: 'functional',
   dropsContents: true, // spills what's inside when broken
   burnTime: 7.5, // seconds it burns as furnace fuel
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['iii', ' s ', 'sss'], ingredients: { i: 'copper_ingot', s: 'stone' }, count: 1 }
   ],
   tool: 'axe', // mined fastest with this

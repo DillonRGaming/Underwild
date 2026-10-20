@@ -1,10 +1,12 @@
-import { waterMass } from '../logic/water.js';
+import { wind, exposureAt } from '../core/wind.js';
+
+const ITEM_WIND = 0.06; // px a tick² an item in the air is pushed at wind strength 1
 const ITEM_CONFIG = {
   pickupRange: 12,
   attractionRange: 16,
   attractionForce: 0.8,
   pickupDelay: 30,
-  
+
   gravity: 0.15,
   maxFallSpeed: 5,
   width: 6,
@@ -12,9 +14,8 @@ const ITEM_CONFIG = {
   mass: 1,
   airResistance: 0.95,
   maxVelocity: 30,
-  
-  maxLife: 0,
-  maxItems: 50
+
+  maxLife: 0
 };
 
 export class ItemEntity {
@@ -41,15 +42,32 @@ export class ItemEntity {
     this.life += 1;
     this.age += 1;
 
-    if (this.pickupDelay > 0) {
-      this.pickupDelay--;
-      if (this.pickupDelay === 0) {
-        this.readyForPickup = true;
-      }
-    }
+    // (Checked every tick, so a pickup delay of 0 counts as ready straight away.)
+    if (this.pickupDelay > 0) this.pickupDelay--;
+    this.readyForPickup = this.pickupDelay <= 0;
 
     if (!this.onGround) {
-      this.vy += this.gravity;
+      const gMult = world?.gravityMultiplier ?? world?.dimension?.gravityMultiplier ?? 1;
+      this.vy += this.gravity * gMult;
+      const maxFall = ITEM_CONFIG.maxFallSpeed * Math.sqrt(Math.max(0.01, gMult));
+      if (this.vy > maxFall) this.vy = maxFall;
+    }
+
+    // The wind pushes items flying through the open air a little.
+    if (!this.onGround) {
+      const tx = Math.floor((this.x + this.width / 2) / 16);
+      this.vx += wind.velocityAt(tx) * exposureAt(world, tx, Math.floor(this.y / 16)) * ITEM_WIND;
+    }
+
+    // A strong wind also shoves items resting on the ground along, and a gust can toss one up.
+    if (this.onGround) {
+      const tx = Math.floor((this.x + this.width / 2) / 16);
+      const w = wind.velocityAt(tx) * exposureAt(world, tx, Math.floor(this.y / 16));
+      const over = Math.abs(w) - 0.7;
+      if (over > 0) {
+        this.vx += Math.sign(w) * over * 0.12;
+        if (over > 0.3 && Math.random() < 0.01) this.vy = -1.5 - Math.random();
+      }
     }
 
     // Float in water, half submerged.
@@ -72,48 +90,29 @@ export class ItemEntity {
       }
     }
 
+    // Drift toward the nearest of the player's torso, head and feet.
     if (this.readyForPickup && player) {
       const itemCenterX = this.x + this.width / 2;
       const itemCenterY = this.y + this.height / 2;
-      
-      const playerCenterX = player.x + player.width / 2;
-      const playerCenterY = player.y + player.height / 2;
-      const headY = player.y + player.height * 0.3;
-      const feetY = player.y + player.height;
-      
-      const torsoDistance = Math.sqrt(Math.pow(playerCenterX - itemCenterX, 2) + Math.pow(playerCenterY - itemCenterY, 2));
-      const headDistance = Math.sqrt(Math.pow(playerCenterX - itemCenterX, 2) + Math.pow(headY - itemCenterY, 2));
-      const feetDistance = Math.sqrt(Math.pow(playerCenterX - itemCenterX, 2) + Math.pow(feetY - itemCenterY, 2));
-      
-      let closestX = playerCenterX;
-      let closestY = playerCenterY;
-      const distances = [torsoDistance, headDistance, feetDistance];
-      const positions = [
-        {x: playerCenterX, y: playerCenterY},
-        {x: playerCenterX, y: headY},
-        {x: playerCenterX, y: feetY}
-      ];
-      
-      const minIndex = distances.indexOf(Math.min(...distances));
-      closestX = positions[minIndex].x;
-      closestY = positions[minIndex].y;
-      const distance = distances[minIndex];
-      
-      if (distance < ITEM_CONFIG.attractionRange) {
-        const dx = closestX - itemCenterX;
-        const dy = closestY - itemCenterY;
-        const force = ITEM_CONFIG.attractionForce;
-        
-        if (distance > 0) {
-          this.vx += (dx / distance) * force;
-          this.vy += (dy / distance) * force;
+      const dx = player.x + player.width / 2 - itemCenterX;
+      let dy = player.y + player.height / 2 - itemCenterY;
+      let distance = Math.hypot(dx, dy);
+      for (const py of [player.y + player.height * 0.3, player.y + player.height]) {
+        const d = Math.hypot(dx, py - itemCenterY);
+        if (d < distance) {
+          distance = d;
+          dy = py - itemCenterY;
         }
+      }
+      if (distance > 0 && distance < ITEM_CONFIG.attractionRange) {
+        this.vx += (dx / distance) * ITEM_CONFIG.attractionForce;
+        this.vy += (dy / distance) * ITEM_CONFIG.attractionForce;
       }
     }
 
     this.vx *= ITEM_CONFIG.airResistance;
     this.vy *= ITEM_CONFIG.airResistance;
-    
+
     const maxVel = ITEM_CONFIG.maxVelocity;
     if (Math.abs(this.vx) > maxVel) this.vx = Math.sign(this.vx) * maxVel;
     if (Math.abs(this.vy) > maxVel) this.vy = Math.sign(this.vy) * maxVel;
@@ -129,14 +128,16 @@ export class ItemEntity {
     const inX = Math.floor((this.x + this.width / 2) / 16);
     const inY = Math.floor((this.y + this.height / 2) / 16);
     if (solidAt(inX, inY)) {
-      const lx = (this.x + this.width / 2) - inX * 16;
-      const ly = (this.y + this.height / 2) - inY * 16;
+      const lx = this.x + this.width / 2 - inX * 16;
+      const ly = this.y + this.height / 2 - inY * 16;
       const options = [
         [0, -1, ly + 4],
         [-1, 0, lx],
         [1, 0, 16 - lx],
         [0, 1, 16 - ly + 8]
-      ].filter(([dx, dy]) => !solidAt(inX + dx, inY + dy)).sort((a, b) => a[2] - b[2]);
+      ]
+        .filter(([dx, dy]) => !solidAt(inX + dx, inY + dy))
+        .sort((a, b) => a[2] - b[2]);
       const [dx, dy] = options[0] || [0, -1];
       this.x += dx * 1.5;
       this.y += dy * 1.5;
@@ -145,7 +146,7 @@ export class ItemEntity {
       this.onGround = false;
       return ITEM_CONFIG.maxLife > 0 && this.life > ITEM_CONFIG.maxLife;
     }
-    
+
     // Horizontal movement & wall collision
     this.x += this.vx;
     const midY = this.y + this.height * 0.5;
@@ -188,12 +189,12 @@ export class ItemEntity {
 
     const feetY = this.y + this.height;
     const feetTileY = Math.floor(feetY / 16);
-    
+
     const leftTileX = Math.floor(this.x / 16);
     const rightTileX = Math.floor((this.x + this.width - 0.1) / 16);
-    
+
     this.onGround = false;
-    
+
     for (let tileX = leftTileX; tileX <= rightTileX; tileX++) {
       if (world.inBounds(tileX, feetTileY)) {
         if (solidAt(tileX, feetTileY)) {
@@ -219,14 +220,14 @@ export class ItemEntity {
     if (ITEM_CONFIG.maxLife > 0 && this.life > ITEM_CONFIG.maxLife) {
       return true;
     }
-    
+
     return false;
   }
-  
+
   static updateConfig(newConfig) {
     Object.assign(ITEM_CONFIG, newConfig);
   }
-  
+
   static getConfig() {
     return { ...ITEM_CONFIG };
   }

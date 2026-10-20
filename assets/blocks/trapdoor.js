@@ -22,31 +22,21 @@ export function createTrapdoor(id, displayName, color) {
 
 export const oakTrapdoor = {
   ...createTrapdoor('oak_trapdoor', 'Oak Trapdoor', '#b07d4e'),
-  recipes: [
-    { shape: ['ppp', 'ppp'], ingredients: { p: 'oak_planks' }, count: 2 }
-  ]
+  recipes: [{ shape: ['ppp', 'ppp'], ingredients: { p: 'oak_planks' }, count: 2 }]
 };
 export const birchTrapdoor = {
   ...createTrapdoor('birch_trapdoor', 'Birch Trapdoor', '#d8c79a'),
-  recipes: [
-    { shape: ['ppp', 'ppp'], ingredients: { p: 'birch_planks' }, count: 2 }
-  ]
+  recipes: [{ shape: ['ppp', 'ppp'], ingredients: { p: 'birch_planks' }, count: 2 }]
 };
 export const spruceTrapdoor = {
   ...createTrapdoor('spruce_trapdoor', 'Spruce Trapdoor', '#6e4f2e'),
-  recipes: [
-    { shape: ['ppp', 'ppp'], ingredients: { p: 'spruce_planks' }, count: 2 }
-  ]
+  recipes: [{ shape: ['ppp', 'ppp'], ingredients: { p: 'spruce_planks' }, count: 2 }]
 };
 export const pineTrapdoor = {
   ...createTrapdoor('pine_trapdoor', 'Pine Trapdoor', '#4f3f33'),
-  recipes: [
-    { shape: ['ppp', 'ppp'], ingredients: { p: 'pine_planks' }, count: 2 }
-  ]
+  recipes: [{ shape: ['ppp', 'ppp'], ingredients: { p: 'pine_planks' }, count: 2 }]
 };
 export const mapleTrapdoor = {
   ...createTrapdoor('maple_trapdoor', 'Maple Trapdoor', '#b8603a'),
-  recipes: [
-    { shape: ['ppp', 'ppp'], ingredients: { p: 'maple_planks' }, count: 2 }
-  ]
+  recipes: [{ shape: ['ppp', 'ppp'], ingredients: { p: 'maple_planks' }, count: 2 }]
 };

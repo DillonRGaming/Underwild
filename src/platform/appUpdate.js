@@ -22,7 +22,7 @@ export async function checkForAppUpdate(currentVersion) {
     return;
   }
   const latest = String(release.tag_name || '').replace(/^v/, '');
-  const apk = (release.assets || []).find(a => a.name.endsWith('.apk'));
+  const apk = (release.assets || []).find((a) => a.name.endsWith('.apk'));
   if (!apk || !newer(latest, currentVersion)) return;
 
   const bar = document.createElement('div');

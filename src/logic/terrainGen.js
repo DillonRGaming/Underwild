@@ -34,31 +34,27 @@ function getPermutation(seed) {
 
 function perlinNoise(x, y, seed) {
   const p = getPermutation(seed);
-  
+
   x += seed * 1000;
   y += seed * 1000;
-  
+
   const X = Math.floor(x) & 255;
   const Y = Math.floor(y) & 255;
-  
+
   x -= Math.floor(x);
   y -= Math.floor(y);
-  
+
   const u = fade(x);
   const v = fade(y);
-  
+
   const A = p[X] + Y;
   const AA = p[A] & 15;
   const AB = p[A + 1] & 15;
   const B = p[X + 1] + Y;
   const BA = p[B] & 15;
   const BB = p[B + 1] & 15;
-  
-  return lerp(
-    lerp(grad(AA, x, y), grad(BA, x - 1, y), u),
-    lerp(grad(AB, x, y - 1), grad(BB, x - 1, y - 1), u),
-    v
-  );
+
+  return lerp(lerp(grad(AA, x, y), grad(BA, x - 1, y), u), lerp(grad(AB, x, y - 1), grad(BB, x - 1, y - 1), u), v);
 }
 
 function clamp(v, a, b) {
@@ -73,15 +69,6 @@ function hash32(n) {
   return (n >>> 0) / 0xffffffff;
 }
 
-function valueNoise1D(x, seed, scale) {
-  const xi = Math.floor(x / scale);
-  const xf = (x / scale) - xi;
-  const h0 = hash32(xi + seed * 1013);
-  const h1 = hash32(xi + 1 + seed * 1013);
-  const t = xf * xf * (3 - 2 * xf);
-  return h0 * (1 - t) + h1 * t;
-}
-
 function rand01From(x, seed) {
   return hash32(Math.floor(x) + seed * 733);
 }
@@ -90,7 +77,6 @@ const MAX_TREE_INFLUENCE = 12;
 // Ground lower than BASE + WATER_DEPTH (y grows downward) is flooded up to that level.
 const WATER_DEPTH = 10;
 const SAND_LAYERS = 4; // sand blocks under lakebeds and beaches
-
 
 const TREE_CHANCE = 0.45;
 // A roll inside each tree type's range in treeBlockFor's plain mix.
@@ -130,98 +116,368 @@ function artTreeBlock(shape, centerX, x, y, top, logType, leavesType, lift = 0) 
 const TREE_SHAPES = {
   // Broad, rounded oaks (up to 5 out from the trunk) for the Forest and Meadow.
   big_oak: [
-    { visible: 2, art: [
-      '..#####....',
-      '#########..',
-      '##########.',
-      '###########',
-      '.#########.',
-      '..###.###..'] },
-    { visible: 2, art: [
-      '...#####...',
-      '.#########.',
-      '###########',
-      '###########',
-      '.##########',
-      '...##..##..'] },
-    { visible: 2, art: [
-      '..##..###..',
-      '.#########.',
-      '###########',
-      '###########',
-      '.#########.',
-      '..#######..'] },
-    { visible: 2, art: [
-      '...#####...',
-      '.#########.',
-      '###########',
-      '###########',
-      '##########.',
-      '.########..',
-      '...##.##...'] },
-    { visible: 2, art: [
-      '..#####....',
-      '#########..',
-      '##########.',
-      '##########.',
-      '.########..',
-      '..##..##...'] }
+    { visible: 2, art: ['..#####....', '#########..', '##########.', '###########', '.#########.', '..###.###..'] },
+    { visible: 2, art: ['...#####...', '.#########.', '###########', '###########', '.##########', '...##..##..'] },
+    { visible: 2, art: ['..##..###..', '.#########.', '###########', '###########', '.#########.', '..#######..'] },
+    { visible: 2, art: ['...#####...', '.#########.', '###########', '###########', '##########.', '.########..', '...##.##...'] },
+    { visible: 2, art: ['..#####....', '#########..', '##########.', '##########.', '.########..', '..##..##...'] }
   ],
   oak: [
-    { trunk: 5, rows: [[-3, 1, 1], [-2, 2, 2], [-1, 3, 2], [0, 3, 3], [1, 2, 3], [2, 2, 2], [3, 1, 1]] },
-    { trunk: 4, rows: [[-2, 2, 2], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 2, 2]] },
-    { trunk: 5, rows: [[-4, 1, 1], [-3, 2, 2], [-2, 2, 3], [-1, 3, 3], [0, 3, 2], [1, 2, 2], [2, 1, 1]] },
-    { trunk: 4, rows: [[-3, 1, 2], [-2, 2, 3], [-1, 2, 3], [0, 3, 3], [1, 2, 2], [2, 1, 1]] },
-    { trunk: 4, rows: [[-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 2, 2], [2, 1, 1]] }
+    {
+      trunk: 5,
+      rows: [
+        [-3, 1, 1],
+        [-2, 2, 2],
+        [-1, 3, 2],
+        [0, 3, 3],
+        [1, 2, 3],
+        [2, 2, 2],
+        [3, 1, 1]
+      ]
+    },
+    {
+      trunk: 4,
+      rows: [
+        [-2, 2, 2],
+        [-1, 3, 3],
+        [0, 3, 3],
+        [1, 3, 3],
+        [2, 2, 2]
+      ]
+    },
+    {
+      trunk: 5,
+      rows: [
+        [-4, 1, 1],
+        [-3, 2, 2],
+        [-2, 2, 3],
+        [-1, 3, 3],
+        [0, 3, 2],
+        [1, 2, 2],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 4,
+      rows: [
+        [-3, 1, 2],
+        [-2, 2, 3],
+        [-1, 2, 3],
+        [0, 3, 3],
+        [1, 2, 2],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 4,
+      rows: [
+        [-2, 1, 1],
+        [-1, 2, 2],
+        [0, 2, 2],
+        [1, 2, 2],
+        [2, 1, 1]
+      ]
+    }
   ],
   // Aspen-like: long bare white trunk, slim teardrop crown widest low down.
   birch: [
-    { trunk: 11, rows: [[-3, 0, 0], [-2, 1, 1], [-1, 1, 1], [0, 1, 1], [1, 2, 1], [2, 2, 2], [3, 2, 2], [4, 2, 2], [5, 2, 2], [6, 1, 2], [7, 1, 1]] },
-    { trunk: 10, rows: [[-2, 0, 0], [-1, 1, 1], [0, 1, 1], [1, 1, 2], [2, 2, 2], [3, 2, 2], [4, 2, 2], [5, 1, 1], [6, 1, 1]] },
-    { trunk: 12, rows: [[-3, 0, 0], [-2, 0, 0], [-1, 1, 1], [0, 1, 1], [1, 1, 1], [2, 2, 1], [3, 2, 2], [4, 2, 2], [5, 2, 2], [6, 2, 2], [7, 1, 1], [8, 1, 1]] },
-    { trunk: 9, rows: [[-2, 0, 0], [-1, 1, 1], [0, 1, 1], [1, 2, 2], [2, 2, 2], [3, 2, 2], [4, 1, 1], [5, 1, 1]] },
-    { trunk: 11, rows: [[-2, 0, 0], [-1, 1, 0], [0, 1, 1], [1, 1, 1], [2, 1, 2], [3, 2, 2], [4, 2, 2], [5, 2, 1], [6, 1, 1], [7, 1, 1]] }
+    {
+      trunk: 11,
+      rows: [
+        [-3, 0, 0],
+        [-2, 1, 1],
+        [-1, 1, 1],
+        [0, 1, 1],
+        [1, 2, 1],
+        [2, 2, 2],
+        [3, 2, 2],
+        [4, 2, 2],
+        [5, 2, 2],
+        [6, 1, 2],
+        [7, 1, 1]
+      ]
+    },
+    {
+      trunk: 10,
+      rows: [
+        [-2, 0, 0],
+        [-1, 1, 1],
+        [0, 1, 1],
+        [1, 1, 2],
+        [2, 2, 2],
+        [3, 2, 2],
+        [4, 2, 2],
+        [5, 1, 1],
+        [6, 1, 1]
+      ]
+    },
+    {
+      trunk: 12,
+      rows: [
+        [-3, 0, 0],
+        [-2, 0, 0],
+        [-1, 1, 1],
+        [0, 1, 1],
+        [1, 1, 1],
+        [2, 2, 1],
+        [3, 2, 2],
+        [4, 2, 2],
+        [5, 2, 2],
+        [6, 2, 2],
+        [7, 1, 1],
+        [8, 1, 1]
+      ]
+    },
+    {
+      trunk: 9,
+      rows: [
+        [-2, 0, 0],
+        [-1, 1, 1],
+        [0, 1, 1],
+        [1, 2, 2],
+        [2, 2, 2],
+        [3, 2, 2],
+        [4, 1, 1],
+        [5, 1, 1]
+      ]
+    },
+    {
+      trunk: 11,
+      rows: [
+        [-2, 0, 0],
+        [-1, 1, 0],
+        [0, 1, 1],
+        [1, 1, 1],
+        [2, 1, 2],
+        [3, 2, 2],
+        [4, 2, 2],
+        [5, 2, 1],
+        [6, 1, 1],
+        [7, 1, 1]
+      ]
+    }
   ],
   spruce: [
-    { trunk: 6, rows: [[-6, 0, 0], [-5, 1, 1], [-4, 1, 1], [-3, 2, 2], [-2, 2, 2], [-1, 3, 3], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
-    { trunk: 5, rows: [[-5, 0, 0], [-4, 1, 1], [-3, 2, 2], [-2, 1, 1], [-1, 2, 2], [0, 3, 3], [1, 1, 1]] },
-    { trunk: 7, rows: [[-7, 0, 0], [-6, 1, 1], [-5, 1, 1], [-4, 2, 2], [-3, 1, 1], [-2, 2, 2], [-1, 3, 3], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
-    { trunk: 6, rows: [[-5, 0, 0], [-4, 1, 1], [-3, 1, 1], [-2, 2, 2], [-1, 2, 2], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
-    { trunk: 8, rows: [[-7, 0, 0], [-6, 1, 1], [-5, 1, 1], [-4, 1, 1], [-3, 2, 2], [-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 1, 1]] }
+    {
+      trunk: 6,
+      rows: [
+        [-6, 0, 0],
+        [-5, 1, 1],
+        [-4, 1, 1],
+        [-3, 2, 2],
+        [-2, 2, 2],
+        [-1, 3, 3],
+        [0, 2, 2],
+        [1, 3, 3],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 5,
+      rows: [
+        [-5, 0, 0],
+        [-4, 1, 1],
+        [-3, 2, 2],
+        [-2, 1, 1],
+        [-1, 2, 2],
+        [0, 3, 3],
+        [1, 1, 1]
+      ]
+    },
+    {
+      trunk: 7,
+      rows: [
+        [-7, 0, 0],
+        [-6, 1, 1],
+        [-5, 1, 1],
+        [-4, 2, 2],
+        [-3, 1, 1],
+        [-2, 2, 2],
+        [-1, 3, 3],
+        [0, 2, 2],
+        [1, 3, 3],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 6,
+      rows: [
+        [-5, 0, 0],
+        [-4, 1, 1],
+        [-3, 1, 1],
+        [-2, 2, 2],
+        [-1, 2, 2],
+        [0, 2, 2],
+        [1, 3, 3],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 8,
+      rows: [
+        [-7, 0, 0],
+        [-6, 1, 1],
+        [-5, 1, 1],
+        [-4, 1, 1],
+        [-3, 2, 2],
+        [-2, 1, 1],
+        [-1, 2, 2],
+        [0, 2, 2],
+        [1, 1, 1]
+      ]
+    }
   ],
   // Pines: tall bare trunks with a crown bunched near the top.
   pine: [
-    { trunk: 8, rows: [[-4, 0, 0], [-3, 1, 1], [-2, 2, 2], [-1, 2, 2], [0, 1, 1], [1, 2, 2], [2, 1, 1]] },
-    { trunk: 9, rows: [[-3, 0, 0], [-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 1, 1], [2, 2, 2], [3, 1, 1]] },
-    { trunk: 7, rows: [[-4, 0, 0], [-3, 1, 1], [-2, 1, 1], [-1, 2, 2], [0, 2, 2], [1, 3, 3], [2, 1, 1]] },
-    { trunk: 8, rows: [[-3, 1, 1], [-2, 2, 1], [-1, 2, 2], [0, 1, 2], [1, 2, 2], [2, 1, 1]] },
-    { trunk: 9, rows: [[-5, 0, 0], [-4, 1, 1], [-3, 1, 1], [-2, 2, 2], [-1, 1, 1], [0, 2, 2], [1, 2, 2], [2, 1, 1]] }
+    {
+      trunk: 8,
+      rows: [
+        [-4, 0, 0],
+        [-3, 1, 1],
+        [-2, 2, 2],
+        [-1, 2, 2],
+        [0, 1, 1],
+        [1, 2, 2],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 9,
+      rows: [
+        [-3, 0, 0],
+        [-2, 1, 1],
+        [-1, 2, 2],
+        [0, 2, 2],
+        [1, 1, 1],
+        [2, 2, 2],
+        [3, 1, 1]
+      ]
+    },
+    {
+      trunk: 7,
+      rows: [
+        [-4, 0, 0],
+        [-3, 1, 1],
+        [-2, 1, 1],
+        [-1, 2, 2],
+        [0, 2, 2],
+        [1, 3, 3],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 8,
+      rows: [
+        [-3, 1, 1],
+        [-2, 2, 1],
+        [-1, 2, 2],
+        [0, 1, 2],
+        [1, 2, 2],
+        [2, 1, 1]
+      ]
+    },
+    {
+      trunk: 9,
+      rows: [
+        [-5, 0, 0],
+        [-4, 1, 1],
+        [-3, 1, 1],
+        [-2, 2, 2],
+        [-1, 1, 1],
+        [0, 2, 2],
+        [1, 2, 2],
+        [2, 1, 1]
+      ]
+    }
   ],
   maple: [
-    { trunk: 8, rows: [[-4, 1, 1], [-3, 2, 2], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 3, 3], [3, 2, 2], [4, 1, 1]] },
-    { trunk: 7, rows: [[-3, 2, 2], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 3, 2], [3, 2, 2], [4, 1, 1]] },
-    { trunk: 9, rows: [[-5, 1, 1], [-4, 2, 2], [-3, 3, 3], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 2, 3], [2, 2, 2], [3, 1, 1]] },
-    { trunk: 8, rows: [[-4, 1, 2], [-3, 2, 3], [-2, 3, 3], [-1, 3, 3], [0, 3, 3], [1, 3, 2], [2, 2, 2], [3, 2, 1], [4, 1, 1]] },
-    { trunk: 7, rows: [[-3, 1, 1], [-2, 2, 2], [-1, 3, 3], [0, 3, 3], [1, 3, 3], [2, 2, 2], [3, 2, 2], [4, 1, 1]] }
+    {
+      trunk: 8,
+      rows: [
+        [-4, 1, 1],
+        [-3, 2, 2],
+        [-2, 3, 3],
+        [-1, 3, 3],
+        [0, 3, 3],
+        [1, 3, 3],
+        [2, 3, 3],
+        [3, 2, 2],
+        [4, 1, 1]
+      ]
+    },
+    {
+      trunk: 7,
+      rows: [
+        [-3, 2, 2],
+        [-2, 3, 3],
+        [-1, 3, 3],
+        [0, 3, 3],
+        [1, 3, 3],
+        [2, 3, 2],
+        [3, 2, 2],
+        [4, 1, 1]
+      ]
+    },
+    {
+      trunk: 9,
+      rows: [
+        [-5, 1, 1],
+        [-4, 2, 2],
+        [-3, 3, 3],
+        [-2, 3, 3],
+        [-1, 3, 3],
+        [0, 3, 3],
+        [1, 2, 3],
+        [2, 2, 2],
+        [3, 1, 1]
+      ]
+    },
+    {
+      trunk: 8,
+      rows: [
+        [-4, 1, 2],
+        [-3, 2, 3],
+        [-2, 3, 3],
+        [-1, 3, 3],
+        [0, 3, 3],
+        [1, 3, 2],
+        [2, 2, 2],
+        [3, 2, 1],
+        [4, 1, 1]
+      ]
+    },
+    {
+      trunk: 7,
+      rows: [
+        [-3, 1, 1],
+        [-2, 2, 2],
+        [-1, 3, 3],
+        [0, 3, 3],
+        [1, 3, 3],
+        [2, 2, 2],
+        [3, 2, 2],
+        [4, 1, 1]
+      ]
+    }
   ]
 };
 
 function isTreeCenterAt(xCenter, seedLocal, worldWidth, HEIGHT, worldType = 'regular') {
+  if (worldType === 'superflat' || worldType === 'moon' || worldType === 'mars') return false;
   if (xCenter < 2 || xCenter > worldWidth - 3) return false;
-  
-  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
+
   const top = naturalHeightAt(xCenter, seedLocal, HEIGHT, worldType);
-  
+
   if (worldType !== 'superflat' && onLakeShore(xCenter, seedLocal)) return false;
 
   const slopeTolerance = worldType === 'mountains' ? 8 : 3;
-  
+
   const leftTop = naturalHeightAt(xCenter - 1, seedLocal, HEIGHT, worldType);
   const rightTop = naturalHeightAt(xCenter + 1, seedLocal, HEIGHT, worldType);
   const slope = Math.abs(leftTop - top) + Math.abs(rightTop - top);
   if (slope > slopeTolerance) return false;
 
-  if (!isTreeSlot(xCenter, seedLocal, n => rand01From(n, seedLocal))) return false;
+  if (!isTreeSlot(xCenter, seedLocal, (n) => rand01From(n, seedLocal))) return false;
   if (rand01From(xCenter * 991 + 5, seedLocal) >= treeChance(xCenter, seedLocal)) return false;
 
   return true;
@@ -282,10 +538,12 @@ function fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType) {
   for (const dir of [first, -first]) {
     const far = cx + dir * (len + 1);
     if (far < 2 || far > worldWidth - 3) continue;
-    let minH = Infinity, maxH = -Infinity;
+    let minH = Infinity,
+      maxH = -Infinity;
     for (let i = 0; i <= len + 1; i++) {
       const h = naturalHeightAt(cx + dir * i, seed, worldHeight, worldType);
-      minH = Math.min(minH, h); maxH = Math.max(maxH, h);
+      minH = Math.min(minH, h);
+      maxH = Math.max(maxH, h);
     }
     if (maxH - minH > 1 || onLakeShore(cx, seed) || onLakeShore(far, seed)) continue;
     let blocked = false;
@@ -294,7 +552,12 @@ function fallenTreeAt(cx, seed, worldWidth, worldHeight, worldType) {
     }
     if (blocked) continue;
     // logY is the trunk's far end, where the crown sits; each log block rests on the terrain below it.
-    return { dir, len, logY: naturalHeightAt(cx + dir * (len + 1), seed, worldHeight, worldType) - 1, stumpY: naturalHeightAt(cx, seed, worldHeight, worldType) - 1 };
+    return {
+      dir,
+      len,
+      logY: naturalHeightAt(cx + dir * (len + 1), seed, worldHeight, worldType) - 1,
+      stumpY: naturalHeightAt(cx, seed, worldHeight, worldType) - 1
+    };
   }
   return null;
 }
@@ -318,7 +581,12 @@ export function nearestFallenTreeX(x, seed, worldWidth, worldHeight, worldType =
 
 // Crown of a fallen tree, by row from two above the trunk down to one below it:
 // [from, to] in blocks along the fall direction, where 0 is the trunk's last block.
-const FALLEN_CROWN = [[-1, 1], [-2, 2], [1, 3], [1, 2]];
+const FALLEN_CROWN = [
+  [-1, 1],
+  [-2, 2],
+  [1, 3],
+  [1, 2]
+];
 
 function fallenTreeBlockFor(fallen, cx, x, y, seed, worldHeight, worldType) {
   const { logType, leavesType } = pickTreeType(cx, seed);
@@ -356,8 +624,8 @@ function treeLift(shape, centerX, top, seed, worldHeight, worldType) {
     left = right = shape.art[0].length >> 1;
   } else {
     crownBottom = top - shape.trunk + shape.rows[shape.rows.length - 1][0];
-    left = Math.max(...shape.rows.map(row => row[1]));
-    right = Math.max(...shape.rows.map(row => row[2]));
+    left = Math.max(...shape.rows.map((row) => row[1]));
+    right = Math.max(...shape.rows.map((row) => row[2]));
   }
   let highestGround = top;
   for (let dx = -left; dx <= right; dx++) {
@@ -373,9 +641,8 @@ function treeLift(shape, centerX, top, seed, worldHeight, worldType) {
 }
 
 function treeBlockFor(centerX, x, y, seedLocal, worldWidth, worldHeight, HEIGHT, worldType = 'regular') {
-  const BASE = 50 + Math.floor(rand01From(seedLocal, seedLocal) * 10);
   const top = naturalHeightAt(centerX, seedLocal, HEIGHT, worldType);
-  
+
   const { logType, leavesType, leafPattern } = pickTreeType(centerX, seedLocal);
   const shapes = TREE_SHAPES[leafPattern];
   const shape = shapes[Math.floor(rand01From(centerX * 41.7, seedLocal + 13) * shapes.length) % shapes.length];
@@ -472,9 +739,119 @@ function rawHeightAt(x, seed, worldHeight, worldType) {
   return clamp(BASE + Math.round(noise1 + noise2 + noise3 + mountain), 6, worldHeight - 4);
 }
 
+function moonCraterInfo(cellIndex, seed) {
+  // Craters spaced every 55 blocks
+  const cx = cellIndex * 55 + Math.floor(rand01From(cellIndex, seed + 901) * 35) + 10;
+  const rType = rand01From(cellIndex, seed + 902);
+  let radius, depth;
+  if (rType < 0.4) {
+    // Small crater: radius 8..12, depth 3..4
+    radius = 8 + Math.floor(rand01From(cellIndex, seed + 903) * 5);
+    depth = 3 + Math.floor(rand01From(cellIndex, seed + 904) * 2);
+  } else if (rType < 0.8) {
+    // Medium crater: radius 13..18, depth 5..6
+    radius = 13 + Math.floor(rand01From(cellIndex, seed + 903) * 6);
+    depth = 5 + Math.floor(rand01From(cellIndex, seed + 904) * 2);
+  } else {
+    // Large crater: radius 19..26, depth 7..9
+    radius = 19 + Math.floor(rand01From(cellIndex, seed + 903) * 8);
+    depth = 7 + Math.floor(rand01From(cellIndex, seed + 904) * 3);
+  }
+  return { cx, radius, depth };
+}
+
+export function moonCraterAt(x, seed) {
+  const cellW = 55;
+  const cIdx = Math.floor(x / cellW);
+  let maxBowl = 0;
+  for (let c = cIdx - 1; c <= cIdx + 1; c++) {
+    const crater = moonCraterInfo(c, seed);
+    const d = Math.abs(x - crater.cx);
+    if (d < crater.radius) {
+      // Smooth cosine bowl: seamless tangent at rim (d=radius) and bottom (d=0)
+      const t = d / crater.radius;
+      const bowl = crater.depth * 0.5 * (1 + Math.cos(t * Math.PI));
+      if (bowl > maxBowl) maxBowl = bowl;
+    }
+  }
+  return { maxBowl };
+}
+
+function isMoonTunnel(x, y, seed, groundY, worldHeight) {
+  // Tunnels should be deeper: only start at least 18 blocks below ground level
+  if (y <= groundY + 18 || y >= worldHeight - 3) return false;
+  // Winding corridor system 1
+  const n1 = perlinNoise(x * 0.04, y * 0.035, seed + 5100);
+  if (Math.abs(n1) < 0.06) return true;
+  // Winding corridor system 2
+  const n2 = perlinNoise(x * 0.035 + 80, y * 0.04 + 40, seed + 5200);
+  if (Math.abs(n2) < 0.06) return true;
+  return false;
+}
+
+function marsCraterInfo(cellIndex, seed) {
+  // Martian impact craters and canyon basins spaced roughly every 70 blocks
+  const cx = cellIndex * 70 + Math.floor(rand01From(cellIndex, seed + 8101) * 45) + 12;
+  const rType = rand01From(cellIndex, seed + 8102);
+  let radius, depth;
+  if (rType < 0.45) {
+    radius = 10 + Math.floor(rand01From(cellIndex, seed + 8103) * 6);
+    depth = 3 + Math.floor(rand01From(cellIndex, seed + 8104) * 3);
+  } else if (rType < 0.8) {
+    radius = 16 + Math.floor(rand01From(cellIndex, seed + 8103) * 8);
+    depth = 6 + Math.floor(rand01From(cellIndex, seed + 8104) * 3);
+  } else {
+    radius = 24 + Math.floor(rand01From(cellIndex, seed + 8103) * 10);
+    depth = 8 + Math.floor(rand01From(cellIndex, seed + 8104) * 4);
+  }
+  return { cx, radius, depth };
+}
+
+export function marsCraterAt(x, seed) {
+  const cellW = 70;
+  const cIdx = Math.floor(x / cellW);
+  let maxBowl = 0;
+  for (let c = cIdx - 1; c <= cIdx + 1; c++) {
+    const crater = marsCraterInfo(c, seed);
+    const d = Math.abs(x - crater.cx);
+    if (d < crater.radius) {
+      const t = d / crater.radius;
+      const bowl = crater.depth * 0.5 * (1 + Math.cos(t * Math.PI));
+      if (bowl > maxBowl) maxBowl = bowl;
+    }
+  }
+  return { maxBowl };
+}
+
+function isMarsTunnel(x, y, seed, groundY, worldHeight) {
+  // Martian underground caverns and lava tubes
+  if (y <= groundY + 12 || y >= worldHeight - 3) return false;
+  const n1 = perlinNoise(x * 0.038, y * 0.032, seed + 7100);
+  if (Math.abs(n1) < 0.065) return true;
+  const n2 = perlinNoise(x * 0.032 + 50, y * 0.038 + 60, seed + 7200);
+  if (Math.abs(n2) < 0.065) return true;
+  return false;
+}
+
 export function naturalHeightAt(x, seed, worldHeight, worldType = 'regular') {
   const BASE = 50 + Math.floor(rand01From(seed, seed) * 10);
   if (worldType === 'superflat') return BASE;
+  if (worldType === 'moon') {
+    // Rolling lunar hills and maria (balanced undulating landscape)
+    const rollingHills = perlinNoise(x * 0.009, 0, seed + 888) * 16.0 + perlinNoise(x * 0.022, 0, seed + 889) * 5.0;
+    const baseH = clamp(BASE + Math.round(rollingHills), 15, worldHeight - 15);
+    const { maxBowl } = moonCraterAt(x, seed);
+    const floorH = baseH + Math.round(maxBowl);
+    return clamp(floorH, 12, worldHeight - 10);
+  }
+  if (worldType === 'mars') {
+    // Windswept rolling dunes, rocky plateaus and craters
+    const dunes = perlinNoise(x * 0.012, 0, seed + 777) * 14.0 + perlinNoise(x * 0.035, 0, seed + 778) * 6.0;
+    const baseH = clamp(BASE + Math.round(dunes), 16, worldHeight - 16);
+    const { maxBowl } = marsCraterAt(x, seed);
+    const floorH = baseH + Math.round(maxBowl);
+    return clamp(floorH, 12, worldHeight - 10);
+  }
   const mountains = worldType === 'mountains';
   const noise1 = perlinNoise(x * 0.01, 0, seed) * 25;
   const noise2 = perlinNoise(x * 0.03, 0, seed * 2) * (mountains ? 15 : 12);
@@ -509,10 +886,11 @@ const LAKE_CHANCE = 0.85;
 const LAKE_BEACH = 18;
 const LAKE_BLEND = 36;
 
-const LAKE_MAX_RELIEF = 26;  // lakes only form where the natural land varies this little
+const LAKE_MAX_RELIEF = 26; // lakes only form where the natural land varies this little
 const lakeCache = new Map();
 
 function lakeAt(x, seed, worldHeight = 256, worldType = 'regular') {
+  if (worldType === 'superflat' || worldType === 'moon' || worldType === 'mars') return null;
   const lake = lakeForCell(Math.floor(x / LAKE_CELL), seed, worldHeight, worldType);
   if (!lake || Math.abs(x - lake.center) > lake.reach) return null;
   return lake;
@@ -529,10 +907,12 @@ function lakeForCell(cell, seed, worldHeight = 256, worldType = 'regular') {
       const reach = half + LAKE_BEACH + LAKE_BLEND;
       const center = cell * LAKE_CELL + reach + Math.floor(rand01From(cell * 811 + 3, seed + 3030) * (LAKE_CELL - 2 * reach));
       // Only on land that's already fairly flat, so lakes don't wedge between hills.
-      let lo = Infinity, hi = -Infinity;
+      let lo = Infinity,
+        hi = -Infinity;
       for (let dx = -reach; dx <= reach; dx += 4) {
         const h = rawHeightAt(center + dx, seed, worldHeight, worldType);
-        lo = Math.min(lo, h); hi = Math.max(hi, h);
+        lo = Math.min(lo, h);
+        hi = Math.max(hi, h);
       }
       if (hi - lo <= LAKE_MAX_RELIEF) lake = { center, half, reach, depth: 4 + Math.floor(rand01From(cell * 811 + 4, seed + 3030) * 6) };
     }
@@ -545,7 +925,7 @@ function lakeForCell(cell, seed, worldHeight = 256, worldType = 'regular') {
 // { standX, center } for the nearest lake (standX is on its near beach), or null.
 // skip(center) lets callers pass over lakes they've already visited.
 export function nearestLakeX(x, seed, worldWidth, worldHeight, worldType = 'regular', skip = () => false) {
-  if (worldType === 'superflat') return null;
+  if (worldType === 'superflat' || worldType === 'moon' || worldType === 'mars') return null;
   const start = Math.floor(x / LAKE_CELL);
   let best = null;
   for (let d = 0; d <= 60; d++) {
@@ -568,7 +948,7 @@ function sandLayersAt(x, seed) {
   if (!lake) return SAND_LAYERS;
   const d = Math.abs(x - lake.center) - lake.half;
   if (d <= 0) return SAND_LAYERS;
-  return Math.max(1, Math.round(SAND_LAYERS - (SAND_LAYERS - 1) * d / LAKE_BEACH));
+  return Math.max(1, Math.round(SAND_LAYERS - ((SAND_LAYERS - 1) * d) / LAKE_BEACH));
 }
 
 // Wet sand: the lakebed and the first few blocks of shore.
@@ -585,6 +965,7 @@ function onLakeShore(x, seed) {
 }
 
 export function naturalDirtDepthAt(x, seed, worldType = 'regular') {
+  if (worldType === 'moon' || worldType === 'mars') return 0;
   return worldType === 'mountains' ? 8 + Math.floor(rand01From(x, seed) * 4) : 4 + Math.floor(rand01From(x, seed) * 2);
 }
 
@@ -619,7 +1000,192 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   }
 
   const h = heightAtLocal(x);
-  
+
+  if (worldType === 'moon') {
+    const rollingHills = perlinNoise(x * 0.009, 0, seed + 888) * 16.0 + perlinNoise(x * 0.022, 0, seed + 889) * 5.0;
+    const baseH = clamp(BASE + Math.round(rollingHills), 15, worldHeight - 15);
+    const { maxBowl } = moonCraterAt(x, seed);
+    const floorH = clamp(baseH + Math.round(maxBowl), 12, worldHeight - 10);
+
+    // Bedrock layer at bottom
+    if (y >= worldHeight - 2) {
+      return { id: 'bedrock', meta: null };
+    }
+
+    const hl = heightAtLocal(x - 1),
+      hr = heightAtLocal(x + 1);
+    const isStep = (hl === floorH - 1 && (hr === floorH || hr === floorH - 1)) || (hr === floorH - 1 && hl === floorH);
+
+    // Step smoothing: place a slab on all steps down/up (hl < floorH || hr < floorH)
+    // as well as dips and slope footings, smoothing the lunar terrain seamlessly.
+    const isCraterBowl = maxBowl > 0 && y >= baseH;
+    const isStepDown = hl < floorH || hr < floorH;
+    const isSlab = isStep || isStepDown;
+
+    if (y < floorH) {
+      // Step smoothing slab at the foot of slopes, along slopes, and in dips
+      if (isSlab && y === floorH - 1) {
+        return { id: 'lunar_rock_slab', meta: isCraterBowl ? { slabPos: 'bottom', bgId: 'lunar_rock' } : { slabPos: 'bottom' } };
+      }
+
+      // Surface / crater floor rock clutter: block immediately above solid ground
+      if (y === floorH - 1) {
+        const r = rand01From(x * 1337 + 101, seed + 404);
+        const maxChance = isCraterBowl ? 0.35 : 0.24;
+        if (r < maxChance) {
+          const ratio = r / maxChance;
+          const rockId = ratio < 0.35 ? 'lunar_rock_decor' : 'lunar_pebble';
+
+          const rMeta = rockMeta(rand01From(x * 1021, seed + 201), rand01From(x * 1031, seed + 202), rand01From(x * 1033, seed + 203));
+          return { id: rockId, meta: isCraterBowl ? { ...rMeta, bgId: 'lunar_rock' } : rMeta };
+        }
+      }
+      // Inside crater bowl: air with lunar_rock background wall
+      if (isCraterBowl) {
+        return { id: 'air', meta: { bgId: 'lunar_rock' } };
+      }
+
+      // Background slab smoothing at the rim / top edge of crater background sections
+      if (maxBowl > 0 && y === baseH - 1) {
+        const hillsL = perlinNoise((x - 1) * 0.009, 0, seed + 888) * 16.0 + perlinNoise((x - 1) * 0.022, 0, seed + 889) * 5.0;
+        const baseHL = clamp(BASE + Math.round(hillsL), 15, worldHeight - 15);
+        const hillsR = perlinNoise((x + 1) * 0.009, 0, seed + 888) * 16.0 + perlinNoise((x + 1) * 0.022, 0, seed + 889) * 5.0;
+        const baseHR = clamp(BASE + Math.round(hillsR), 15, worldHeight - 15);
+        const bowlL = moonCraterAt(x - 1, seed).maxBowl;
+        const bowlR = moonCraterAt(x + 1, seed).maxBowl;
+        if (baseHL < baseH || baseHR < baseH || bowlL <= 0.1 || bowlR <= 0.1) {
+          return { id: 'air', meta: { bgId: 'lunar_rock_slab', bgMeta: { slabPos: 'bottom' } } };
+        }
+      }
+
+      // Open sky above crater / moon
+      return { id: 'air', meta: null };
+    }
+
+    // Deep underground tunnels with lunar_rock background wall (only 18+ blocks deep!)
+    if (isMoonTunnel(x, y, seed, floorH, worldHeight)) {
+      if (!isMoonTunnel(x, y + 1, seed, floorH, worldHeight) && y + 1 < worldHeight - 2) {
+        const tr = rand01From(x * 1733 + y * 97, seed + 808);
+        if (tr < 0.16) {
+          const tratio = tr / 0.16;
+          const rockId = tratio < 0.35 ? 'lunar_rock_decor' : 'lunar_pebble';
+
+          const rMeta = rockMeta(
+            rand01From(x * 1021 + y * 13, seed + 501),
+            rand01From(x * 1031 + y * 17, seed + 502),
+            rand01From(x * 1033 + y * 19, seed + 503)
+          );
+          return { id: rockId, meta: { ...rMeta, bgId: 'lunar_rock' } };
+        }
+      }
+      return { id: 'air', meta: { bgId: 'lunar_rock' } };
+    }
+
+    return { id: 'lunar_rock', meta: null };
+  }
+
+  if (worldType === 'mars') {
+    const dunes = perlinNoise(x * 0.012, 0, seed + 777) * 14.0 + perlinNoise(x * 0.035, 0, seed + 778) * 6.0;
+    const baseH = clamp(BASE + Math.round(dunes), 16, worldHeight - 16);
+    const { maxBowl } = marsCraterAt(x, seed);
+    const floorH = clamp(baseH + Math.round(maxBowl), 12, worldHeight - 10);
+
+    // Bedrock layer at bottom
+    if (y >= worldHeight - 2) {
+      return { id: 'bedrock', meta: null };
+    }
+
+    const hl = heightAtLocal(x - 1),
+      hr = heightAtLocal(x + 1);
+    const isStep = (hl === floorH - 1 && (hr === floorH || hr === floorH - 1)) || (hr === floorH - 1 && hl === floorH);
+
+    const isCraterBowl = maxBowl > 0 && y >= baseH;
+    const isStepDown = hl < floorH || hr < floorH;
+    const isSlab = isStep || isStepDown;
+
+    if (y < floorH) {
+      // Step smoothing slab at the foot of dunes/craters
+      if (isSlab && y === floorH - 1) {
+        return { id: 'mars_sandstone_slab', meta: isCraterBowl ? { slabPos: 'bottom', bgId: 'mars_sandstone' } : { slabPos: 'bottom' } };
+      }
+
+      // Martian surface decor: pebbles and rocks resting on the sand
+      if (y === floorH - 1) {
+        const r = rand01From(x * 1453 + 201, seed + 505);
+        const maxChance = isCraterBowl ? 0.32 : 0.22;
+        if (r < maxChance) {
+          const ratio = r / maxChance;
+          const rockId = ratio < 0.35 ? 'mars_rock_decor' : 'mars_pebble';
+
+          const rMeta = rockMeta(rand01From(x * 1021, seed + 301), rand01From(x * 1031, seed + 302), rand01From(x * 1033, seed + 303));
+          return { id: rockId, meta: isCraterBowl ? { ...rMeta, bgId: 'mars_sandstone' } : rMeta };
+        }
+      }
+
+      // Inside crater bowl: air with mars_sandstone background wall
+      if (isCraterBowl) {
+        return { id: 'air', meta: { bgId: 'mars_sandstone' } };
+      }
+
+      // Background slab smoothing at the rim of crater basins
+      if (maxBowl > 0 && y === baseH - 1) {
+        const dunesL = perlinNoise((x - 1) * 0.012, 0, seed + 777) * 14.0 + perlinNoise((x - 1) * 0.035, 0, seed + 778) * 6.0;
+        const baseHL = clamp(BASE + Math.round(dunesL), 16, worldHeight - 16);
+        const dunesR = perlinNoise((x + 1) * 0.012, 0, seed + 777) * 14.0 + perlinNoise((x + 1) * 0.035, 0, seed + 778) * 6.0;
+        const baseHR = clamp(BASE + Math.round(dunesR), 16, worldHeight - 16);
+        const bowlL = marsCraterAt(x - 1, seed).maxBowl;
+        const bowlR = marsCraterAt(x + 1, seed).maxBowl;
+        if (baseHL < baseH || baseHR < baseH || bowlL <= 0.1 || bowlR <= 0.1) {
+          return { id: 'air', meta: { bgId: 'mars_sandstone_slab', bgMeta: { slabPos: 'bottom' } } };
+        }
+      }
+
+      // Open sky above Mars
+      return { id: 'air', meta: null };
+    }
+
+    // Deep Martian tunnels and caves (12+ blocks below surface)
+    if (isMarsTunnel(x, y, seed, floorH, worldHeight)) {
+      if (!isMarsTunnel(x, y + 1, seed, floorH, worldHeight) && y + 1 < worldHeight - 2) {
+        const tr = rand01From(x * 1823 + y * 97, seed + 909);
+        if (tr < 0.15) {
+          const tratio = tr / 0.15;
+          const rockId = tratio < 0.35 ? 'mars_rock_decor' : 'mars_pebble';
+
+          const rMeta = rockMeta(
+            rand01From(x * 1021 + y * 13, seed + 601),
+            rand01From(x * 1031 + y * 17, seed + 602),
+            rand01From(x * 1033 + y * 19, seed + 603)
+          );
+          return { id: rockId, meta: { ...rMeta, bgId: 'mars_sandstone' } };
+        }
+      }
+      return { id: 'air', meta: { bgId: 'mars_sandstone' } };
+    }
+
+    // Top surface layers: Martian sand and rippled sand dunes
+    const depth = y - floorH;
+    const sandNoise = perlinNoise(x * 0.1, y * 0.1, seed + 333);
+    const rippleNoise = perlinNoise(x * 0.25, 0, seed + 444);
+
+    if (depth < 2 || (depth < 3 && sandNoise > -0.2)) {
+      // Surface sand layer: rippled sand on windward spots, mars_sand elsewhere
+      return { id: depth === 0 && rippleNoise > 0.3 ? 'mars_rippled_sand' : 'mars_sand', meta: null };
+    }
+
+    // Underground sandstone stratification (regular, smooth, cut, chiseled)
+    const stratum = perlinNoise(x * 0.04, y * 0.08, seed + 555);
+    if (depth > 6 && depth < 20 && stratum > 0.45) {
+      return { id: 'mars_smooth_sandstone', meta: null };
+    } else if (depth >= 20 && depth < 35 && stratum > 0.48) {
+      return { id: 'mars_cut_sandstone', meta: null };
+    } else if (depth >= 15 && stratum < -0.58) {
+      return { id: 'mars_chiseled_sandstone', meta: null };
+    }
+
+    return { id: 'mars_sandstone', meta: null };
+  }
+
   if (worldType === 'superflat') {
     return sampleSuperflat(x, y, seed, HEIGHT, BASE, superflatLayers);
   }
@@ -635,7 +1201,7 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
       return { id: tb.id, meta: tb.meta ?? null };
     }
   }
-  
+
   const waterLevel = BASE + WATER_DEPTH;
   // Only proper lakes hold water; ordinary valleys stay dry.
   const underwater = false; // TEMP: lakes disabled for mobile host testing (was: h > waterLevel && !!lakeAt(...))
@@ -644,11 +1210,9 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   // Grass slabs smooth the ground out: one at the foot of a one-block step where the ground
   // carries on flat (the bottom of a slope included), and one half-filling a one-wide dip.
   // Partway down a steady slope (lower again on the other side) there's none.
-  const hl = heightAtLocal(x - 1), hr = heightAtLocal(x + 1);
-  const isGrassStep = !sandy && !onTrail && !underwater && (
-    (hl === h - 1 && (hr === h || hr === h - 1)) ||
-    (hr === h - 1 && hl === h)
-  );
+  const hl = heightAtLocal(x - 1),
+    hr = heightAtLocal(x + 1);
+  const isGrassStep = !sandy && !onTrail && !underwater && ((hl === h - 1 && (hr === h || hr === h - 1)) || (hr === h - 1 && hl === h));
 
   if (isGrassStep && y === h - 1) {
     return { id: 'grass_slab', meta: { slabPos: 'bottom' } };
@@ -666,7 +1230,7 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   } else if (y < h) {
     return { id: 'air', meta: null }; // TEMP: water generation disabled for mobile host testing
   } else if (y === h) {
-    return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : (isGrassStep ? 'dirt' : 'grass'), meta: null };
+    return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : isGrassStep ? 'dirt' : 'grass', meta: null };
   } else if (sandy && y <= h + sandLayersAt(x, seed)) {
     // Clay lumps mixed into the sand.
     return { id: perlinNoise(x * 0.35, y * 0.35, seed + 900) > 0.45 ? 'clay' : 'sand', meta: null };
@@ -704,7 +1268,10 @@ function lakeDecorAt(x, seed, underwater) {
   const v = 1 + Math.floor(rand01From(x * 1207, seed + 77) * 3);
   if (underwater) return r < 0.45 ? { id: 'seagrass', meta: { v, water: 1 } } : null;
   if (r < 0.2) return { id: 'shell', meta: { v } };
-  if (r < 0.3) return { id: r < 0.24 ? 'rock' : 'pebble', meta: rockMeta(rand01From(x * 1021, seed), rand01From(x * 1031, seed), rand01From(x * 1033, seed)) };
+  if (r < 0.3) {
+    const decorId = r < 0.25 ? 'rock' : 'pebble';
+    return { id: decorId, meta: rockMeta(rand01From(x * 1021, seed), rand01From(x * 1031, seed), rand01From(x * 1033, seed)) };
+  }
   return null;
 }
 
@@ -723,8 +1290,7 @@ const VEIN_IDS = [null, 'coal_ore', 'coal_ore_rich', 'coal_block'];
 // Two layers of noise: plain Perlin is zero all along its grid lines, which would make
 // dead-straight seams; the second layer (off the grid) breaks those up.
 function seamNoise(x, y, seed) {
-  return perlinNoise(x * 0.025, y * 0.04, seed + 4200)
-    + 0.5 * perlinNoise(x * 0.053 + 17.3, y * 0.081 + 5.7, seed + 4250);
+  return perlinNoise(x * 0.025, y * 0.04, seed + 4200) + 0.5 * perlinNoise(x * 0.053 + 17.3, y * 0.081 + 5.7, seed + 4250);
 }
 function coalVeinLevel(x, y, h, HEIGHT, seed) {
   if (y < h + 8 || y > HEIGHT - 6) return 0;
@@ -736,7 +1302,8 @@ function coalVeinLevel(x, y, h, HEIGHT, seed) {
   // changes, so the seam keeps an even thickness instead of ballooning where the noise is flat.
   const n = (px, py) => seamNoise(px, py, seed);
   const v = n(x, y);
-  const gx = (n(x + 1, y) - n(x - 1, y)) / 2, gy = (n(x, y + 1) - n(x, y - 1)) / 2;
+  const gx = (n(x + 1, y) - n(x - 1, y)) / 2,
+    gy = (n(x, y + 1) - n(x, y - 1)) / 2;
   const dist = Math.abs(v) / Math.max(Math.hypot(gx, gy), 1e-4);
   const t = dist + (rand01From(x * 7919 + y * 104729, seed + 4300) - 0.5) * 0.5;
   if (t < 0.8 * reach) return 3;
@@ -750,7 +1317,16 @@ function coalVeinLevel(x, y, h, HEIGHT, seed) {
 function coalVeinAt(x, y, h, HEIGHT, seed, heightAt) {
   let level = coalVeinLevel(x, y, h, HEIGHT, seed);
   if (level < 2) return VEIN_IDS[level];
-  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+  for (const [dx, dy] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1]
+  ]) {
     const nh = heightAt(x + dx);
     // Open cave counts as outside the vein too.
     const n = generateCaves(x + dx, y + dy, nh, seed) ? 0 : coalVeinLevel(x + dx, y + dy, nh, HEIGHT, seed);
@@ -765,12 +1341,12 @@ function generateOre(x, y, h, oreType, rarity, minHeight, maxHeight, seed) {
 
   const noiseScale = oreType === 'gold' ? 0.2 : 0.3;
   const oreNoise = perlinNoise(x * noiseScale, y * noiseScale, seed + 1000 + rarity * 100);
-  
+
   let adjustedRarity = rarity;
   if (oreType === 'gold') {
     const depthFactor = Math.min(1, (y - minHeight) / (maxHeight - minHeight));
     adjustedRarity += depthFactor * 0.03;
   }
-  
-  return oreNoise > (1 - adjustedRarity * 0.05);
+
+  return oreNoise > 1 - adjustedRarity * 0.05;
 }

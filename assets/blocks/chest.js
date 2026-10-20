@@ -15,27 +15,27 @@ export const createChest = (id, displayName, color) => ({
   solid: true,
   color,
   hardness: 3,
-  onPlace: function(world, x, y, meta) {
+  onPlace: function (world, x, y, meta) {
     const cell = world.getCell(x, y);
     if (!cell.meta) cell.meta = {};
-    
+
     if (!cell.meta.inv) {
       cell.meta.inv = new Array(27).fill(null);
     }
-    
+
     this.checkAndCombineWithAdjacent(world, x, y);
   },
-  checkAndCombineWithAdjacent: function(world, x, y) {
+  checkAndCombineWithAdjacent: function (world, x, y) {
     const cell = world.getCell(x, y);
     if (!cell.meta) cell.meta = {};
-    
+
     if (world.inBounds(x + 1, y) && world.getBlockId(x + 1, y) === this.id) {
       const rightCell = world.getCell(x + 1, y);
-      if (!rightCell.meta || (!rightCell.meta.chestType || rightCell.meta.chestType === 'single')) {
+      if (!rightCell.meta || !rightCell.meta.chestType || rightCell.meta.chestType === 'single') {
         cell.meta.chestType = 'left';
         if (!rightCell.meta) rightCell.meta = {};
         rightCell.meta.chestType = 'right';
-        
+
         if (cell.meta.inv && rightCell.meta.inv) {
           const combinedInv = new Array(54).fill(null);
           for (let i = 0; i < 27; i++) {
@@ -64,14 +64,14 @@ export const createChest = (id, displayName, color) => ({
         return;
       }
     }
-    
+
     if (world.inBounds(x - 1, y) && world.getBlockId(x - 1, y) === this.id) {
       const leftCell = world.getCell(x - 1, y);
-      if (!leftCell.meta || (!leftCell.meta.chestType || leftCell.meta.chestType === 'single')) {
+      if (!leftCell.meta || !leftCell.meta.chestType || leftCell.meta.chestType === 'single') {
         if (!leftCell.meta) leftCell.meta = {};
         leftCell.meta.chestType = 'left';
         cell.meta.chestType = 'right';
-        
+
         if (leftCell.meta.inv && cell.meta.inv) {
           const combinedInv = new Array(54).fill(null);
           for (let i = 0; i < 27; i++) {
@@ -102,7 +102,7 @@ export const createChest = (id, displayName, color) => ({
         return;
       }
     }
-    
+
     if (!cell.meta.chestType) {
       cell.meta.chestType = 'single';
     }
@@ -116,7 +116,7 @@ export const createChest = (id, displayName, color) => ({
       cell.meta.inv = singleInv;
     }
   },
-  onBreak: function(world, x, y, meta) {
+  onBreak: function (world, x, y, meta) {
     if (meta && meta.chestType) {
       if (meta.chestType === 'left') {
         if (world.inBounds(x + 1, y) && world.getBlockId(x + 1, y) === this.id) {

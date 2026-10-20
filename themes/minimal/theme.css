@@ -10,14 +10,10 @@
   --edge: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.55);
   --double-line: inset 0 0 0 2px rgba(0, 0, 0, 0.6), inset 0 0 0 4px var(--line);
   --corners:
-    linear-gradient(var(--line), var(--line)) top left / 10px 2px no-repeat,
-    linear-gradient(var(--line), var(--line)) top left / 2px 10px no-repeat,
-    linear-gradient(var(--line), var(--line)) top right / 10px 2px no-repeat,
-    linear-gradient(var(--line), var(--line)) top right / 2px 10px no-repeat,
-    linear-gradient(var(--line), var(--line)) bottom left / 10px 2px no-repeat,
-    linear-gradient(var(--line), var(--line)) bottom left / 2px 10px no-repeat,
-    linear-gradient(var(--line), var(--line)) bottom right / 10px 2px no-repeat,
-    linear-gradient(var(--line), var(--line)) bottom right / 2px 10px no-repeat;
+    linear-gradient(var(--line), var(--line)) top left / 10px 2px no-repeat, linear-gradient(var(--line), var(--line)) top left / 2px 10px no-repeat,
+    linear-gradient(var(--line), var(--line)) top right / 10px 2px no-repeat, linear-gradient(var(--line), var(--line)) top right / 2px 10px no-repeat,
+    linear-gradient(var(--line), var(--line)) bottom left / 10px 2px no-repeat, linear-gradient(var(--line), var(--line)) bottom left / 2px 10px no-repeat,
+    linear-gradient(var(--line), var(--line)) bottom right / 10px 2px no-repeat, linear-gradient(var(--line), var(--line)) bottom right / 2px 10px no-repeat;
 
   --text: #ffffff;
   --text-muted: rgba(255, 255, 255, 0.6);
@@ -123,12 +119,12 @@
   --stat-gap: 0;
   --stat-icon-width: 20px;
   --stat-icon-height: 18px;
-  --icon-heart-full: url("themes/minimal/icons/heart_full.png");
-  --icon-heart-half: url("themes/minimal/icons/heart_half.png");
-  --icon-heart-empty: url("themes/minimal/icons/heart_empty.png");
-  --icon-hunger-full: url("themes/minimal/icons/hunger_full.png");
-  --icon-hunger-half: url("themes/minimal/icons/hunger_half.png");
-  --icon-hunger-empty: url("themes/minimal/icons/hunger_empty.png");
+  --icon-heart-full: url('themes/minimal/icons/heart_full.png');
+  --icon-heart-half: url('themes/minimal/icons/heart_half.png');
+  --icon-heart-empty: url('themes/minimal/icons/heart_empty.png');
+  --icon-hunger-full: url('themes/minimal/icons/hunger_full.png');
+  --icon-hunger-half: url('themes/minimal/icons/hunger_half.png');
+  --icon-hunger-empty: url('themes/minimal/icons/hunger_empty.png');
 
   --scroll-width: 4px;
   --scroll-track: transparent;
@@ -203,9 +199,15 @@
   text-overflow: ellipsis;
 }
 
+/* Create World: each label sits as far below the field above it as the others, and the rows
+   of buttons are evenly spaced. */
+#createWorldMenu .form-section > .option-group {
+  margin: 12px 0 0;
+}
+
 #createWorldMenu .form-section > .menu-buttons {
   width: 100%;
-  margin: 8px 0 0;
+  margin: 16px 0 0;
 }
 
 #createWorldMenu > .menu-content > .menu-buttons,

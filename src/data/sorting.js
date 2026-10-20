@@ -5,7 +5,7 @@
 // Material order: all of one material sits together when sorting by material.
 export const MATERIALS = [
   'stone', 'sandstone', 'red_sandstone', 'dirt', 'grass', 'mud', 'clay', 'sand', 'red_sand', 'gravel',
-  'oak', 'birch', 'spruce', 'pine', 'maple', 'wood', 'plant', 'glass',
+  'oak', 'birch', 'spruce', 'pine', 'maple', 'wood', 'plant',
   'coal', 'copper', 'steel', 'gold', 'iron', 'food', 'misc'
 ];
 

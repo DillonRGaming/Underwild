@@ -6,15 +6,16 @@ export const POLISH_OPTIONS = [
   ['seams', 'Block Edge Shading'],
   ['wallShadows', 'Wall Shadows'],
   ['connectedGrass', 'Connected Grass'],
+  ['rockOverlay', 'Rock Overlay'],
   ['leaves', 'Fuller Leaves'],
   ['entityOutlines', 'Player & Item Outlines'],
   ['sky', 'Sky Gradient'],
   ['clouds', 'Pixel Clouds'],
-  ['hills', 'Background Hills'],
+  ['hills', 'Distant Land'],
   ['smoothLight', 'Smooth Lighting'],
   ['vignette', 'Vignette'],
   ['icons', 'Polished Icons'],
-  ['uiCorners', 'UI Corners'],
+  ['uiCorners', 'UI Corners']
 ];
 
 const state = { enabled: true };

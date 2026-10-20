@@ -34,7 +34,16 @@ export const BIOMES = {
     treeLayout: { cell: 14, spacing: 12 },
     treeChance: 0.9,
     plantChance: 0.92,
-    plants: [['short_grass', 5], ['bush', 4], ['fern', 3], ['grass_tuft', 3], ['flower_short_grass', 1], ['poppy', 0.5], ['rock', 1], ['pebble', 1]],
+    plants: [
+      ['short_grass', 5],
+      ['bush', 4],
+      ['fern', 3],
+      ['grass_tuft', 3],
+      ['flower_short_grass', 1],
+      ['poppy', 0.5],
+      ['rock', 1],
+      ['pebble', 0.7]
+    ],
     trees: [['big_oak', 1]]
   },
   birch_grove: {
@@ -45,7 +54,14 @@ export const BIOMES = {
     leafFall: 5,
     treeChance: 0.85,
     plantChance: 0.85,
-    plants: [['grass_tuft', 5], ['bush', 5], ['short_grass', 3], ['flower_short_grass', 2], ['rock', 1], ['pebble', 1.2]],
+    plants: [
+      ['grass_tuft', 5],
+      ['bush', 5],
+      ['short_grass', 3],
+      ['flower_short_grass', 2],
+      ['rock', 1],
+      ['pebble', 0.8]
+    ],
     trees: [['birch', 1]]
   },
   taiga: {
@@ -54,15 +70,28 @@ export const BIOMES = {
     grass: [62, 118, 82],
     treeChance: 0.9,
     plantChance: 0.88,
-    plants: [['fern', 6], ['bush', 3], ['grass_tuft', 3], ['short_grass', 2]],
-    trees: [['spruce', 5], ['pine', 5]]
+    plants: [
+      ['fern', 6],
+      ['bush', 3],
+      ['grass_tuft', 3],
+      ['short_grass', 2]
+    ],
+    trees: [
+      ['spruce', 5],
+      ['pine', 5]
+    ]
   },
   autumn_woods: {
     name: 'Autumn Woods',
     grass: [150, 130, 54],
     treeChance: 0.8,
     plantChance: 0.88,
-    plants: [['bush', 4], ['grass_tuft', 4], ['short_grass', 3], ['fern', 1]],
+    plants: [
+      ['bush', 4],
+      ['grass_tuft', 4],
+      ['short_grass', 3],
+      ['fern', 1]
+    ],
     trees: [['maple', 1]]
   },
   meadow: {
@@ -71,7 +100,12 @@ export const BIOMES = {
     grass: [150, 160, 62],
     treeChance: 0.12,
     plantChance: 0.95,
-    plants: [['short_grass', 6], ['flower_short_grass', 4], ['grass_tuft', 3], ['bush', 1]],
+    plants: [
+      ['short_grass', 6],
+      ['flower_short_grass', 4],
+      ['grass_tuft', 3],
+      ['bush', 1]
+    ],
     treeLayout: { cell: 14, spacing: 12 },
     trees: [['big_oak', 1]]
   }
@@ -112,34 +146,38 @@ export function biomeAt(x, seed) {
 // undefined; `fallback` is used for plain zones and biomes without one.
 function blendedColorAt(x, seed, pick, fallback) {
   const { own, other, t } = biomeBlendAt(x, seed);
-  const colorOf = id => (id && pick(BIOMES[id])) || fallback;
+  const colorOf = (id) => (id && pick(BIOMES[id])) || fallback;
   const a = colorOf(own);
   if (own === other) return a;
   const b = colorOf(other);
   const s = t * t * (3 - 2 * t);
-  return [0, 1, 2].map(i => Math.round(b[i] + (a[i] - b[i]) * s));
+  return [0, 1, 2].map((i) => Math.round(b[i] + (a[i] - b[i]) * s));
 }
 
 export function grassColorAt(x, seed) {
-  return blendedColorAt(x, seed, biome => biome.grass, BASE_GRASS);
+  return blendedColorAt(x, seed, (biome) => biome.grass, BASE_GRASS);
 }
 
 export function leafColorAt(x, seed, leafId, fallback) {
-  return blendedColorAt(x, seed, biome => biome.leaves?.[leafId], fallback);
+  return blendedColorAt(x, seed, (biome) => biome.leaves?.[leafId], fallback);
 }
 
 export function biomeHasLeafTint(leafId) {
-  return BIOME_IDS.some(id => BIOMES[id].leaves?.[leafId]);
+  return BIOME_IDS.some((id) => BIOMES[id].leaves?.[leafId]);
 }
 
 // Matches "birch", "birch grove", "birch_grove" etc. to a biome id.
 export function findBiomeId(query) {
-  const q = String(query || '').toLowerCase().replace(/[\s-]+/g, '_');
+  const q = String(query || '')
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
   if (!q) return null;
-  return BIOME_IDS.find(id => id === q)
-    || BIOME_IDS.find(id => BIOMES[id].name.toLowerCase().replace(/\s+/g, '_') === q)
-    || BIOME_IDS.find(id => id.startsWith(q) || id.includes(q))
-    || null;
+  return (
+    BIOME_IDS.find((id) => id === q) ||
+    BIOME_IDS.find((id) => BIOMES[id].name.toLowerCase().replace(/\s+/g, '_') === q) ||
+    BIOME_IDS.find((id) => id.startsWith(q) || id.includes(q)) ||
+    null
+  );
 }
 
 // Tile x of the nearest edge of the closest zone with this biome, a few blocks
@@ -162,7 +200,18 @@ export function nearestBiomeEdge(x, seed, biomeId, maxZones = 400, skip = () => 
 }
 
 // Plain zones' plant mix.
-export const PLAIN_PLANTS = { chance: 0.85, plants: [['short_grass', 6], ['grass_tuft', 4], ['flower_short_grass', 3], ['fern', 2], ['bush', 2], ['rock', 0.2], ['pebble', 0.2]] };
+export const PLAIN_PLANTS = {
+  chance: 0.85,
+  plants: [
+    ['short_grass', 6],
+    ['grass_tuft', 4],
+    ['flower_short_grass', 3],
+    ['fern', 2],
+    ['bush', 2],
+    ['rock', 0.2],
+    ['pebble', 0.15]
+  ]
+};
 
 function pickWeighted(list, roll) {
   const total = list.reduce((sum, [, w]) => sum + w, 0);
@@ -206,6 +255,21 @@ export function fogAt(x, seed) {
   const b = (other && BIOMES[other].fog) || 0;
   const s = t * t * (3 - 2 * t);
   return b + (a - b) * s;
+}
+
+// Leaves that blow in from afar in each biome (and plain land, `null`): the leaf blocks of
+// the trees that grow there, and how often (1 = a forest). Few where there are few trees.
+const STRAY_LEAVES = {
+  forest: { ids: ['oak_leaves'], rate: 1 },
+  birch_grove: { ids: ['birch_leaves'], rate: 2 },
+  taiga: { ids: ['spruce_leaves', 'pine_leaves'], rate: 0.7 },
+  autumn_woods: { ids: ['maple_orange_leaves', 'maple_red_leaves', 'maple_green_leaves'], rate: 2 },
+  meadow: { ids: ['oak_leaves'], rate: 0.3 },
+  plain: { ids: ['oak_leaves'], rate: 0.12 }
+};
+
+export function strayLeavesAt(x, seed) {
+  return STRAY_LEAVES[biomeAt(x, seed) || 'plain'] || STRAY_LEAVES.plain;
 }
 
 // How many times more often leaves drop from trees here (1 = normal).

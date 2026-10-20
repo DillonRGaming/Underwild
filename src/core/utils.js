@@ -18,4 +18,3 @@ export function darkenHex(hex, factor) {
   const toHex = (n) => n.toString(16).padStart(2, '0');
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
-

@@ -4,7 +4,8 @@ export default {
   material: 'stone',
   kind: 'block',
   tab: 'building',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['ss', 'ss'], ingredients: { s: 'stone_gravel' }, count: 1 },
     { shape: ['ppp', 'ppp', 'ppp'], ingredients: { p: 'stone' }, count: 9 }
   ],

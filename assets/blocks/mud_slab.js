@@ -4,7 +4,8 @@ export default {
   material: 'mud',
   kind: 'slab',
   tab: 'nature',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['pp', 'pp'], ingredients: { p: 'mud' }, count: 6 }
   ],
   tool: 'shovel', // mined fastest with this

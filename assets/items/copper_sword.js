@@ -4,7 +4,8 @@ export default {
   displayName: 'Copper Sword',
   kind: 'sword',
   tab: 'tools',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shapeless: { copper_sword_head: 1, stick: 1 }, count: 1 }
   ],
   maxStack: 1,

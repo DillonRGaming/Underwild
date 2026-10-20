@@ -12,15 +12,17 @@ const os = require('os');
 const { StringDecoder } = require('string_decoder');
 let WebSocketServer = null;
 let WebSocketClient = null;
-try { ({ WebSocketServer, WebSocket: WebSocketClient } = require('ws')); } catch (e) {}
+try {
+  ({ WebSocketServer, WebSocket: WebSocketClient } = require('ws'));
+} catch (e) {}
 
-const GAME_PORT = 47777;       // first TCP port tried by a host
-const DISCOVERY_PORT = 47778;  // UDP port hosts announce on
+const GAME_PORT = 47777; // first TCP port tried by a host
+const DISCOVERY_PORT = 47778; // UDP port hosts announce on
 const ANNOUNCE_MS = 1000;
-const HOST_TIMEOUT_MS = 4000;  // a host not heard from for this long leaves the list
+const HOST_TIMEOUT_MS = 4000; // a host not heard from for this long leaves the list
 const MAX_LINE = 64 * 1024 * 1024;
 
-let send = () => {};           // (channel, payload) -> page
+let send = () => {}; // (channel, payload) -> page
 
 // --- Line framing --------------------------------------------------------------------
 
@@ -43,9 +45,9 @@ function lineReader(onLine) {
 
 let server = null;
 let wsServer = null;
-let clients = new Map();       // id -> { write(line), end(), destroy() }
+const clients = new Map(); // id -> { write(line), end(), destroy() }
 let nextClientId = 1;
-let announce = null;           // { timer, socket, info }
+let announce = null; // { timer, socket, info }
 
 function startHost(port = GAME_PORT) {
   stopHost();
@@ -57,7 +59,10 @@ function startHost(port = GAME_PORT) {
         clients.set(id, socket);
         socket.on('error', () => {});
         send('mp:event', { type: 'guest-connect', id, address: socket.remoteAddress });
-        socket.on('data', lineReader((line) => send('mp:event', { type: 'message', id, data: line })));
+        socket.on(
+          'data',
+          lineReader((line) => send('mp:event', { type: 'message', id, data: line }))
+        );
         const gone = () => {
           if (!clients.has(id)) return;
           clients.delete(id);
@@ -92,7 +97,9 @@ function startWsServer(port) {
   wsServer.on('connection', (ws, req) => {
     const id = nextClientId++;
     const client = {
-      write: (line) => { if (ws.readyState === 1) ws.send(line.endsWith('\n') ? line.slice(0, -1) : line); },
+      write: (line) => {
+        if (ws.readyState === 1) ws.send(line.endsWith('\n') ? line.slice(0, -1) : line);
+      },
       end: () => ws.close(),
       destroy: () => ws.terminate()
     };
@@ -162,11 +169,16 @@ function broadcastAddresses() {
 
 function setAnnounce(info) {
   if (!info) return stopAnnounce();
-  if (announce) { announce.info = info; return; }
+  if (announce) {
+    announce.info = info;
+    return;
+  }
   const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   socket.on('error', () => {});
   socket.bind(() => {
-    try { socket.setBroadcast(true); } catch (e) {}
+    try {
+      socket.setBroadcast(true);
+    } catch (e) {}
   });
   const tick = () => {
     if (!announce) return;
@@ -180,18 +192,22 @@ function setAnnounce(info) {
 function stopAnnounce() {
   if (!announce) return;
   clearInterval(announce.timer);
-  try { announce.socket.close(); } catch (e) {}
+  try {
+    announce.socket.close();
+  } catch (e) {}
   announce = null;
 }
 
-let browser = null;            // { socket, hosts: Map, timer }
+let browser = null; // { socket, hosts: Map, timer }
 
 function setBrowsing(on) {
   if (!on) {
     if (browser) {
       clearInterval(browser.timer);
       clearInterval(browser.askTimer);
-      try { browser.socket.close(); } catch (e) {}
+      try {
+        browser.socket.close();
+      } catch (e) {}
       browser = null;
     }
     return;
@@ -208,7 +224,9 @@ function setBrowsing(on) {
     } catch (e) {}
   });
   socket.bind(DISCOVERY_PORT, () => {
-    try { socket.setBroadcast(true); } catch (e) {}
+    try {
+      socket.setBroadcast(true);
+    } catch (e) {}
   });
   const push = () => {
     const now = Date.now();
@@ -217,7 +235,9 @@ function setBrowsing(on) {
   };
   // Phones announce poorly on some networks, so also ask: hosts that hear this answer us directly.
   const probe = Buffer.from(JSON.stringify({ game: 'underwild', query: 1 }));
-  const ask = () => { for (const addr of broadcastAddresses()) socket.send(probe, DISCOVERY_PORT, addr, () => {}); };
+  const ask = () => {
+    for (const addr of broadcastAddresses()) socket.send(probe, DISCOVERY_PORT, addr, () => {});
+  };
   const askTimer = setInterval(ask, ANNOUNCE_MS);
   setTimeout(ask, 300);
   browser = { socket, hosts, timer: setInterval(push, 500), askTimer };
@@ -254,7 +274,10 @@ function joinTcp(address, port) {
       client = socket;
       resolve({ ok: true });
     });
-    socket.on('data', lineReader((line) => send('mp:event', { type: 'message', id: 0, data: line })));
+    socket.on(
+      'data',
+      lineReader((line) => send('mp:event', { type: 'message', id: 0, data: line }))
+    );
     socket.on('error', (err) => {
       if (!settled) {
         settled = true;
@@ -276,7 +299,9 @@ function joinWs(address, wsPort) {
     const ws = new WebSocketClient(`ws://${address}:${wsPort}`, { maxPayload: MAX_LINE });
     let settled = false;
     const wrapper = {
-      write: (line) => { if (ws.readyState === 1) ws.send(line.endsWith('\n') ? line.slice(0, -1) : line); },
+      write: (line) => {
+        if (ws.readyState === 1) ws.send(line.endsWith('\n') ? line.slice(0, -1) : line);
+      },
       end: () => ws.close(),
       destroy: () => ws.terminate()
     };

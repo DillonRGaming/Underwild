@@ -4,7 +4,8 @@ export default {
   displayName: 'Steel Pickaxe',
   kind: 'pickaxe',
   tab: 'tools',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shapeless: { steel_pickaxe_head: 1, stick: 1 }, count: 1 }
   ],
   maxStack: 1,

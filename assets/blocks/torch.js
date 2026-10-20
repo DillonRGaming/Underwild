@@ -4,7 +4,8 @@ export default {
   material: 'wood',
   kind: 'light',
   tab: 'functional',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['c', 's'], ingredients: { c: 'coal', s: 'stick' }, count: 4 }
   ],
   color: '#ff6b35',

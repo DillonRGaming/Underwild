@@ -1,6 +1,6 @@
 @font-face {
-  font-family: "MovType";
-  src: url("ui/MovType.ttf") format("truetype");
+  font-family: 'MovType';
+  src: url('ui/MovType.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
 }
@@ -8,7 +8,7 @@
 /* Layout and structure only. Every color, border and icon comes from the active theme in themes/<name>/theme.css. */
 
 :root {
-  --font: "MovType", ui-monospace, monospace;
+  --font: 'MovType', ui-monospace, monospace;
   --radius: 0;
   --font-size: 16px;
   --small-font-size: 13px;
@@ -406,7 +406,7 @@ body.game-paused .menu-background,
   background: var(--btn-bg-active);
 }
 
-.minecraft-button[data-selected="true"] {
+.minecraft-button[data-selected='true'] {
   color: var(--btn-text-hover);
   background: var(--btn-bg-selected);
   border: var(--btn-border-selected);
@@ -694,7 +694,7 @@ body.game-paused .menu-background,
 }
 
 .keybind-button.binding::after {
-  content: "...";
+  content: '...';
 }
 
 .keybind-button.modified {
@@ -761,6 +761,11 @@ body.game-paused .menu-background,
   background: var(--slot-bg);
   border: var(--slot-border);
   box-shadow: var(--slot-shadow);
+}
+
+.suggestion-swatch {
+  background: var(--swatch);
+  background-clip: content-box;
 }
 
 .suggestion-text {
@@ -919,26 +924,36 @@ body.game-paused .menu-background,
 
 /* HUD */
 
-/* TEMP: the coordinates and FPS box is hidden for now. */
-.coordinates { display: none !important; }
-
 .coordinates {
   position: absolute;
-  top: var(--coords-top);
-  left: var(--coords-left);
-  right: var(--coords-right);
-  z-index: 5;
+  top: var(--chat-top, 16px);
+  left: var(--chat-left, 16px);
+  z-index: 10;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: var(--hud-box-padding);
-  font-size: var(--coords-font-size);
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: var(--hotbar-padding);
   color: var(--hud-text);
-  text-shadow: var(--hud-text-shadow);
-  background: var(--hud-box-bg);
-  border: var(--hud-box-border);
+  background: var(--hotbar-bg);
+  border: var(--hotbar-border);
+  box-shadow: var(--hotbar-shadow);
   border-radius: var(--radius);
+  pointer-events: none;
+  user-select: none;
+}
+
+.coordinates.hidden {
+  display: none !important;
+}
+
+.coordinates > span {
+  box-sizing: border-box;
+  padding: 2px 6px;
+  font-size: 15px;
+  line-height: calc(var(--chat-line-height, 24px) - 4px);
+  white-space: nowrap;
 }
 
 #hotbar {
@@ -1010,12 +1025,24 @@ body.game-paused .menu-background,
   image-rendering: pixelated;
 }
 
-.stat-icon.heart.full { background-image: var(--icon-heart-full); }
-.stat-icon.heart.half { background-image: var(--icon-heart-half); }
-.stat-icon.heart.empty { background-image: var(--icon-heart-empty); }
-.stat-icon.hunger.full { background-image: var(--icon-hunger-full); }
-.stat-icon.hunger.half { background-image: var(--icon-hunger-half); }
-.stat-icon.hunger.empty { background-image: var(--icon-hunger-empty); }
+.stat-icon.heart.full {
+  background-image: var(--icon-heart-full);
+}
+.stat-icon.heart.half {
+  background-image: var(--icon-heart-half);
+}
+.stat-icon.heart.empty {
+  background-image: var(--icon-heart-empty);
+}
+.stat-icon.hunger.full {
+  background-image: var(--icon-hunger-full);
+}
+.stat-icon.hunger.half {
+  background-image: var(--icon-hunger-half);
+}
+.stat-icon.hunger.empty {
+  background-image: var(--icon-hunger-empty);
+}
 
 .chat-area {
   position: absolute;
@@ -1029,7 +1056,9 @@ body.game-paused .menu-background,
   pointer-events: none;
 }
 
-.chat-area.hidden { display: none; }
+.chat-area.hidden {
+  display: none;
+}
 
 .chat-log {
   display: flex;
@@ -1048,16 +1077,29 @@ body.game-paused .menu-background,
   border-radius: var(--radius);
 }
 
-.chat-area.chat-open .chat-log { pointer-events: auto; }
+.chat-area.chat-open .chat-log {
+  pointer-events: auto;
+}
 /* Short logs sit at the bottom, next to the input, and still scroll properly when long. */
-.chat-log::before { content: ''; margin-top: auto; }
-.chat-log::-webkit-scrollbar { display: none; }
+.chat-log::before {
+  content: '';
+  margin-top: auto;
+}
+.chat-log::-webkit-scrollbar {
+  display: none;
+}
 /* The container fades out along with its last line, then goes away. */
-.chat-log { transition: opacity 0.6s; }
-.chat-area:not(.chat-open) .chat-log:not(:has(.chat-line:not(.fading))) { opacity: 0; }
+.chat-log {
+  transition: opacity 0.6s;
+}
+.chat-area:not(.chat-open) .chat-log:not(:has(.chat-line:not(.fading))) {
+  opacity: 0;
+}
 /* The log's container only shows while there is something in it to read. */
 .chat-area:not(.chat-open) .chat-log:not(:has(.chat-line:not(.gone))),
-.chat-area.chat-open .chat-log:not(:has(.chat-line)) { display: none; }
+.chat-area.chat-open .chat-log:not(:has(.chat-line)) {
+  display: none;
+}
 
 .chat-line {
   box-sizing: border-box;
@@ -1067,16 +1109,24 @@ body.game-paused .menu-background,
   line-height: calc(var(--chat-line-height) - 4px);
   overflow-wrap: anywhere;
   color: var(--hud-text);
-  transition: opacity 0.6s, max-height 0.6s, padding 0.6s;
+  transition:
+    opacity 0.6s,
+    max-height 0.6s,
+    padding 0.6s;
 }
 
 .chat-line {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  /* Never squashed when the log is full (it scrolls instead), or long lines overlap. */
+  flex-shrink: 0;
 }
 
-.chat-line .chat-text { flex: 1; min-width: 0; }
+.chat-line .chat-text {
+  flex: 1;
+  min-width: 0;
+}
 
 .chat-line .chat-time {
   flex: none;
@@ -1085,10 +1135,18 @@ body.game-paused .menu-background,
   opacity: 0.8;
 }
 
-.chat-line .chat-name { color: var(--panel-text-muted); }
-.chat-line.error { color: #ff7b7b; }
-.chat-line.info { color: var(--panel-text-muted); }
-.chat-line.fading { opacity: 0; }
+.chat-line .chat-name {
+  color: var(--panel-text-muted);
+}
+.chat-line.error {
+  color: #ff7b7b;
+}
+.chat-line.info {
+  color: var(--panel-text-muted);
+}
+.chat-line.fading {
+  opacity: 0;
+}
 .chat-line.faded {
   opacity: 0;
   min-height: 0;
@@ -1266,7 +1324,6 @@ body.game-paused .menu-background,
   margin-bottom: 0;
   align-self: flex-start;
 }
-
 
 /* Images and slots never get dragged like on a web page (the game handles dragging). */
 img {
@@ -1473,7 +1530,7 @@ img {
   border: var(--input-border-focus);
 }
 
-#inventory[data-creative-tab="search"] .creative-search {
+#inventory[data-creative-tab='search'] .creative-search {
   visibility: visible;
 }
 
@@ -1519,8 +1576,8 @@ img {
   min-height: var(--creative-search-height);
 }
 
-#inventory.creative-mode:not([data-creative-tab="inventory"]) .inventory-header,
-#inventory.creative-mode:not([data-creative-tab="inventory"]) .inventory-grid {
+#inventory.creative-mode:not([data-creative-tab='inventory']) .inventory-header,
+#inventory.creative-mode:not([data-creative-tab='inventory']) .inventory-grid {
   display: none;
 }
 
@@ -1868,13 +1925,22 @@ img {
 }
 
 @keyframes craft-landed {
-  0% { transform: scale(1.18); box-shadow: inset 0 0 0 2px #ffffff; }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(1.18);
+    box-shadow: inset 0 0 0 2px #ffffff;
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .craft-flyer { transition: none; }
-  .craft-landed { animation: none; }
+  .craft-flyer {
+    transition: none;
+  }
+  .craft-landed {
+    animation: none;
+  }
 }
 
 .recipe-name {
@@ -1922,13 +1988,10 @@ img {
   color: #ff7a6a;
 }
 
-
-
 #craftingTable .recipe-panel {
   width: 100%;
   margin-bottom: var(--inventory-section-gap);
 }
-
 
 /* Furnace: fuel on the left, then crucibles in a row with their outputs underneath. A thin
    bar shows fuel left or cooking progress. */
@@ -1968,8 +2031,12 @@ img {
   background: #ffaa3c;
 }
 
-.furnace-cell.crucible[data-state="idle"] .furnace-bar > div { background: #9a9a9a; }
-.furnace-cell.crucible[data-state="full"] .furnace-bar > div { background: #ffffff; }
+.furnace-cell.crucible[data-state='idle'] .furnace-bar > div {
+  background: #9a9a9a;
+}
+.furnace-cell.crucible[data-state='full'] .furnace-bar > div {
+  background: #ffffff;
+}
 
 /* Creative: the item grid's scrollbar sits in its own room on the right, and the same room
    is padded on the left, so the slots stay centred exactly where the inventory tab's slots
@@ -2018,12 +2085,12 @@ img {
   margin-bottom: 0;
 }
 
-#inventory.creative-mode[data-creative-tab="inventory"] .creative-panel.hidden {
+#inventory.creative-mode[data-creative-tab='inventory'] .creative-panel.hidden {
   display: block !important;
   visibility: hidden;
 }
 
-#inventory.creative-mode:not([data-creative-tab="inventory"]) .inventory-main {
+#inventory.creative-mode:not([data-creative-tab='inventory']) .inventory-main {
   display: none;
 }
 
@@ -2033,6 +2100,14 @@ img {
 }
 
 /* Command signatures: one pill per argument, choices split by bars */
+.suggestion-section {
+  padding: 6px 6px 2px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--panel-text-muted);
+}
+
 .suggestion-head {
   display: flex;
   align-items: center;
@@ -2058,11 +2133,6 @@ img {
   background: var(--slot-bg-hover);
   color: var(--panel-text);
   outline: var(--slot-border-hover);
-}
-
-.suggestion-text .cmd-sep {
-  margin: 0 4px;
-  opacity: 0.4;
 }
 
 .suggestion-item .suggestion-text:has(.cmd-arg),
@@ -2218,6 +2288,21 @@ img {
   text-shadow: var(--text-shadow);
 }
 
+/* Pause > Players (hosting): a guest's name, then their permission and kick / ban buttons. */
+.mp-player-row {
+  cursor: default;
+}
+.mp-player-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.mp-player-actions .minecraft-button.small {
+  min-width: 0;
+  padding: 4px 8px;
+}
+
 .mp-empty {
   padding: 14px;
   text-align: center;
@@ -2331,9 +2416,9 @@ body.hide-window-controls #drag-zone {
 /* --- Touch controls (phones / tablets), minimal style ---
    Sized from the screen height so they fit a landscape phone and grow on tablets. */
 #touchControls {
-  --tb: clamp(44px, 15vh, 76px);   /* button size */
-  --tg: clamp(6px, 2vh, 12px);     /* gap between buttons */
-  --te: clamp(10px, 4vh, 32px);    /* distance from the screen edge */
+  --tb: clamp(44px, 15vh, 76px); /* button size */
+  --tg: clamp(6px, 2vh, 12px); /* gap between buttons */
+  --te: clamp(10px, 4vh, 32px); /* distance from the screen edge */
   position: fixed;
   inset: 0;
   z-index: 6;
@@ -2341,8 +2426,13 @@ body.hide-window-controls #drag-zone {
   user-select: none;
   -webkit-user-select: none;
 }
-#touchControls.hidden { display: none; }
-#touchControls .touch-btn, #touchControls .touch-pad { pointer-events: auto; }
+#touchControls.hidden {
+  display: none;
+}
+#touchControls .touch-btn,
+#touchControls .touch-pad {
+  pointer-events: auto;
+}
 
 .touch-btn {
   width: var(--tb);
@@ -2357,8 +2447,13 @@ body.hide-window-controls #drag-zone {
   color: var(--line, #fff);
   touch-action: none;
 }
-.touch-btn svg { width: 45%; height: 45%; }
-.touch-btn.pressed { background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
+.touch-btn svg {
+  width: 45%;
+  height: 45%;
+}
+.touch-btn.pressed {
+  background: var(--fill-strong, rgba(0, 0, 0, 0.6));
+}
 
 .touch-pad {
   position: absolute;
@@ -2385,12 +2480,30 @@ body.hide-window-controls #drag-zone {
 
 /* Right side: sprint, jump and down in a column on the screen edge, the aim stick just
    to their left. */
-.touch-buttons .touch-btn { position: absolute; }
-.touch-aim { left: auto; right: calc(var(--te) + var(--tb) + var(--tg)); }
-.touch-down   { right: var(--te); bottom: var(--te); }
-.touch-jump   { right: var(--te); bottom: calc(var(--te) + var(--tb) + var(--tg)); }
-.touch-sprint { right: var(--te); bottom: calc(var(--te) + 2 * (var(--tb) + var(--tg))); opacity: 0.55; }
-.touch-sprint.on { opacity: 1; background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
+.touch-buttons .touch-btn {
+  position: absolute;
+}
+.touch-aim {
+  left: auto;
+  right: calc(var(--te) + var(--tb) + var(--tg));
+}
+.touch-down {
+  right: var(--te);
+  bottom: var(--te);
+}
+.touch-jump {
+  right: var(--te);
+  bottom: calc(var(--te) + var(--tb) + var(--tg));
+}
+.touch-sprint {
+  right: var(--te);
+  bottom: calc(var(--te) + 2 * (var(--tb) + var(--tg)));
+  opacity: 0.55;
+}
+.touch-sprint.on {
+  opacity: 1;
+  background: var(--fill-strong, rgba(0, 0, 0, 0.6));
+}
 
 .touch-more {
   position: absolute;
@@ -2426,7 +2539,9 @@ body.touch-mode {
 /* Desktop-app-only settings (window controls, graphics, app icon) are hidden on phones. */
 body.touch-mode .desktop-only,
 body.touch-mode #window-controls,
-body.touch-mode #drag-zone { display: none !important; }
+body.touch-mode #drag-zone {
+  display: none !important;
+}
 
 /* Phones: a smaller inventory and menus, so they fit a landscape screen. */
 body.touch-mode {
@@ -2441,7 +2556,6 @@ body.touch-mode .menu-content {
   max-height: calc(96vh / 0.72);
   height: auto;
 }
-
 
 .touch-pause {
   position: absolute;
@@ -2476,15 +2590,29 @@ body.touch-mode .menu-content {
   font-size: 14px;
   white-space: nowrap;
 }
-.app-update-bar .minecraft-button { width: auto; min-width: 0; padding: 4px 12px; }
+.app-update-bar .minecraft-button {
+  width: auto;
+  min-width: 0;
+  padding: 4px 12px;
+}
 
 /* Phones: the hotbar (with its stats and "..." button) sits a little left of centre, out of
    the way of the buttons beside the aim stick. */
-body.touch-mode { --hotbar-shift: -36px; }
-body.touch-mode #hotbar { transform: translateX(calc(-50% + var(--hotbar-shift))); }
-body.touch-mode .ui-health { left: calc(50% - var(--stats-half-width) + var(--hotbar-shift)); }
-body.touch-mode .ui-hunger { right: calc(50% - var(--stats-half-width) - var(--hotbar-shift)); }
-body.touch-mode .touch-more { margin-left: var(--hotbar-shift); }
+body.touch-mode {
+  --hotbar-shift: -36px;
+}
+body.touch-mode #hotbar {
+  transform: translateX(calc(-50% + var(--hotbar-shift)));
+}
+body.touch-mode .ui-health {
+  left: calc(50% - var(--stats-half-width) + var(--hotbar-shift));
+}
+body.touch-mode .ui-hunger {
+  right: calc(50% - var(--stats-half-width) - var(--hotbar-shift));
+}
+body.touch-mode .touch-more {
+  margin-left: var(--hotbar-shift);
+}
 
 /* Break / place switch for the aim stick, centred above it. */
 .touch-mode-btn {
@@ -2494,16 +2622,24 @@ body.touch-mode .touch-more { margin-left: var(--hotbar-shift); }
   right: calc(var(--te) + var(--tb) + var(--tg) + clamp(90px, 31vh, 160px) / 2 - var(--tb) * 0.35);
   bottom: calc(var(--te) + clamp(90px, 31vh, 160px) + var(--tg));
 }
-.touch-mode-btn.on { background: var(--fill-strong, rgba(0, 0, 0, 0.6)); }
+.touch-mode-btn.on {
+  background: var(--fill-strong, rgba(0, 0, 0, 0.6));
+}
 
 /* Settings only shown on phones. */
-.touch-only { display: none; }
-body.touch-mode .touch-only { display: block; }
+.touch-only {
+  display: none;
+}
+body.touch-mode .touch-only {
+  display: block;
+}
 
 /* Tap aiming (the default on phones): no aim stick, break/place switch or crosshair. */
 #touchControls.tap-mode .touch-aim,
 #touchControls.tap-mode .touch-mode-btn,
-#touchControls.tap-mode .touch-crosshair { display: none; }
+#touchControls.tap-mode .touch-crosshair {
+  display: none;
+}
 
 /* Magnifier shown while holding to break: 3 blocks across, follows the finger. */
 .touch-magnifier {
@@ -2519,21 +2655,46 @@ body.touch-mode .touch-only { display: block; }
   pointer-events: none !important;
   z-index: 20;
 }
-.touch-magnifier.hidden { display: none; }
+.touch-magnifier.hidden {
+  display: none;
+}
 
 /* --- GUI scale (Options > Graphics) ---
    Each piece is scaled about the point it's anchored to, so the hotbar stays centred on the
    bottom, the stats stay on its corners, and so on. Clicks still land on the right slots. */
-#hotbar { scale: var(--gui-scale, 1); transform-origin: left bottom; }
-.ui-health { scale: var(--gui-scale, 1); transform-origin: left bottom; }
-.ui-hunger { scale: var(--gui-scale, 1); transform-origin: right bottom; }
-.chat-area { scale: var(--gui-scale, 1); transform-origin: left top; }
+#hotbar {
+  scale: var(--gui-scale, 1);
+  transform-origin: left bottom;
+}
+.ui-health {
+  scale: var(--gui-scale, 1);
+  transform-origin: left bottom;
+}
+.ui-hunger {
+  scale: var(--gui-scale, 1);
+  transform-origin: right bottom;
+}
+.chat-area {
+  scale: var(--gui-scale, 1);
+  transform-origin: left top;
+}
+.coordinates {
+  scale: var(--gui-scale, 1);
+  transform-origin: left top;
+}
 .inventory-overlay > .inventory-frame,
 .inventory-overlay > .inventory-content,
-.menu-content { scale: var(--gui-scale, 1); }
-.dragging-item { scale: var(--gui-scale, 1); transform-origin: left top; }
+.menu-content {
+  scale: var(--gui-scale, 1);
+}
+.dragging-item {
+  scale: var(--gui-scale, 1);
+  transform-origin: left top;
+}
 .touch-more {
-  left: calc(50% + var(--hotbar-shift, 0px) + ((9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 + var(--hotbar-padding) + 6px) * var(--gui-scale, 1)) !important;
+  left: calc(
+    50% + var(--hotbar-shift, 0px) + ((9 * var(--hotbar-slot-size) + 8 * var(--hotbar-gap)) / 2 + var(--hotbar-padding) + 6px) * var(--gui-scale, 1)
+  ) !important;
   margin-left: 0 !important;
   bottom: calc(var(--hotbar-bottom) + (var(--hotbar-padding) + 2px) * var(--gui-scale, 1)) !important;
   scale: var(--gui-scale, 1);
@@ -2543,24 +2704,55 @@ body.touch-mode .touch-only { display: block; }
   --tb: calc(clamp(44px, 15vh, 76px) * var(--gui-scale, 1));
   --tg: calc(clamp(6px, 2vh, 12px) * var(--gui-scale, 1));
 }
-.touch-pad { scale: var(--gui-scale, 1); transform-origin: left bottom; }
-.touch-aim { transform-origin: right bottom; }
+.touch-pad {
+  scale: var(--gui-scale, 1);
+  transform-origin: left bottom;
+}
+.touch-aim {
+  transform-origin: right bottom;
+}
 #touchControls {
-  --tp: calc(clamp(90px, 31vh, 160px) * var(--gui-scale, 1));   /* joystick size */
-  --ts: calc(clamp(36px, 11vh, 52px) * var(--gui-scale, 1));    /* top-right buttons */
-  --tt: clamp(8px, 3vh, 20px);                                  /* their edge gap */
+  --tp: calc(clamp(90px, 31vh, 160px) * var(--gui-scale, 1)); /* joystick size */
+  --ts: calc(clamp(36px, 11vh, 52px) * var(--gui-scale, 1)); /* top-right buttons */
+  --tt: clamp(8px, 3vh, 20px); /* their edge gap */
 }
 .touch-mode-btn {
   right: calc(var(--te) + var(--tb) + var(--tg) + var(--tp) / 2 - var(--tb) * 0.35);
   bottom: calc(var(--te) + var(--tp) + var(--tg));
 }
-.touch-pause { top: var(--tt); right: var(--tt); width: var(--ts); height: var(--ts); }
-.touch-chat  { top: var(--tt); right: calc(var(--tt) * 2 + var(--ts)); width: var(--ts); height: var(--ts); }
-.touch-zoom-in  { position: absolute; top: var(--tt); right: calc(var(--tt) * 3 + var(--ts) * 2); width: var(--ts); height: var(--ts); }
-.touch-zoom-out { position: absolute; top: var(--tt); right: calc(var(--tt) * 4 + var(--ts) * 3); width: var(--ts); height: var(--ts); }
+.touch-pause {
+  top: var(--tt);
+  right: var(--tt);
+  width: var(--ts);
+  height: var(--ts);
+}
+.touch-chat {
+  top: var(--tt);
+  right: calc(var(--tt) * 2 + var(--ts));
+  width: var(--ts);
+  height: var(--ts);
+}
+.touch-zoom-in {
+  position: absolute;
+  top: var(--tt);
+  right: calc(var(--tt) * 3 + var(--ts) * 2);
+  width: var(--ts);
+  height: var(--ts);
+}
+.touch-zoom-out {
+  position: absolute;
+  top: var(--tt);
+  right: calc(var(--tt) * 4 + var(--ts) * 3);
+  width: var(--ts);
+  height: var(--ts);
+}
 
 /* Send button beside the chat box on phones. */
-body.touch-mode .chat-input-wrapper { display: flex; align-items: center; gap: 6px; }
+body.touch-mode .chat-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 body.touch-mode .chat-send.touch-only {
   display: flex;
   align-items: center;
@@ -2577,23 +2769,47 @@ body.touch-mode .chat-send.touch-only {
 }
 
 /* Phones: the creative item grid is 3 rows tall, so the menu fits a landscape screen. */
-body.touch-mode .creative-grid { height: calc(3 * var(--slot-size) + 2 * var(--slot-gap)); }
+body.touch-mode .creative-grid {
+  height: calc(3 * var(--slot-size) + 2 * var(--slot-gap));
+}
 /* The chat's form is only there for phone keyboards; it doesn't change the layout. */
-.chat-form { display: contents; }
+.chat-form {
+  display: contents;
+}
 
 /* Phones: tighter spacing at the top and bottom of the creative inventory. */
 /* The same 8px gap on all four sides. */
-body.touch-mode #inventory.creative-mode { --inventory-padding: 8px; }
-body.touch-mode #inventory.creative-mode .inventory-content { padding: 8px; }
-body.touch-mode #inventory.creative-mode .creative-header { margin-bottom: 4px; }
-body.touch-mode #inventory.creative-mode .creative-panel { margin-bottom: 8px; }
-body.touch-mode #inventory.creative-mode .creative-tabs-top { margin-bottom: 2px; }
-body.touch-mode #inventory.creative-mode .creative-tabs-bottom { margin-top: 2px; }
+body.touch-mode #inventory.creative-mode {
+  --inventory-padding: 8px;
+}
+body.touch-mode #inventory.creative-mode .inventory-content {
+  padding: 8px;
+}
+body.touch-mode #inventory.creative-mode .creative-header {
+  margin-bottom: 4px;
+}
+body.touch-mode #inventory.creative-mode .creative-panel {
+  margin-bottom: 8px;
+}
+body.touch-mode #inventory.creative-mode .creative-tabs-top {
+  margin-bottom: 2px;
+}
+body.touch-mode #inventory.creative-mode .creative-tabs-bottom {
+  margin-top: 2px;
+}
 /* The creative grid scrolls with the wheel or by dragging, with no scrollbar, so there's no
    room kept for one either side: the gap round the panel is the same on every side. */
-#inventory.creative-mode { --creative-scroll-room: 0px; }
-#inventory.creative-mode .creative-grid { padding-left: 0; padding-right: 0; scrollbar-width: none; }
-#inventory.creative-mode .creative-grid::-webkit-scrollbar { display: none; }
+#inventory.creative-mode {
+  --creative-scroll-room: 0px;
+}
+#inventory.creative-mode .creative-grid {
+  padding-left: 0;
+  padding-right: 0;
+  scrollbar-width: none;
+}
+#inventory.creative-mode .creative-grid::-webkit-scrollbar {
+  display: none;
+}
 /* Phones: the creative grid is only 3 rows tall, so on the Inventory tab the title and
    recipe list squeeze into the space above the rows (the recipes scroll) and the box stays
    the same size: the rows and hotbar sit exactly where they do on the creative tabs. */
@@ -2603,12 +2819,26 @@ body.touch-mode #inventory.creative-mode .inventory-main .inventory-header {
   overflow: hidden;
   align-items: stretch;
 }
-body.touch-mode #inventory.creative-mode .inventory-main .recipe-panel { min-height: 0; overflow: hidden; }
-body.touch-mode #inventory.creative-mode .inventory-main .recipe-list { max-height: 100%; overflow-y: auto; }
-body.touch-mode #inventory.creative-mode .inventory-main { margin-bottom: 8px; } /* same as the creative panel */
+body.touch-mode #inventory.creative-mode .inventory-main .recipe-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+body.touch-mode #inventory.creative-mode .inventory-main .recipe-list {
+  max-height: 100%;
+  overflow-y: auto;
+}
+body.touch-mode #inventory.creative-mode .inventory-main {
+  margin-bottom: 8px;
+} /* same as the creative panel */
 /* ...and the recipe list beside the title shrinks to the room left, instead of sticking out. */
-body.touch-mode #inventory .inventory-header { min-width: 0; }
-body.touch-mode #inventory .inventory-header .recipe-panel { flex: 1 1 0; min-width: 0; width: auto; }
+body.touch-mode #inventory .inventory-header {
+  min-width: 0;
+}
+body.touch-mode #inventory .inventory-header .recipe-panel {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
 
 .polish-heading {
   margin: 18px 0 8px;
@@ -2620,18 +2850,63 @@ body.touch-mode #inventory .inventory-header .recipe-panel { flex: 1 1 0; min-wi
 }
 
 /* Polish > UI Corners: every bordered box gets pixel-cut corners, like the blocks in game. */
-body.polish-ui-corners :is(
-  .chat-log, .name-tag, .minecraft-button, .win-btn, .keybind-button, .minecraft-input, .chat-input,
-  .suggestions-dropdown, .suggestion-icon, .background-blocks, .bg-block-remove,
-  .info-panel, .chat-container, .inventory-content, .inventory-slot, .crafting-slot,
-  .crafting-output-slot, .hotbar-slot, #hotbar, .recipe-row, .forge-panel, .forge-choice,
-  .music-thumb, .skin-preview, .mod-thumbnail, .menu-panel, .creative-tab
-) {
+body.polish-ui-corners
+  :is(
+    .coordinates,
+    .chat-log,
+    .name-tag,
+    .minecraft-button,
+    .win-btn,
+    .keybind-button,
+    .minecraft-input,
+    .chat-input,
+    .suggestions-dropdown,
+    .suggestion-icon,
+    .background-blocks,
+    .bg-block-remove,
+    .info-panel,
+    .chat-container,
+    .inventory-content,
+    .inventory-slot,
+    .crafting-slot,
+    .crafting-output-slot,
+    .hotbar-slot,
+    #hotbar,
+    .recipe-row,
+    .forge-panel,
+    .forge-choice,
+    .music-thumb,
+    .skin-preview,
+    .mod-thumbnail,
+    .menu-content,
+    .creative-tab,
+    .music-track-item,
+    .skin-item,
+    .mod-card,
+    .mod-grid-item,
+    .mp-list-item,
+    .keybind-row,
+    .creative-search,
+    .creative-sort,
+    .app-icon-grid img,
+    .app-update-bar,
+    .chat-send,
+    .touch-btn,
+    .touch-pad,
+    .touch-pad-stick,
+    .touch-magnifier,
+    .perf-overlay
+  ) {
   --notch: 3px;
   clip-path: polygon(
-    var(--notch) 0, calc(100% - var(--notch)) 0, 100% var(--notch),
-    100% calc(100% - var(--notch)), calc(100% - var(--notch)) 100%,
-    var(--notch) 100%, 0 calc(100% - var(--notch)), 0 var(--notch)
+    var(--notch) 0,
+    calc(100% - var(--notch)) 0,
+    100% var(--notch),
+    100% calc(100% - var(--notch)),
+    calc(100% - var(--notch)) 100%,
+    var(--notch) 100%,
+    0 calc(100% - var(--notch)),
+    0 var(--notch)
   );
 }
 
@@ -2683,7 +2958,9 @@ body.polish-ui-corners :is(
   line-height: 1.6;
 }
 
-.chat-area .suggestion-text .cmd-arg { margin-left: 4px; }
+.chat-area .suggestion-text .cmd-arg {
+  margin-left: 4px;
+}
 
 .chat-area .suggestion-item .suggestion-id,
 .chat-area .suggestion-head .suggestion-id {
@@ -2708,12 +2985,42 @@ body.polish-ui-corners :is(
 }
 
 /* This font draws its letters above the middle of the line, so nudge them down to look centred. */
-.name-tag-text { display: block; transform: translateY(3px); }
+.name-tag-text {
+  display: block;
+  transform: translateY(3px);
+}
 
 /* A player's chosen colour: just the name's text. */
-.name-tag.colored { color: var(--tag-color); }
+.name-tag.colored {
+  color: var(--tag-color);
+}
 
 /* On phones the chat log is only 3 messages tall. */
 body.touch-mode .chat-log {
   max-height: calc(3 * var(--chat-line-height) + 2 * var(--hotbar-padding) + 4px);
+}
+
+/* Options > Graphics > Performance Overlay (or F3): top right, under the window controls. */
+.perf-overlay {
+  position: fixed;
+  top: 40px;
+  right: 8px;
+  z-index: 5;
+  padding: 6px 10px;
+  white-space: pre;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--hud-text, #fff);
+  background: var(--hotbar-bg, rgba(0, 0, 0, 0.55));
+  border: var(--hotbar-border, 2px solid rgba(255, 255, 255, 0.3));
+  border-radius: var(--radius, 0);
+  pointer-events: none;
+}
+.perf-overlay.hidden {
+  display: none;
+}
+/* Phones: below the zoom, chat and pause buttons along the top. */
+body.touch-mode .perf-overlay {
+  top: calc(clamp(8px, 3vh, 20px) * 2 + clamp(36px, 11vh, 52px) * var(--gui-scale, 1));
 }

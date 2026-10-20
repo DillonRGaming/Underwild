@@ -8,4 +8,3 @@ export default {
   type: 'item',
   maxStack: 24
 };
-

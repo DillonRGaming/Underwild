@@ -27,9 +27,14 @@ export class ExplosionFX {
       const a = Math.random() * Math.PI * 2;
       const s = 3 + Math.random() * radiusPx * 0.16;
       this.particles.push({
-        kind: 'spark', x, y,
-        vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2,
-        size: 2 + Math.random() * 2, life: 0, maxLife: 30 + Math.random() * 50,
+        kind: 'spark',
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s - 2,
+        size: 2 + Math.random() * 2,
+        life: 0,
+        maxLife: 30 + Math.random() * 50,
         color: pick(SPARK_COLORS)
       });
     }
@@ -37,13 +42,17 @@ export class ExplosionFX {
       const a = -Math.PI * Math.random();
       const s = 1 + Math.random() * 4;
       this.particles.push({
-        kind: 'ember', x, y,
-        vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2,
-        size: 3, life: 0, maxLife: 120 + Math.random() * 120,
+        kind: 'ember',
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s - 2,
+        size: 3,
+        life: 0,
+        maxLife: 120 + Math.random() * 120,
         color: pick(FIRE_COLORS)
       });
     }
-
   }
 
   update(world, tileSize) {
@@ -51,11 +60,13 @@ export class ExplosionFX {
       const p = this.particles[i];
       p.life += 1;
       if (p.life < 0) continue;
-      p.vx *= 0.98; p.vy += 0.15;
+      p.vx *= 0.98;
+      p.vy += 0.15;
       const tx = Math.floor((p.x + p.vx) / tileSize);
       const ty = Math.floor((p.y + p.vy) / tileSize);
       if (world.inBounds(tx, ty) && world.getBlockType(tx, ty)?.solid) {
-        p.vy *= -0.3; p.vx *= 0.5;
+        p.vy *= -0.3;
+        p.vx *= 0.5;
       }
       p.x += p.vx;
       p.y += p.vy;

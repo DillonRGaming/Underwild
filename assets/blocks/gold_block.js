@@ -4,7 +4,8 @@ export default {
   material: 'gold',
   kind: 'metal_block',
   tab: 'materials',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['iii', 'iii', 'iii'], ingredients: { i: 'gold_ingot' }, count: 1 }
   ],
   tool: 'pickaxe', // mined fastest with this

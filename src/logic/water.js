@@ -15,15 +15,15 @@ import { ParticleWater } from './particleWater.js';
 import { waterPerf } from '../core/waterPerf.js';
 
 export const WATER_LEVELS = 16;
-export const SQ = 16;             // drawing resolution: water pixels across a block (one per texture pixel)
+export const SQ = 16; // drawing resolution: water pixels across a block (one per texture pixel)
 
 const MAX_MASS = 1;
-const MAX_COMPRESS = 0.02;        // extra a block holds per block of water above it
-const MIN_MASS = 0.0005;          // less than this is dried up
-const MIN_FLOW = 0.005;           // flows above this are halved, for smoother movement
-const MAX_SPEED = 1;              // most water a block passes on in one step
-const STEPS = 3;                  // sim steps per tick
-const QUIET = 0.0015;             // the sim sleeps after a while with no flow bigger than this
+const MAX_COMPRESS = 0.02; // extra a block holds per block of water above it
+const MIN_MASS = 0.0005; // less than this is dried up
+const MIN_FLOW = 0.005; // flows above this are halved, for smoother movement
+const MAX_SPEED = 1; // most water a block passes on in one step
+const STEPS = 3; // sim steps per tick
+const QUIET = 0.0015; // the sim sleeps after a while with no flow bigger than this
 const QUIET_TICKS = 90;
 
 // Water a saved/unloaded cell holds, as a share of a full block.
@@ -32,6 +32,18 @@ export function waterMass(cell) {
   const m = cell.meta;
   if (m?.mass !== undefined) return m.mass;
   return m?.level !== undefined ? m.level / WATER_LEVELS : 1;
+}
+
+// A cell with its water taken out (it moves into the sim). Everything else the cell holds,
+// like a mined-out wall (noWall) or a background block (bgId), stays.
+function withoutWater(c) {
+  if (c.id === 'water') {
+    const { mass, level, thinSince, ...rest } = c.meta || {};
+    return { id: 'air', meta: Object.keys(rest).length ? rest : null };
+  }
+  const meta = { ...c.meta };
+  delete meta.water;
+  return { id: c.id, meta };
 }
 
 // Visible depth in 1/16ths of a block.
@@ -52,12 +64,12 @@ export class WaterSim {
     this.world = world;
     this.cs = world.chunkSize;
     this.h = world.height;
-    this.size = this.cs * this.h;          // blocks in a chunk
+    this.size = this.cs * this.h; // blocks in a chunk
     this.nChunks = world.widthInChunks;
-    this.slots = new Map();                // chunkX -> { mass, next, solid, dirty, changed }
+    this.slots = new Map(); // chunkX -> { mass, next, solid, dirty, changed }
     this.awake = false;
     this.quiet = 0;
-    this.drops = { n: 0 };                 // (kept for callers; splashes are drawn elsewhere)
+    this.drops = { n: 0 }; // (kept for callers; splashes are drawn elsewhere)
     this.particles = new ParticleWater(world, this); // moving water, as fluid particles
   }
 
@@ -108,13 +120,9 @@ export class WaterSim {
         const m = waterMass(c);
         if (m <= 0) continue;
         if (!slot.solid[idx]) slot.mass[idx] = m;
-        if (c.id === 'water') chunk.cells[idx] = { id: 'air', meta: null };
-        else { const meta = { ...c.meta }; delete meta.water; chunk.cells[idx] = { id: c.id, meta }; }
+        chunk.cells[idx] = withoutWater(c);
       }
     }
-    let totalWater = 0;
-    for (let i = 0; i < this.size; i++) if (slot.mass[i] > 0) totalWater += slot.mass[i];
-    console.log(`[WaterSim] chunkLoaded(${cx}) totalWaterMass=${totalWater.toFixed(1)}`);
     this.particles.chunkLoaded(cx);
   }
 
@@ -122,7 +130,6 @@ export class WaterSim {
   chunkUnloading(cx) {
     const slot = this.slots.get(cx);
     if (!slot) return;
-    console.log(`[WaterSim] chunkUnloading(${cx})`);
     this.particles.settle(cx); // its moving water comes to rest first
     const chunk = this.world.chunks.get(this.world.chunkKey(cx));
     if (chunk?.cells) {
@@ -136,13 +143,17 @@ export class WaterSim {
 
   // Write a chunk's water into its cells (recording what was there in `undo`).
   depositSlot(cx, slot, chunk, undo) {
-    const cs = this.cs, h = this.h;
+    const cs = this.cs,
+      h = this.h;
     const masses = new Float32Array(this.size);
     for (let x = 0; x < cs; x++) {
       let carry = 0;
       for (let y = h - 1; y >= 0; y--) {
         const idx = y * cs + x;
-        if (slot.solid[idx]) { carry = 0; continue; }
+        if (slot.solid[idx]) {
+          carry = 0;
+          continue;
+        }
         const total = slot.mass[idx] + this.particles.massAt(cx * cs + x, y) + carry;
         if (total > MAX_MASS) {
           masses[idx] = MAX_MASS;
@@ -158,11 +169,12 @@ export class WaterSim {
       if (m < 0.01) continue;
       const old = chunk.cells[idx] || { id: 'air', meta: null };
       let next;
-      if (old.id === 'air') next = { id: 'water', meta: { mass: m } };
+      if (old.id === 'air') next = { id: 'water', meta: { ...(old.meta || {}), mass: m } };
       else if (!slot.solid[idx]) next = { id: old.id, meta: { ...(old.meta || {}), water: m } };
       else continue;
       if (undo) undo.push([chunk, idx, old]);
       chunk.cells[idx] = next;
+      this.world._noteCellWritten(chunk, idx, next.id);
     }
   }
 
@@ -200,10 +212,7 @@ export class WaterSim {
     const c = world.getCell(tx, ty);
     const m = waterMass(c);
     const chunk = world.chunks.get(world.chunkKey(cx));
-    if (m > 0 && chunk?.cells) {
-      if (c.id === 'water') chunk.cells[idx] = { id: 'air', meta: null };
-      else { const meta = { ...c.meta }; delete meta.water; chunk.cells[idx] = { id: c.id, meta }; }
-    }
+    if (m > 0 && chunk?.cells) chunk.cells[idx] = withoutWater(c);
     const solid = this.closed(tx, ty) ? 1 : 0;
     slot.solid[idx] = solid;
     if (solid) {
@@ -244,7 +253,10 @@ export class WaterSim {
     const s = this.slotAt(tx);
     if (!s || ty < 0 || ty >= this.h) return;
     const i = this.index(tx, ty);
-    if (s.solid[i]) { this.spill(tx, ty, m); return; }
+    if (s.solid[i]) {
+      this.spill(tx, ty, m);
+      return;
+    }
     s.mass[i] += m;
     this.touch(s);
   }
@@ -254,9 +266,17 @@ export class WaterSim {
     const seen = new Set([tx * 4096 + ty]);
     const queue = [tx, ty];
     for (let q = 0; q < queue.length && amount > 0.0001 && q < 4000; q += 2) {
-      const x = queue[q], y = queue[q + 1];
-      for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) {
-        const nx = x + dx, ny = y + dy, key = nx * 4096 + ny;
+      const x = queue[q],
+        y = queue[q + 1];
+      for (const [dx, dy] of [
+        [0, -1],
+        [-1, 0],
+        [1, 0],
+        [0, 1]
+      ]) {
+        const nx = x + dx,
+          ny = y + dy,
+          key = nx * 4096 + ny;
         if (seen.has(key) || ny < 0 || ny >= this.h) continue;
         seen.add(key);
         const s = this.slotAt(nx);
@@ -264,7 +284,11 @@ export class WaterSim {
         const i = this.index(nx, ny);
         if (s.solid[i]) continue;
         const put = Math.min(Math.max(0, MAX_MASS - s.mass[i]), amount);
-        if (put > 0) { s.mass[i] += put; amount -= put; this.touch(s); }
+        if (put > 0) {
+          s.mass[i] += put;
+          amount -= put;
+          this.touch(s);
+        }
         queue.push(nx, ny);
       }
     }
@@ -293,7 +317,8 @@ export class WaterSim {
       const i = this.index(x, y);
       return s.solid[i] ? 0 : Math.max(0, MAX_MASS - s.mass[i]);
     };
-    const here = room(tx, ty), above = room(tx, ty - 1);
+    const here = room(tx, ty),
+      above = room(tx, ty - 1);
     if (here <= 0 || here + above < MAX_MASS - 0.001) return false;
     const s = this.slotAt(tx);
     const i = this.index(tx, ty);
@@ -313,10 +338,18 @@ export class WaterSim {
     const found = [tx, ty];
     let total = 0;
     for (let q = 0; q < found.length && total < MAX_MASS && q < 400; q += 2) {
-      const x = found[q], y = found[q + 1];
+      const x = found[q],
+        y = found[q + 1];
       total += this.massAt(x, y);
-      for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) {
-        const nx = x + dx, ny = y + dy, key = nx * 4096 + ny;
+      for (const [dx, dy] of [
+        [0, -1],
+        [-1, 0],
+        [1, 0],
+        [0, 1]
+      ]) {
+        const nx = x + dx,
+          ny = y + dy,
+          key = nx * 4096 + ny;
         if (seen.has(key)) continue;
         seen.add(key);
         if (this.massAt(nx, ny) >= 0.01) found.push(nx, ny);
@@ -374,7 +407,8 @@ export class WaterSim {
     let biggest = 0;
     for (const [cx, s] of slots) {
       const { mass, next, solid } = s;
-      const left = slots.get(cx - 1), right = slots.get(cx + 1);
+      const left = slots.get(cx - 1),
+        right = slots.get(cx + 1);
       for (let ty = 0; ty < h; ty++) {
         const row = ty * cs;
         for (let lx = 0; lx < cs; lx++) {
@@ -388,18 +422,36 @@ export class WaterSim {
             let f = stableBelow(remaining + b) - b;
             if (f > MIN_FLOW) f *= 0.5;
             f = Math.max(0, Math.min(f, MAX_SPEED, remaining));
-            if (f > 0) { next[i] -= f; next[i + cs] += f; remaining -= f; if (f > biggest) biggest = f; }
+            if (f > 0) {
+              next[i] -= f;
+              next[i + cs] += f;
+              remaining -= f;
+              if (f > biggest) biggest = f;
+            }
           }
           if (remaining <= 0) continue;
           // Sideways: even out with each neighbour (across chunk edges too).
           for (let d = -1; d <= 1; d += 2) {
-            let ns = s, ni = i + d;
-            if (lx + d < 0) { ns = left; ni = row + cs - 1; } else if (lx + d >= cs) { ns = right; ni = row; }
+            let ns = s,
+              ni = i + d;
+            if (lx + d < 0) {
+              ns = left;
+              ni = row + cs - 1;
+            } else if (lx + d >= cs) {
+              ns = right;
+              ni = row;
+            }
             if (!ns || ns.solid[ni]) continue;
             let f = (m - ns.mass[ni]) / 4;
             if (f > MIN_FLOW) f *= 0.5;
             f = Math.max(0, Math.min(f, remaining));
-            if (f > 0) { next[i] -= f; ns.next[ni] += f; remaining -= f; if (f > biggest) biggest = f; if (ns !== s) ns.changed = true; }
+            if (f > 0) {
+              next[i] -= f;
+              ns.next[ni] += f;
+              remaining -= f;
+              if (f > biggest) biggest = f;
+              if (ns !== s) ns.changed = true;
+            }
           }
           if (remaining <= 0) continue;
           // Up: only what's squeezed past what this block can hold.
@@ -407,7 +459,11 @@ export class WaterSim {
             let f = remaining - stableBelow(remaining + mass[i - cs]);
             if (f > MIN_FLOW) f *= 0.5;
             f = Math.max(0, Math.min(f, MAX_SPEED, remaining));
-            if (f > 0) { next[i] -= f; next[i - cs] += f; if (f > biggest) biggest = f; }
+            if (f > 0) {
+              next[i] -= f;
+              next[i - cs] += f;
+              if (f > biggest) biggest = f;
+            }
           }
         }
       }
@@ -417,9 +473,15 @@ export class WaterSim {
       let moved = false;
       for (let i = 0; i < size; i++) {
         const v = next[i] < MIN_MASS ? 0 : next[i];
-        if (v !== mass[i]) { mass[i] = v; moved = true; }
+        if (v !== mass[i]) {
+          mass[i] = v;
+          moved = true;
+        }
       }
-      if (moved) { s.changed = true; s.dirty = true; }
+      if (moved) {
+        s.changed = true;
+        s.dirty = true;
+      }
     }
     return biggest;
   }
@@ -437,7 +499,7 @@ export class WaterSim {
       const bytes = new Uint8Array(this.size);
       let anyWater = false;
       for (let i = 0; i < this.size; i++) {
-        const v = Math.round(Math.min(MAX_MASS, s.mass[i] + this.particles.massAt(cx * this.cs + i % this.cs, Math.floor(i / this.cs))) * 255);
+        const v = Math.round(Math.min(MAX_MASS, s.mass[i] + this.particles.massAt(cx * this.cs + (i % this.cs), Math.floor(i / this.cs))) * 255);
         bytes[i] = v;
         if (v) anyWater = true;
       }
@@ -454,7 +516,11 @@ export class WaterSim {
       const s = this.slots.get(cx);
       if (!s) continue;
       let str;
-      try { str = atob(data); } catch { continue; }
+      try {
+        str = atob(data);
+      } catch {
+        continue;
+      }
       for (let i = 0; i < this.size && i < str.length; i++) s.mass[i] = s.solid[i] ? 0 : str.charCodeAt(i) / 255;
     }
   }

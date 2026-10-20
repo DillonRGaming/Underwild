@@ -1,5 +1,5 @@
 const CHAIN_FUSE_MS = 300; // extra delay before an explosive set off by another one blows
-const WAVE_MS = 45;        // the blast spreads one ring of blocks every this many ms
+const WAVE_MS = 45; // the blast spreads one ring of blocks every this many ms
 
 // Each explosive block carries its own settings:
 //   explosive: { fuse, radius, throw, knockback, damage }
@@ -40,13 +40,13 @@ export function makeExplosive(id, displayName, settings = {}) {
     maxStack: 24,
     explosive,
     fuse,
-    prime: function(world, x, y, ctx, fuseMs = fuse, vx = 0, vy = 0) {
+    prime: function (world, x, y, ctx, fuseMs = fuse, vx = 0, vy = 0) {
       const here = world.getBlockId(x, y);
       if (world.disposed || !world.registry.get(here)?.explosive) return;
       world.setBlock(x, y, 'air', null);
       if (ctx.prime) ctx.prime(x, y, fuseMs, vx, vy, here);
     },
-    explode: function(world, x, y, ctx) {
+    explode: function (world, x, y, ctx) {
       if (world.disposed) return;
       const { player, tileSize, fx } = ctx;
       const { radius: RADIUS, throw: THROW } = this.explosive;
@@ -64,7 +64,8 @@ export function makeExplosive(id, displayName, settings = {}) {
       }
       if (fx) fx.spawn(cx * tileSize, cy * tileSize, RADIUS * tileSize, ctx.shakeAt ? ctx.shakeAt(x, y) : 1);
       // Explosives already lit nearby get thrown away from the blast.
-      if (ctx.knockPrimed) ctx.knockPrimed(cx * tileSize, cy * tileSize, RADIUS * tileSize, THROW, (px, py) => !blockedByBedrock(world, cx, cy, px / tileSize, py / tileSize));
+      if (ctx.knockPrimed)
+        ctx.knockPrimed(cx * tileSize, cy * tileSize, RADIUS * tileSize, THROW, (px, py) => !blockedByBedrock(world, cx, cy, px / tileSize, py / tileSize));
       for (let r = 1; r < rings.length; r++) {
         if (!rings[r]) continue;
         setTimeout(() => this.blastRing(world, x, y, r, rings[r], ctx), r * WAVE_MS);
@@ -74,7 +75,7 @@ export function makeExplosive(id, displayName, settings = {}) {
         if (dist < RADIUS * 2) setTimeout(() => !world.disposed && this.hurtPlayer(player, x, y, tileSize, world), dist * WAVE_MS);
       }
     },
-    blastRing: function(world, x, y, r, cells, ctx) {
+    blastRing: function (world, x, y, r, cells, ctx) {
       if (world.disposed) return;
       const { tileSize, onBlockBroken, destroyItems } = ctx;
       if (destroyItems) destroyItems((x + 0.5) * tileSize, (y + 0.5) * tileSize, (r - 1) * tileSize, (r + 0.5) * tileSize);
@@ -97,12 +98,12 @@ export function makeExplosive(id, displayName, settings = {}) {
         }
       }
     },
-    playerDistance: function(player, x, y, tileSize) {
+    playerDistance: function (player, x, y, tileSize) {
       const dx = player.x + player.width / 2 - (x + 0.5) * tileSize;
       const dy = player.y + player.height / 2 - (y + 0.5) * tileSize;
       return Math.hypot(dx, dy) / tileSize;
     },
-    hurtPlayer: function(player, x, y, tileSize, world = null) {
+    hurtPlayer: function (player, x, y, tileSize, world = null) {
       const cx = (x + 0.5) * tileSize;
       const cy = (y + 0.5) * tileSize;
       const dx = player.x + player.width / 2 - cx;
@@ -127,9 +128,7 @@ export function makeExplosive(id, displayName, settings = {}) {
 
 export const explosive1 = {
   ...makeExplosive('explosive_1', 'Explosive (1s)', { fuse: 1000 }),
-  recipes: [
-    { shapeless: { explosive: 1, gunpowder: 1 }, count: 1 }
-  ]
+  recipes: [{ shapeless: { explosive: 1, gunpowder: 1 }, count: 1 }]
 };
 export const explosive2 = {
   ...makeExplosive('explosive_2', 'Explosive (2s)', { fuse: 2000 }),
@@ -148,7 +147,5 @@ export const explosive3 = {
 };
 export default {
   ...makeExplosive('explosive', 'Explosive (Instant)', { fuse: 0, radius: 4 }),
-  recipes: [
-    { shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'gravel' }, count: 1 }
-  ]
+  recipes: [{ shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'gravel' }, count: 1 }]
 };

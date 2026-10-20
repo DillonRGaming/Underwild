@@ -4,7 +4,8 @@ export default {
   displayName: 'Gold Shovel',
   kind: 'shovel',
   tab: 'tools',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shapeless: { gold_shovel_head: 1, stick: 1 }, count: 1 }
   ],
   maxStack: 1,

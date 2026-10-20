@@ -2,8 +2,8 @@
    light grey container screens with inset slots, flush hotbar with the white selection frame. */
 
 :root {
-  --stone: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAABjklEQVR4nE2S2a7kMAhEMV6zfmp/fTuODZhRwlVr6tGSKThV7vP5iEh4dV2Xc27fdyLqvdtja+08zzEGEYkIMnMIAQBaa957ACCiOaeqllIAwDlXa0XEnPOyLKiq/lWM8RmAeN83Ih7HUWslohijqs45W2sAgCEEVTV3RJxzLsvinBMR94qIUkpm/nxgZufcdV0iUkrJOYuI956IbMpxHKo6xvDejzFw3/feeyklxthfee/v+7aRMcbWmpkDQEoJa62qKiJjDFXdto2Z55wpJQC475uIzKGU8ixfSvHeIz7Xq2rvPaVkEAHAe2+UDdfD2iDa6cysqumV/TQ+6XVrra3rigZYVc065zzGaK3Z9nPO61WM0f5gjLHWaqzO83zOetf7OZRSnHNGfNu2Z6V1XYmImUXEfJZlCSHc9y0ituf3+wWA67r+KiQiOWdE9N733g0LMyM+ySKi9Q0AHgejiYhE5Jz7VYiZY4x2YQjB4g85Z2Y2cKZfF4yVxWJWRPQEZ10w9haQsbbm/Q/XOfcPmi54GRmEZRMAAAAASUVORK5CYII=");
-  --stone-dark: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAABUElEQVR4nD1Sh63lMAxTcRvn7T9ZbLWDw/shEMBxoSSS/Pv93F1EmJmIROScQ0RjDPpDvGDmqpL7iahqRKjq3ltE5pyZaWbMvPduralqVanqXUWEmamqma21PmJmxn5mgre11qqKiPIFfiPiO85MIjIzEUFNwe3eu77Ye6uqiLj7OYeZM3OMUVW9d8GIuKGq5xwRMTMU4Rf1tqCq7n5nmHOec1CamccY55zWWkQQESZ2dxzdliJCRNZaYwxmfp5HVZkZTa610DAYb1fQ4byADx+3iOA9/dlyxUCjmQliqHHOmXNW1VrLzPbeUI+Z7wxmBmtgNhZm1nt3d7yB3/fB3rv3jiLIyCeXu0cEisMKd29jDHfHZNABTNBa5GYHbf/fBFm9gDifwRAQrqP+TQMR3UJvKJ7nAavITUBVITJEBA0y8x7AxS8CCAsG/QKLpIjIPw2KUGqJHFY8AAAAAElFTkSuQmCC");
+  --stone: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAABjklEQVR4nE2S2a7kMAhEMV6zfmp/fTuODZhRwlVr6tGSKThV7vP5iEh4dV2Xc27fdyLqvdtja+08zzEGEYkIMnMIAQBaa957ACCiOaeqllIAwDlXa0XEnPOyLKiq/lWM8RmAeN83Ih7HUWslohijqs45W2sAgCEEVTV3RJxzLsvinBMR94qIUkpm/nxgZufcdV0iUkrJOYuI956IbMpxHKo6xvDejzFw3/feeyklxthfee/v+7aRMcbWmpkDQEoJa62qKiJjDFXdto2Z55wpJQC475uIzKGU8ixfSvHeIz7Xq2rvPaVkEAHAe2+UDdfD2iDa6cysqumV/TQ+6XVrra3rigZYVc065zzGaK3Z9nPO61WM0f5gjLHWaqzO83zOetf7OZRSnHNGfNu2Z6V1XYmImUXEfJZlCSHc9y0ituf3+wWA67r+KiQiOWdE9N733g0LMyM+ySKi9Q0AHgejiYhE5Jz7VYiZY4x2YQjB4g85Z2Y2cKZfF4yVxWJWRPQEZ10w9haQsbbm/Q/XOfcPmi54GRmEZRMAAAAASUVORK5CYII=');
+  --stone-dark: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAABUElEQVR4nD1Sh63lMAxTcRvn7T9ZbLWDw/shEMBxoSSS/Pv93F1EmJmIROScQ0RjDPpDvGDmqpL7iahqRKjq3ltE5pyZaWbMvPduralqVanqXUWEmamqma21PmJmxn5mgre11qqKiPIFfiPiO85MIjIzEUFNwe3eu77Ye6uqiLj7OYeZM3OMUVW9d8GIuKGq5xwRMTMU4Rf1tqCq7n5nmHOec1CamccY55zWWkQQESZ2dxzdliJCRNZaYwxmfp5HVZkZTa610DAYb1fQ4byADx+3iOA9/dlyxUCjmQliqHHOmXNW1VrLzPbeUI+Z7wxmBmtgNhZm1nt3d7yB3/fB3rv3jiLIyCeXu0cEisMKd29jDHfHZNABTNBa5GYHbf/fBFm9gDifwRAQrqP+TQMR3UJvKJ7nAavITUBVITJEBA0y8x7AxS8CCAsG/QKLpIjIPw2KUGqJHFY8AAAAAElFTkSuQmCC');
   --bevel-light: rgba(255, 255, 255, 0.28);
   --bevel-dark: rgba(0, 0, 0, 0.32);
   --gui-light: #ffffff;
@@ -116,12 +116,12 @@
   --stat-gap: -2px;
   --stat-icon-width: 18px;
   --stat-icon-height: 18px;
-  --icon-heart-full: url("themes/java/icons/heart_full.png");
-  --icon-heart-half: url("themes/java/icons/heart_half.png");
-  --icon-heart-empty: url("themes/java/icons/heart_empty.png");
-  --icon-hunger-full: url("themes/java/icons/hunger_full.png");
-  --icon-hunger-half: url("themes/java/icons/hunger_half.png");
-  --icon-hunger-empty: url("themes/java/icons/hunger_empty.png");
+  --icon-heart-full: url('themes/java/icons/heart_full.png');
+  --icon-heart-half: url('themes/java/icons/heart_half.png');
+  --icon-heart-empty: url('themes/java/icons/heart_empty.png');
+  --icon-hunger-full: url('themes/java/icons/hunger_full.png');
+  --icon-hunger-half: url('themes/java/icons/hunger_half.png');
+  --icon-hunger-empty: url('themes/java/icons/hunger_empty.png');
 
   --scroll-width: 12px;
   --scroll-track: #000000;
@@ -181,18 +181,20 @@
 }
 
 .minecraft-button:hover,
-.minecraft-button[data-selected="true"],
+.minecraft-button[data-selected='true'],
 .keybind-button:hover {
   position: relative;
   z-index: 1;
 }
 
-.minecraft-button[data-selected="true"] {
+.minecraft-button[data-selected='true'] {
   color: #ffffa0;
 }
 
 .minecraft-button:active {
-  box-shadow: inset 2px 2px 0 var(--bevel-dark), inset -2px -2px 0 var(--bevel-light);
+  box-shadow:
+    inset 2px 2px 0 var(--bevel-dark),
+    inset -2px -2px 0 var(--bevel-light);
 }
 
 .keybind-button {
@@ -225,10 +227,28 @@
 /* Container screens: 1px rounded corners like the 176x166 GUI texture */
 .inventory-content,
 .suggestions-dropdown {
-  clip-path: polygon(4px 0, calc(100% - 4px) 0, calc(100% - 4px) 2px, calc(100% - 2px) 2px, calc(100% - 2px) 4px, 100% 4px,
-    100% calc(100% - 4px), calc(100% - 2px) calc(100% - 4px), calc(100% - 2px) calc(100% - 2px), calc(100% - 4px) calc(100% - 2px),
-    calc(100% - 4px) 100%, 4px 100%, 4px calc(100% - 2px), 2px calc(100% - 2px), 2px calc(100% - 4px), 0 calc(100% - 4px),
-    0 4px, 2px 4px, 2px 2px, 4px 2px);
+  clip-path: polygon(
+    4px 0,
+    calc(100% - 4px) 0,
+    calc(100% - 4px) 2px,
+    calc(100% - 2px) 2px,
+    calc(100% - 2px) 4px,
+    100% 4px,
+    100% calc(100% - 4px),
+    calc(100% - 2px) calc(100% - 4px),
+    calc(100% - 2px) calc(100% - 2px),
+    calc(100% - 4px) calc(100% - 2px),
+    calc(100% - 4px) 100%,
+    4px 100%,
+    4px calc(100% - 2px),
+    2px calc(100% - 2px),
+    2px calc(100% - 4px),
+    0 calc(100% - 4px),
+    0 4px,
+    2px 4px,
+    2px 2px,
+    4px 2px
+  );
 }
 
 .inventory-content {
@@ -261,7 +281,10 @@
 }
 
 .crafting-output-slot {
-  box-shadow: inset 2px 2px 0 var(--slot-dark), inset -2px -2px 0 var(--gui-light), 0 0 0 0 transparent;
+  box-shadow:
+    inset 2px 2px 0 var(--slot-dark),
+    inset -2px -2px 0 var(--gui-light),
+    0 0 0 0 transparent;
 }
 
 .inventory-slot:hover,
@@ -269,7 +292,10 @@
 .crafting-output-slot:hover,
 .inventory-hotbar .hotbar-slot:hover {
   background: var(--slot-bg);
-  box-shadow: inset 2px 2px 0 var(--slot-dark), inset -2px -2px 0 var(--gui-light), inset 0 0 0 36px rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 2px 2px 0 var(--slot-dark),
+    inset -2px -2px 0 var(--gui-light),
+    inset 0 0 0 36px rgba(255, 255, 255, 0.5);
 }
 
 .creative-tab {
@@ -377,7 +403,7 @@
 }
 
 #mainMenu .menu-content::before {
-  content: "Now with themes!";
+  content: 'Now with themes!';
   position: absolute;
   top: 128px;
   left: calc(50% + 250px);
@@ -391,7 +417,9 @@
 }
 
 @keyframes java-splash {
-  to { transform: translateX(-50%) rotate(-20deg) scale(1.08); }
+  to {
+    transform: translateX(-50%) rotate(-20deg) scale(1.08);
+  }
 }
 
 #mainMenu .menu-buttons {
@@ -404,12 +432,26 @@
   grid-column: 1 / -1;
 }
 
-#mainMenu [data-action="single-player"] { order: 1; }
-#mainMenu [data-action="load-world"] { order: 2; }
-#mainMenu [data-action="mods"] { order: 3; }
-#mainMenu [data-action="skins-options"] { order: 4; }
-#mainMenu .menu-buttons [data-action="options"] { order: 5; grid-column: auto; }
-#mainMenu .menu-buttons [data-action="quit"] { order: 6; grid-column: auto; }
+#mainMenu [data-action='single-player'] {
+  order: 1;
+}
+#mainMenu [data-action='load-world'] {
+  order: 2;
+}
+#mainMenu [data-action='mods'] {
+  order: 3;
+}
+#mainMenu [data-action='skins-options'] {
+  order: 4;
+}
+#mainMenu .menu-buttons [data-action='options'] {
+  order: 5;
+  grid-column: auto;
+}
+#mainMenu .menu-buttons [data-action='quit'] {
+  order: 6;
+  grid-column: auto;
+}
 
 #mainMenu .changelog-section {
   position: absolute;
@@ -427,7 +469,7 @@
 }
 
 #mainMenu .version-number::before {
-  content: "Underwild ";
+  content: 'Underwild ';
 }
 
 #mainMenu .changelog-button.minecraft-button {
@@ -487,7 +529,7 @@
   gap: 8px;
 }
 
-#pauseMenu [data-action="pause-back-to-main"] {
+#pauseMenu [data-action='pause-back-to-main'] {
   margin-top: 56px;
 }
 
@@ -551,13 +593,15 @@ body.game-paused .menu-background {
 #changelogMenu .menu-content {
   --header: 64px;
   --footer: 66px;
-  background: linear-gradient(transparent 0 calc(var(--header) - 2px),
+  background: linear-gradient(
+    transparent 0 calc(var(--header) - 2px),
     rgba(255, 255, 255, 0.25) calc(var(--header) - 2px) var(--header),
     #000000 var(--header) calc(var(--header) + 2px),
     rgba(0, 0, 0, 0.45) calc(var(--header) + 2px) calc(100% - var(--footer) - 2px),
     #000000 calc(100% - var(--footer) - 2px) calc(100% - var(--footer)),
     rgba(255, 255, 255, 0.25) calc(100% - var(--footer)) calc(100% - var(--footer) + 2px),
-    transparent calc(100% - var(--footer) + 2px));
+    transparent calc(100% - var(--footer) + 2px)
+  );
 }
 
 #changelogMenu .menu-content {
@@ -620,27 +664,27 @@ body.game-paused .menu-background {
 }
 
 /* Settings screens close with "Done" */
-.menu-container [data-action="back-to-options"],
-#optionsMenu [data-action="back-to-main"],
-#changelogMenu [data-action="back-to-main"],
-#advancedOptionsMenu [data-action="back-to-create-world"] {
+.menu-container [data-action='back-to-options'],
+#optionsMenu [data-action='back-to-main'],
+#changelogMenu [data-action='back-to-main'],
+#advancedOptionsMenu [data-action='back-to-create-world'] {
   font-size: 0;
 }
 
-.menu-container [data-action="back-to-options"]::after,
-#optionsMenu [data-action="back-to-main"]::after,
-#changelogMenu [data-action="back-to-main"]::after,
-#advancedOptionsMenu [data-action="back-to-create-world"]::after {
-  content: "Done";
+.menu-container [data-action='back-to-options']::after,
+#optionsMenu [data-action='back-to-main']::after,
+#changelogMenu [data-action='back-to-main']::after,
+#advancedOptionsMenu [data-action='back-to-create-world']::after {
+  content: 'Done';
   font-size: 16px;
 }
 
-#createWorldMenu [data-action="back-to-main"] {
+#createWorldMenu [data-action='back-to-main'] {
   font-size: 0;
 }
 
-#createWorldMenu [data-action="back-to-main"]::after {
-  content: "Cancel";
+#createWorldMenu [data-action='back-to-main']::after {
+  content: 'Cancel';
   font-size: 16px;
 }
 
@@ -649,7 +693,7 @@ body.game-paused .menu-background {
 }
 
 #createWorldButton::after {
-  content: "Create New World";
+  content: 'Create New World';
   font-size: 16px;
 }
 
@@ -718,7 +762,9 @@ body.game-paused .menu-background {
 
 .minecraft-slider {
   margin: 0;
-  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.08), inset -2px -2px 0 rgba(0, 0, 0, 0.4);
+  box-shadow:
+    inset 2px 2px 0 rgba(255, 255, 255, 0.08),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.4);
 }
 
 .minecraft-slider::-webkit-slider-thumb {
@@ -872,5 +918,7 @@ body.game-paused .menu-background {
 .menu-content *::-webkit-scrollbar-thumb {
   background: #808080;
   border-radius: 0;
-  box-shadow: inset 2px 2px 0 #c0c0c0, inset -2px -2px 0 #555555;
+  box-shadow:
+    inset 2px 2px 0 #c0c0c0,
+    inset -2px -2px 0 #555555;
 }

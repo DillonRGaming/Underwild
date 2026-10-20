@@ -5,7 +5,8 @@ export default {
   kind: 'axe',
   tab: 'tools',
   burnTime: 5, // seconds it burns as furnace fuel
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['pp ', 'ps ', ' s '], ingredients: { p: 'planks', s: 'stick' }, count: 1 }
   ],
   maxStack: 1,

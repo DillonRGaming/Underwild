@@ -10,7 +10,9 @@ const { setupMultiplayer, shutdownMultiplayer } = require('./multiplayerServer.j
 // The game's files sit two folders up from this platforms/desktop/ folder.
 const gameDir = path.join(__dirname, '..', '..');
 const dataDir = app.isPackaged ? app.getPath('userData') : path.join(gameDir, 'data');
-try { fs.mkdirSync(dataDir, { recursive: true }); } catch (e) {}
+try {
+  fs.mkdirSync(dataDir, { recursive: true });
+} catch (e) {}
 const worldsDir = path.join(dataDir, 'worlds');
 const prefsPath = path.join(dataDir, 'preferences.json');
 
@@ -49,7 +51,9 @@ let mainWindow;
 // Problems are written to underwild-log.txt next to the game, to send when reporting a bug.
 const logPath = path.join(dataDir, 'underwild-log.txt');
 function log(msg) {
-  try { fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`); } catch (e) {}
+  try {
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`);
+  } catch (e) {}
 }
 
 process.on('uncaughtException', (e) => log(`Crash in main process: ${e.stack || e}`));
@@ -81,7 +85,7 @@ if (noSandbox) app.commandLine.appendSwitch('no-sandbox');
 
 // Windows crash codes, by name.
 function exitCodeName(code) {
-  const hex = '0x' + ((code >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+  const hex = '0x' + (code >>> 0).toString(16).toUpperCase().padStart(8, '0');
   const names = {
     '0xC0000005': 'ACCESS_VIOLATION (bad memory access)',
     '0xC0000409': 'STACK_BUFFER_OVERRUN',
@@ -124,7 +128,9 @@ function restartWithoutGpu(reason) {
 }
 
 app.on('child-process-gone', (event, details) => {
-  log(`Process gone: ${details.type}${details.name ? ` "${details.name}"` : ''} (${details.reason}, exit code ${details.exitCode} = ${exitCodeName(details.exitCode)})`);
+  log(
+    `Process gone: ${details.type}${details.name ? ` "${details.name}"` : ''} (${details.reason}, exit code ${details.exitCode} = ${exitCodeName(details.exitCode)})`
+  );
   if (details.type === 'GPU' && details.reason !== 'clean-exit') restartWithoutGpu('the GPU process crashed');
 });
 
@@ -145,7 +151,7 @@ function startDiagnostics() {
 function runDiagTest() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (diag.i >= DIAG_TESTS.length) {
-    log('DIAGNOSIS: every basic test passed, so something in the game\'s own code crashes the page on this PC.');
+    log("DIAGNOSIS: every basic test passed, so something in the game's own code crashes the page on this PC.");
     return finishDiagnostics();
   }
   log(`Test ${diag.i + 1}/${DIAG_TESTS.length}: ${DIAG_TESTS[diag.i]}`);
@@ -162,20 +168,25 @@ ipcMain.on('app:diagOk', (event, test) => {
 function onDiagCrash() {
   const test = DIAG_TESTS[diag.i];
   log(`  ${test}: CRASHED`);
-  log(test === 'blank'
-    ? 'DIAGNOSIS: even a blank page crashes, so it is something on this PC (security/antivirus, audio or overlay software injecting into apps), not the game.'
-    : `DIAGNOSIS: the "${test}" test crashes the page.`);
+  log(
+    test === 'blank'
+      ? 'DIAGNOSIS: even a blank page crashes, so it is something on this PC (security/antivirus, audio or overlay software injecting into apps), not the game.'
+      : `DIAGNOSIS: the "${test}" test crashes the page.`
+  );
   finishDiagnostics();
 }
 
 function finishDiagnostics() {
   diag = null;
   diagnosed = true;
-  dialog.showMessageBox(mainWindow, {
-    type: 'error',
-    title: 'Underwild could not start',
-    message: 'Underwild crashed while starting. A report was saved to underwild-log.txt in the game\'s resources\\app folder - please send it to the person who gave you the game.'
-  }).then(() => app.quit());
+  dialog
+    .showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Underwild could not start',
+      message:
+        "Underwild crashed while starting. A report was saved to underwild-log.txt in the game's resources\\app folder - please send it to the person who gave you the game."
+    })
+    .then(() => app.quit());
 }
 ipcMain.on('app:ready', (event, info) => {
   pageReady = true;
@@ -185,8 +196,10 @@ ipcMain.on('app:ready', (event, info) => {
   setTimeout(async () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     try {
-      log(`Window bounds ${JSON.stringify(mainWindow.getBounds())}, visible ${mainWindow.isVisible()}, minimized ${mainWindow.isMinimized()}, fullscreen ${mainWindow.isFullScreen()}`);
-      log(`Displays ${JSON.stringify(screen.getAllDisplays().map(d => ({ bounds: d.bounds, scale: d.scaleFactor })))}`);
+      log(
+        `Window bounds ${JSON.stringify(mainWindow.getBounds())}, visible ${mainWindow.isVisible()}, minimized ${mainWindow.isMinimized()}, fullscreen ${mainWindow.isFullScreen()}`
+      );
+      log(`Displays ${JSON.stringify(screen.getAllDisplays().map((d) => ({ bounds: d.bounds, scale: d.scaleFactor })))}`);
       log(`GPU ${JSON.stringify(app.getGPUFeatureStatus())}`);
       const state = await mainWindow.webContents.executeJavaScript(`({
         menus: [...document.querySelectorAll('.menu-container:not(.hidden)')].map(m => m.id),
@@ -277,15 +290,24 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  log(`Starting Underwild (Electron ${process.versions.electron}, ${process.platform}${gpuOff ? ', GPU acceleration off' : ''}${noSandbox ? ', sandbox off' : ''})`);
-  log(`System: ${os.type()} ${os.release()} ${os.arch()}, ${os.cpus()[0]?.model || '?'} x${os.cpus().length}, ${Math.round(os.totalmem() / 1e9)} GB RAM; Chrome ${process.versions.chrome}, Node ${process.versions.node}`);
+  log(
+    `Starting Underwild (Electron ${process.versions.electron}, ${process.platform}${gpuOff ? ', GPU acceleration off' : ''}${noSandbox ? ', sandbox off' : ''})`
+  );
+  log(
+    `System: ${os.type()} ${os.release()} ${os.arch()}, ${os.cpus()[0]?.model || '?'} x${os.cpus().length}, ${Math.round(os.totalmem() / 1e9)} GB RAM; Chrome ${process.versions.chrome}, Node ${process.versions.node}`
+  );
   log(`Game folder: ${gameDir}`);
   log(`Data folder: ${dataDir}`);
   log(`Command line: ${process.argv.join(' ')}`);
-  app.getGPUInfo('complete').then((info) => {
-    const gpus = (info.gpuDevice || []).map(g => `${g.vendorString || g.vendorId} ${g.deviceString || g.deviceId} (driver ${g.driverVersion || '?'})${g.active ? ' [active]' : ''}`);
-    log(`GPUs: ${gpus.join('; ') || 'unknown'}`);
-  }).catch((e) => log(`GPU info unavailable: ${e.message}`));
+  app
+    .getGPUInfo('complete')
+    .then((info) => {
+      const gpus = (info.gpuDevice || []).map(
+        (g) => `${g.vendorString || g.vendorId} ${g.deviceString || g.deviceId} (driver ${g.driverVersion || '?'})${g.active ? ' [active]' : ''}`
+      );
+      log(`GPUs: ${gpus.join('; ') || 'unknown'}`);
+    })
+    .catch((e) => log(`GPU info unavailable: ${e.message}`));
   ensureWorldsDir();
   setupMultiplayer(ipcMain, () => mainWindow);
   createWindow();
@@ -324,7 +346,7 @@ function appIcon(data) {
   try {
     if (typeof data === 'string') data = data.startsWith('[') ? JSON.parse(data) : [data];
     if (!Array.isArray(data) || !data.length) return null;
-    const pngs = data.filter(d => typeof d === 'string' && d.startsWith('data:image/png'));
+    const pngs = data.filter((d) => typeof d === 'string' && d.startsWith('data:image/png'));
     if (!pngs.length) return null;
     const base = nativeImage.createFromDataURL(pngs[0]);
     const baseSize = base.getSize().width || 16;
@@ -364,7 +386,7 @@ function loadWorldMeta(filePath) {
 
 ipcMain.handle('worlds:list', async () => {
   ensureWorldsDir();
-  const files = fs.readdirSync(worldsDir).filter(f => f.endsWith('.json'));
+  const files = fs.readdirSync(worldsDir).filter((f) => f.endsWith('.json'));
   const worlds = [];
   for (const file of files) {
     const name = path.basename(file, '.json');
@@ -390,7 +412,10 @@ ipcMain.handle('worlds:list', async () => {
 });
 
 function worldFilePath(worldName) {
-  const safeName = String(worldName || '').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim() || 'World';
+  const safeName =
+    String(worldName || '')
+      .replace(/[^a-zA-Z0-9_\- ]/g, '_')
+      .trim() || 'World';
   return path.join(worldsDir, safeName + '.json');
 }
 
@@ -476,7 +501,12 @@ ipcMain.handle('prefs:clear', async () => {
 function checkForUpdates() {
   if (!app.isPackaged) return;
   let autoUpdater;
-  try { ({ autoUpdater } = require('electron-updater')); } catch (e) { log(`Updater unavailable: ${e.message}`); return; }
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (e) {
+    log(`Updater unavailable: ${e.message}`);
+    return;
+  }
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on('error', (e) => log(`Update check failed: ${e?.message || e}`));

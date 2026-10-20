@@ -31,7 +31,7 @@ export class Player {
     this.gravity = 800;
     this.maxFallSpeed = 500;
     this.onGround = false;
-    
+
     this.swingAnimation = {
       active: false,
       progress: 0,
@@ -40,20 +40,20 @@ export class Player {
       continuous: false,
       cycleCount: 0
     };
-    
+
     this.health = 20;
     this.maxHealth = 20;
     this.hunger = 20;
     this.maxHunger = 20;
-    
+
     this.fallStartY = 0;
     this.falling = false;
     this.fallDamageEnabled = true;
-    
+
     this.facingDirection = 1;
     this.lastMouseX = 0;
     this.lastMouseY = 0;
-    
+
     this.walkAnimation = 0;
     this.walkCycle = 0;
     this.isMoving = false;
@@ -61,8 +61,6 @@ export class Player {
     this.walkingSpeedFactor = 1.0;
     this.inAir = true;
     this.swingingArm = 0;
-    this.swingStartTime = 0;
-    this.swingDuration = 0.15;
   }
   update(input, dt, time, noClipMode = false, creativeMode = false) {
     if (!this.world) return;
@@ -70,22 +68,22 @@ export class Player {
     if (Math.abs(this.vx) > 10) {
       this.facingDirection = this.vx > 0 ? 1 : -1;
     }
-    
+
     this.movingSpeed = Math.abs(this.vx);
     this.isMoving = this.movingSpeed > 5;
     this.inAir = !this.onGround;
-    
+
     const baseSpeed = 8.0;
-    
+
     const currentSpeed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
     let speedFactor = Math.min(2.0, Math.max(0, currentSpeed / 120));
-    
+
     if (this.inAir) {
       speedFactor *= 0.5;
     }
-    
+
     this.walkingSpeedFactor = speedFactor;
-    
+
     if (currentSpeed > 1) {
       this.walkAnimation += dt * baseSpeed * speedFactor;
     } else {
@@ -94,19 +92,19 @@ export class Player {
         this.walkAnimation = 0;
       }
     }
-    this.walkCycle = (this.walkAnimation) % (Math.PI * 2);
-    
+    this.walkCycle = this.walkAnimation % (Math.PI * 2);
+
     if (this.swingAnimation.active) {
       const elapsed = this.world.time - this.swingAnimation.startTime;
-      
+
       if (this.swingAnimation.continuous) {
         this.swingAnimation.progress = (elapsed % this.swingAnimation.duration) / this.swingAnimation.duration;
         this.swingAnimation.cycleCount = Math.floor(elapsed / this.swingAnimation.duration);
-        
+
         this.swingAnimation.active = true;
       } else {
         this.swingAnimation.progress = Math.min(elapsed / this.swingAnimation.duration, 1);
-        
+
         if (this.swingAnimation.progress >= 1) {
           this.swingAnimation.active = false;
           this.swingAnimation.progress = 0;
@@ -114,7 +112,7 @@ export class Player {
         }
       }
     }
-    
+
     if (this.swingAnimation.active && this.swingAnimation.continuous) {
       this.swingingArm = Math.sin((this.swingAnimation.cycleCount + this.swingAnimation.progress) * Math.PI * 2) * 0.5 + 0.5;
     } else if (this.swingAnimation.active && !this.swingAnimation.continuous) {
@@ -126,13 +124,13 @@ export class Player {
         this.swingingArm = 0;
       }
     }
-    
+
     resolvePlayerPhysics(this, this.world, this.inputLocked ? NO_INPUT : input, dt, noClipMode, creativeMode, this.keybinds || DEFAULT_KEYBINDS);
   }
   getHeadAnchor() {
     return { x: this.x + this.width / 2, y: this.y + 16 };
   }
-  
+
   startSwing(time, continuous = false) {
     this.swingAnimation.active = true;
     this.swingAnimation.progress = 0;
@@ -140,11 +138,11 @@ export class Player {
     this.swingAnimation.continuous = continuous;
     this.swingAnimation.cycleCount = 0;
   }
-  
+
   startContinuousSwing(time) {
     this.startSwing(time, true);
   }
-  
+
   playArmAction(type) {
     this.armAction = { type, start: performance.now() };
   }
@@ -155,29 +153,10 @@ export class Player {
     this.swingAnimation.progress = 0;
     this.swingAnimation.cycleCount = 0;
   }
-  
+
   updateMousePosition(mouseWorldX, mouseWorldY) {
     this.lastMouseX = mouseWorldX;
     this.lastMouseY = mouseWorldY;
-  }
-  
-  getHandPosition() {
-    const centerX = this.x + this.width / 2;
-    const shoulderY = this.y + this.height * 0.3;
-    
-    let handX = centerX + 20;
-    let handY = shoulderY + 8;
-    
-    if (this.mouseX !== undefined && this.mouseY !== undefined) {
-      const dx = this.mouseX - centerX;
-      const dy = this.mouseY - shoulderY;
-      const angle = Math.atan2(dy, dx);
-      const distance = 20;
-      handX = centerX + Math.cos(angle) * distance;
-      handY = shoulderY + Math.sin(angle) * distance;
-    }
-    
-    return { x: handX, y: handY };
   }
 
   setHealth(amount) {
@@ -238,7 +217,8 @@ export class Player {
   land() {
     if (!this.falling) return;
     this.falling = false;
-    const fallDistance = (this.y - this.fallStartY) / TILE_SIZE;
+    const gMult = this.world?.gravityMultiplier ?? this.world?.dimension?.gravityMultiplier ?? 1;
+    const fallDistance = ((this.y - this.fallStartY) / TILE_SIZE) * gMult;
     if (fallDistance > 3) {
       this.takeDamage(Math.floor(fallDistance - 3));
     }

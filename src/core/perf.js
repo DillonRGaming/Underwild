@@ -4,7 +4,8 @@
 // Computes statistical distributions and generates actionable bottleneck audits on /log.
 
 export class GamePerf {
-  constructor(maxHistory = 1800) { // ~30s at 60 FPS or 60s at 30 FPS
+  constructor(maxHistory = 1800) {
+    // ~30s at 60 FPS or 60s at 30 FPS
     this.maxHistory = maxHistory;
     this.history = [];
     this.currentIndex = 0;
@@ -63,6 +64,7 @@ export class GamePerf {
       renderWallCorners: 0,
       renderWater: 0,
       renderSplashes: 0,
+      renderSnow: 0,
       renderLightOverlay: 0,
       renderLightTint: 0,
       renderEntities: 0,
@@ -106,7 +108,7 @@ export class GamePerf {
 
   startFrame(dtMs) {
     const now = performance.now();
-    const delta = dtMs !== undefined ? dtMs : (now - this.lastFrameTimestamp);
+    const delta = dtMs !== undefined ? dtMs : now - this.lastFrameTimestamp;
     this.lastFrameTimestamp = now;
     this.lastFrameDelta = delta > 0 ? delta : 16.67;
 
@@ -133,6 +135,17 @@ export class GamePerf {
     }
     this.totalFramesSampled++;
     this.currentFrame = this._emptyFrame();
+  }
+
+  // The last n finished frames, oldest first.
+  recent(n) {
+    const len = this.history.length;
+    const count = Math.min(n, len);
+    const out = new Array(count);
+    // Before the history fills up it's in order; after, currentIndex is the oldest.
+    const newest = len < this.maxHistory ? len - 1 : (this.currentIndex - 1 + len) % len;
+    for (let i = 0; i < count; i++) out[count - 1 - i] = this.history[(newest - i + len) % len];
+    return out;
   }
 
   frameTick(dt) {
@@ -244,7 +257,7 @@ export class GamePerf {
       return '# Underwild Performance Audit\n\nNo frames recorded yet. Play for a few seconds to collect performance metrics.';
     }
 
-    const extract = (key) => this.history.map(f => f[key] || 0);
+    const extract = (key) => this.history.map((f) => f[key] || 0);
 
     // Frame level
     const statDelta = this._stats(extract('frameDelta'));
@@ -259,11 +272,8 @@ export class GamePerf {
     // Update sub-phases
     const statUpdatePlayer = this._stats(extract('updatePlayer'));
     const statUpdateBreaker = this._stats(extract('updateBreaker'));
-    const statUpdateTicks = this._stats(extract('updateTicks'));
     const statTickEntities = this._stats(extract('tickEntities'));
     const statTickWorld = this._stats(extract('tickWorld'));
-    const statTickLighting = this._stats(extract('tickLighting'));
-    const statTickWater = this._stats(extract('tickWater'));
     const statUpdateMultiplayer = this._stats(extract('updateMultiplayer'));
     const statUpdateChunks = this._stats(extract('updateChunks'));
     const statUpdateCamera = this._stats(extract('updateCamera'));
@@ -272,38 +282,18 @@ export class GamePerf {
     // Render sub-phases
     const statRenderSkyHills = this._stats(extract('renderSkyHills'));
     const statRenderLightProp = this._stats(extract('renderLightPropagation'));
-    const statRenderFog = this._stats(extract('renderFog'));
     const statRenderBlocks = this._stats(extract('renderBlocks'));
-    const statRenderPolish = this._stats(extract('renderPolish'));
     const statRenderEdgePass = this._stats(extract('renderEdgePass'));
     const statRenderGrassCorners = this._stats(extract('renderGrassCorners'));
-    const statRenderLeafFringes = this._stats(extract('renderLeafFringes'));
     const statRenderLeafOutlines = this._stats(extract('renderLeafOutlines'));
-    const statRenderWallCorners = this._stats(extract('renderWallCorners'));
     const statRenderWater = this._stats(extract('renderWater'));
-    const statRenderSplashes = this._stats(extract('renderSplashes'));
     const statRenderLightOverlay = this._stats(extract('renderLightOverlay'));
-    const statRenderLightTint = this._stats(extract('renderLightTint'));
     const statRenderEntities = this._stats(extract('renderEntities'));
     const statRenderEntityOutlines = this._stats(extract('renderEntityOutlines'));
     const statRenderEffects = this._stats(extract('renderEffects'));
 
     // Water specifics
     const statSimTotal = this._stats(extract('simTotal'));
-    const statSimWasm = this._stats(extract('simWasm'));
-    const statSimVelDamp = this._stats(extract('simVelDamp'));
-    const statSimSafetyCap = this._stats(extract('simSafetyCap'));
-    const statSimPosExtract = this._stats(extract('simPosExtract'));
-    const statSimOob = this._stats(extract('simOobCleanup'));
-    const statSimFixtures = this._stats(extract('simTerrainFixtures'));
-    const statSimBlock = this._stats(extract('simBlockWater'));
-    const statRenderSplat = this._stats(extract('renderParticleSplat'));
-    const statRenderSolidLight = this._stats(extract('renderSolidLight'));
-    const statRenderMorph = this._stats(extract('renderMorphology'));
-    const statRenderSurfaceDetect = this._stats(extract('renderSurfaceDetect'));
-    const statRenderSurfaceSmooth = this._stats(extract('renderSurfaceSmooth'));
-    const statRenderPixelShade = this._stats(extract('renderPixelShading'));
-    const statRenderBlit = this._stats(extract('renderCanvasBlit'));
     const statTotalWater = this._stats(extract('totalWaterMs'));
 
     // Scene counters
@@ -316,21 +306,20 @@ export class GamePerf {
     const statLeafParticles = this._stats(extract('particlesCount'));
 
     // Hardware & Environment detection
-    const isMobile = typeof window !== 'undefined' && (
-      'ontouchstart' in window ||
-      (navigator?.maxTouchPoints || 0) > 0 ||
-      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator?.userAgent || '')
-    );
-    const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+    const isMobile =
+      typeof window !== 'undefined' &&
+      ('ontouchstart' in window || (navigator?.maxTouchPoints || 0) > 0 || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator?.userAgent || ''));
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
     const canvasEl = typeof document !== 'undefined' ? document.getElementById('gameCanvas') : null;
     const canvasW = canvasEl?.width || (typeof window !== 'undefined' ? window.innerWidth : 800);
     const canvasH = canvasEl?.height || (typeof window !== 'undefined' ? window.innerHeight : 600);
     const totalPixels = canvasW * canvasH;
     const mpCount = (totalPixels / 1000000).toFixed(2);
-    const mem = (typeof performance !== 'undefined' && performance.memory)
-      ? `${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB / ${Math.round(performance.memory.totalJSHeapSize / 1048576)} MB (Cap: ${Math.round(performance.memory.jsHeapSizeLimit / 1048576)} MB)`
-      : 'N/A';
-    const cpuCores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 'Unknown') : 'Unknown';
+    const mem =
+      typeof performance !== 'undefined' && performance.memory
+        ? `${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB / ${Math.round(performance.memory.totalJSHeapSize / 1048576)} MB (Cap: ${Math.round(performance.memory.jsHeapSizeLimit / 1048576)} MB)`
+        : 'N/A';
+    const cpuCores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 'Unknown' : 'Unknown';
     const ramGB = typeof navigator !== 'undefined' && navigator.deviceMemory ? `${navigator.deviceMemory} GB` : 'N/A';
 
     // Budget overruns & stutter analysis at 60 FPS (16.67ms target)
@@ -338,22 +327,20 @@ export class GamePerf {
     const TARGET_30_MS = 33.33;
     const TARGET_HITCH_MS = 50.0;
 
-    const framesOver60 = this.history.filter(f => f.frameDelta > TARGET_60_MS).length;
-    const framesOver30 = this.history.filter(f => f.frameDelta > TARGET_30_MS).length;
-    const framesHitches = this.history.filter(f => f.frameDelta > TARGET_HITCH_MS).length;
-    const cpuOverruns = this.history.filter(f => f.cpuTotalMs > TARGET_60_MS).length;
+    const framesOver60 = this.history.filter((f) => f.frameDelta > TARGET_60_MS).length;
+    const framesOver30 = this.history.filter((f) => f.frameDelta > TARGET_30_MS).length;
+    const framesHitches = this.history.filter((f) => f.frameDelta > TARGET_HITCH_MS).length;
 
     const pctOver60 = ((framesOver60 / samples) * 100).toFixed(1);
     const pctOver30 = ((framesOver30 / samples) * 100).toFixed(1);
     const pctHitches = ((framesHitches / samples) * 100).toFixed(1);
     const avgBudgetPct = ((statCpuTotal.mean / TARGET_60_MS) * 100).toFixed(1);
-    const p95BudgetPct = ((statCpuTotal.p95 / TARGET_60_MS) * 100).toFixed(1);
 
     // FPS Distribution buckets
-    const fps60plus = this.history.filter(f => f.frameDelta <= TARGET_60_MS).length;
-    const fps45to60 = this.history.filter(f => f.frameDelta > TARGET_60_MS && f.frameDelta <= 22.22).length;
-    const fps30to45 = this.history.filter(f => f.frameDelta > 22.22 && f.frameDelta <= TARGET_30_MS).length;
-    const fpsBelow30 = this.history.filter(f => f.frameDelta > TARGET_30_MS).length;
+    const fps60plus = this.history.filter((f) => f.frameDelta <= TARGET_60_MS).length;
+    const fps45to60 = this.history.filter((f) => f.frameDelta > TARGET_60_MS && f.frameDelta <= 22.22).length;
+    const fps30to45 = this.history.filter((f) => f.frameDelta > 22.22 && f.frameDelta <= TARGET_30_MS).length;
+    const fpsBelow30 = this.history.filter((f) => f.frameDelta > TARGET_30_MS).length;
 
     // Overall Health Rating
     let healthRating = '🟢 EXCELLENT (60+ FPS)';
@@ -369,36 +356,154 @@ export class GamePerf {
       healthVerdict = 'Average frame rate is near 60 FPS, but spikes at the 95th percentile exceed 16.6ms, causing occasional micro-stutters.';
     }
 
-    // Polish Settings Snapshot
-    let polishDetails = 'Polish module inactive or standard.';
-    try {
-      if (typeof window !== 'undefined' && window.polishState) {
-        const pState = window.polishState();
-        polishDetails = `Enabled: ${pState.enabled ? 'YES' : 'NO'}\n` +
-          Object.keys(pState).filter(k => k !== 'enabled').map(k => `* \`${k}\`: ${pState[k] ? 'ON' : 'OFF'}`).join('\n');
-      }
-    } catch (_) {}
-
     // Bottlenecks Identification
     const allPhases = [
       // Render
-      { key: 'renderBlocks', name: 'Render: Terrain & Wall Blocks Draw Loop', mean: statRenderBlocks.mean, p95: statRenderBlocks.p95, max: statRenderBlocks.max, cat: 'Rendering', file: 'src/core/renderer.js' },
-      { key: 'renderEdgePass', name: 'Render: Edge Pass (Outlines, Seams & Shadows)', mean: statRenderEdgePass.mean, p95: statRenderEdgePass.p95, max: statRenderEdgePass.max, cat: 'Polish/Render', file: 'src/core/polish.js' },
-      { key: 'renderLeafOutlines', name: 'Render: Leaf Canopy Outlines (Full-screen Canvas Composite)', mean: statRenderLeafOutlines.mean, p95: statRenderLeafOutlines.p95, max: statRenderLeafOutlines.max, cat: 'Polish/Blit', file: 'src/core/polish.js' },
-      { key: 'renderLightOverlay', name: 'Render: Smooth Light Overlay (ImageData Upload / Canvas Scale)', mean: statRenderLightOverlay.mean, p95: statRenderLightOverlay.p95, max: statRenderLightOverlay.max, cat: 'Lighting/Render', file: 'src/core/renderer.js' },
-      { key: 'renderLightProp', name: 'Render: Light Display Propagation (DisplaySky/Block Grid)', mean: statRenderLightProp.mean, p95: statRenderLightProp.p95, max: statRenderLightProp.max, cat: 'Lighting/Sim', file: 'src/core/world.js' },
-      { key: 'renderGrassCorners', name: 'Render: Connected Grass Corner Textures', mean: statRenderGrassCorners.mean, p95: statRenderGrassCorners.p95, max: statRenderGrassCorners.max, cat: 'Polish/Render', file: 'src/core/renderer.js' },
-      { key: 'renderSkyHills', name: 'Render: Sky Gradient & Background Hills Noise', mean: statRenderSkyHills.mean, p95: statRenderSkyHills.p95, max: statRenderSkyHills.max, cat: 'Render/FX', file: 'src/core/polish.js' },
-      { key: 'renderEntities', name: 'Render: Player, Items & Remote Entity Layer', mean: statRenderEntities.mean, p95: statRenderEntities.p95, max: statRenderEntities.max, cat: 'Entities/Render', file: 'src/core/renderer.js' },
-      { key: 'renderEntityOutlines', name: 'Render: Entity Layer Outlines (5 Canvas Blits)', mean: statRenderEntityOutlines.mean, p95: statRenderEntityOutlines.p95, max: statRenderEntityOutlines.max, cat: 'Polish/Blit', file: 'src/core/polish.js' },
-      { key: 'renderWater', name: 'Render: Water Layer & Particles', mean: statRenderWater.mean, p95: statRenderWater.p95, max: statRenderWater.max, cat: 'Water/Render', file: 'src/core/renderer.js' },
+      {
+        key: 'renderBlocks',
+        name: 'Render: Terrain & Wall Blocks Draw Loop',
+        mean: statRenderBlocks.mean,
+        p95: statRenderBlocks.p95,
+        max: statRenderBlocks.max,
+        cat: 'Rendering',
+        file: 'src/core/renderer.js'
+      },
+      {
+        key: 'renderEdgePass',
+        name: 'Render: Edge Pass (Outlines, Seams & Shadows)',
+        mean: statRenderEdgePass.mean,
+        p95: statRenderEdgePass.p95,
+        max: statRenderEdgePass.max,
+        cat: 'Polish/Render',
+        file: 'src/core/polish.js'
+      },
+      {
+        key: 'renderLeafOutlines',
+        name: 'Render: Leaf Canopy Outlines (Full-screen Canvas Composite)',
+        mean: statRenderLeafOutlines.mean,
+        p95: statRenderLeafOutlines.p95,
+        max: statRenderLeafOutlines.max,
+        cat: 'Polish/Blit',
+        file: 'src/core/polish.js'
+      },
+      {
+        key: 'renderLightOverlay',
+        name: 'Render: Smooth Light Overlay (ImageData Upload / Canvas Scale)',
+        mean: statRenderLightOverlay.mean,
+        p95: statRenderLightOverlay.p95,
+        max: statRenderLightOverlay.max,
+        cat: 'Lighting/Render',
+        file: 'src/core/renderer.js'
+      },
+      {
+        key: 'renderLightProp',
+        name: 'Render: Light Display Propagation (DisplaySky/Block Grid)',
+        mean: statRenderLightProp.mean,
+        p95: statRenderLightProp.p95,
+        max: statRenderLightProp.max,
+        cat: 'Lighting/Sim',
+        file: 'src/core/world.js'
+      },
+      {
+        key: 'renderGrassCorners',
+        name: 'Render: Connected Grass Corner Textures',
+        mean: statRenderGrassCorners.mean,
+        p95: statRenderGrassCorners.p95,
+        max: statRenderGrassCorners.max,
+        cat: 'Polish/Render',
+        file: 'src/core/renderer.js'
+      },
+      {
+        key: 'renderSkyHills',
+        name: 'Render: Sky Gradient & Background Hills Noise',
+        mean: statRenderSkyHills.mean,
+        p95: statRenderSkyHills.p95,
+        max: statRenderSkyHills.max,
+        cat: 'Render/FX',
+        file: 'src/core/polish.js'
+      },
+      {
+        key: 'renderEntities',
+        name: 'Render: Player, Items & Remote Entity Layer',
+        mean: statRenderEntities.mean,
+        p95: statRenderEntities.p95,
+        max: statRenderEntities.max,
+        cat: 'Entities/Render',
+        file: 'src/core/renderer.js'
+      },
+      {
+        key: 'renderEntityOutlines',
+        name: 'Render: Entity Layer Outlines (5 Canvas Blits)',
+        mean: statRenderEntityOutlines.mean,
+        p95: statRenderEntityOutlines.p95,
+        max: statRenderEntityOutlines.max,
+        cat: 'Polish/Blit',
+        file: 'src/core/polish.js'
+      },
+      {
+        key: 'renderWater',
+        name: 'Render: Water Layer & Particles',
+        mean: statRenderWater.mean,
+        p95: statRenderWater.p95,
+        max: statRenderWater.max,
+        cat: 'Water/Render',
+        file: 'src/core/renderer.js'
+      },
       // Update
-      { key: 'updatePlayer', name: 'Update: Player Physics, Movement & Swept Collisions', mean: statUpdatePlayer.mean, p95: statUpdatePlayer.p95, max: statUpdatePlayer.max, cat: 'Physics/Player', file: 'src/core/physics.js' },
-      { key: 'tickWorld', name: 'Update: World Tick (Chunk Cell Scans & Block Ticks)', mean: statTickWorld.mean, p95: statTickWorld.p95, max: statTickWorld.max, cat: 'World/Tick', file: 'src/core/world.js' },
-      { key: 'tickEntities', name: 'Update: Item Physics, Drift, Pickup & Leaf Spawner', mean: statTickEntities.mean, p95: statTickEntities.p95, max: statTickEntities.max, cat: 'Entities/Logic', file: 'src/script.js' },
-      { key: 'updateChunks', name: 'Update: Chunk Preload & Streaming Management', mean: statUpdateChunks.mean, p95: statUpdateChunks.p95, max: statUpdateChunks.max, cat: 'World/Streaming', file: 'src/script.js' },
-      { key: 'updateUI', name: 'Update: HTML UI Hotbar & Slots Refresh', mean: statUpdateUI.mean, p95: statUpdateUI.p95, max: statUpdateUI.max, cat: 'DOM/UI', file: 'src/script.js' },
-      { key: 'simTotal', name: 'Physics: Water WASM / Grid Simulation', mean: statSimTotal.mean, p95: statSimTotal.p95, max: statSimTotal.max, cat: 'Water/Sim', file: 'src/logic/particleWater.js' }
+      {
+        key: 'updatePlayer',
+        name: 'Update: Player Physics, Movement & Swept Collisions',
+        mean: statUpdatePlayer.mean,
+        p95: statUpdatePlayer.p95,
+        max: statUpdatePlayer.max,
+        cat: 'Physics/Player',
+        file: 'src/core/physics.js'
+      },
+      {
+        key: 'tickWorld',
+        name: 'Update: World Tick (Chunk Cell Scans & Block Ticks)',
+        mean: statTickWorld.mean,
+        p95: statTickWorld.p95,
+        max: statTickWorld.max,
+        cat: 'World/Tick',
+        file: 'src/core/world.js'
+      },
+      {
+        key: 'tickEntities',
+        name: 'Update: Item Physics, Drift, Pickup & Leaf Spawner',
+        mean: statTickEntities.mean,
+        p95: statTickEntities.p95,
+        max: statTickEntities.max,
+        cat: 'Entities/Logic',
+        file: 'src/script.js'
+      },
+      {
+        key: 'updateChunks',
+        name: 'Update: Chunk Preload & Streaming Management',
+        mean: statUpdateChunks.mean,
+        p95: statUpdateChunks.p95,
+        max: statUpdateChunks.max,
+        cat: 'World/Streaming',
+        file: 'src/script.js'
+      },
+      {
+        key: 'updateUI',
+        name: 'Update: HTML UI Hotbar & Slots Refresh',
+        mean: statUpdateUI.mean,
+        p95: statUpdateUI.p95,
+        max: statUpdateUI.max,
+        cat: 'DOM/UI',
+        file: 'src/script.js'
+      },
+      {
+        key: 'simTotal',
+        name: 'Physics: Water WASM / Grid Simulation',
+        mean: statSimTotal.mean,
+        p95: statSimTotal.p95,
+        max: statSimTotal.max,
+        cat: 'Water/Sim',
+        file: 'src/logic/particleWater.js'
+      }
     ].sort((a, b) => b.mean - a.mean);
 
     const topBottlenecks = allPhases.slice(0, 5);
@@ -461,14 +566,29 @@ export class GamePerf {
     }
 
     // Top 10 worst frames trace
-    const worstFrames = [...this.history]
-      .sort((a, b) => b.frameDelta - a.frameDelta)
-      .slice(0, 10);
+    const worstFrames = [...this.history].sort((a, b) => b.frameDelta - a.frameDelta).slice(0, 10);
 
     const nonTimingKeys = new Set([
-      'frameDelta', 'timestamp', 'fps', 'cpuTotalMs', 'headroomMs', 'updateTotal', 'renderTotal',
-      'canvasW', 'canvasH', 'dpr', 'visibleTiles', 'renderedBlocks', 'loadedChunks', 'itemsCount',
-      'particlesCount', 'totalParticles', 'visibleParticles', 'activeWaterPixels', 'gridW', 'gridH',
+      'frameDelta',
+      'timestamp',
+      'fps',
+      'cpuTotalMs',
+      'headroomMs',
+      'updateTotal',
+      'renderTotal',
+      'canvasW',
+      'canvasH',
+      'dpr',
+      'visibleTiles',
+      'renderedBlocks',
+      'loadedChunks',
+      'itemsCount',
+      'particlesCount',
+      'totalParticles',
+      'visibleParticles',
+      'activeWaterPixels',
+      'gridW',
+      'gridH',
       'fixturesCount'
     ]);
 
@@ -477,7 +597,10 @@ export class GamePerf {
       let maxVal = 0;
       for (const [k, v] of Object.entries(f)) {
         if (typeof v === 'number' && !nonTimingKeys.has(k)) {
-          if (v > maxVal) { maxVal = v; topPhase = k; }
+          if (v > maxVal) {
+            maxVal = v;
+            topPhase = k;
+          }
         }
       }
       return `| #${i + 1} | **${f.frameDelta.toFixed(1)} ms** (${f.fps} FPS) | ${f.cpuTotalMs.toFixed(1)} ms | ${f.updateTotal.toFixed(1)} ms | ${f.renderTotal.toFixed(1)} ms | \`${topPhase}\` (${maxVal.toFixed(1)} ms) | ${f.renderedBlocks} | ${f.loadedChunks} |`;
@@ -569,10 +692,14 @@ ${topBottlenecks.map((b, i) => `| **#${i + 1}** | **${b.name}** | **${b.mean.toF
 ---
 
 ## 5. ACTIONABLE OPTIMIZATIONS FOR MOBILE SMOOTHNESS
-${recommendations.map((r, i) => `### ${i + 1}. ${r.title}
+${recommendations
+  .map(
+    (r, i) => `### ${i + 1}. ${r.title}
 * **Expected Impact:** **${r.impact}**
 * **Analysis & Fix:** ${r.desc}
-`).join('\n')}
+`
+  )
+  .join('\n')}
 
 ---
 
@@ -592,18 +719,18 @@ ${worstRows.join('\n')}
     const report = this.generateReport();
     console.log('[GamePerf] Comprehensive Performance Audit:\n' + report);
 
-    const statFps = this._stats(this.history.map(f => f.fps || 0));
-    const statCpu = this._stats(this.history.map(f => f.cpuTotalMs || 0));
+    const statFps = this._stats(this.history.map((f) => f.fps || 0));
+    const statCpu = this._stats(this.history.map((f) => f.cpuTotalMs || 0));
 
     // Determine top bottleneck name for chat summary
     const allPhases = [
-      { name: 'Terrain Draw', mean: this._stats(this.history.map(f => f.renderBlocks || 0)).mean },
-      { name: 'Edge Polish', mean: this._stats(this.history.map(f => f.renderEdgePass || 0)).mean },
-      { name: 'Leaf Outlines', mean: this._stats(this.history.map(f => f.renderLeafOutlines || 0)).mean },
-      { name: 'Smooth Light', mean: this._stats(this.history.map(f => f.renderLightOverlay || 0)).mean },
-      { name: 'Player Physics', mean: this._stats(this.history.map(f => f.updatePlayer || 0)).mean },
-      { name: 'World Tick', mean: this._stats(this.history.map(f => f.tickWorld || 0)).mean },
-      { name: 'HTML UI', mean: this._stats(this.history.map(f => f.updateUI || 0)).mean }
+      { name: 'Terrain Draw', mean: this._stats(this.history.map((f) => f.renderBlocks || 0)).mean },
+      { name: 'Edge Polish', mean: this._stats(this.history.map((f) => f.renderEdgePass || 0)).mean },
+      { name: 'Leaf Outlines', mean: this._stats(this.history.map((f) => f.renderLeafOutlines || 0)).mean },
+      { name: 'Smooth Light', mean: this._stats(this.history.map((f) => f.renderLightOverlay || 0)).mean },
+      { name: 'Player Physics', mean: this._stats(this.history.map((f) => f.updatePlayer || 0)).mean },
+      { name: 'World Tick', mean: this._stats(this.history.map((f) => f.tickWorld || 0)).mean },
+      { name: 'HTML UI', mean: this._stats(this.history.map((f) => f.updateUI || 0)).mean }
     ].sort((a, b) => b.mean - a.mean);
 
     const topBottleneck = allPhases[0]?.name || 'None';

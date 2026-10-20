@@ -1,4 +1,3 @@
-import apple from './apple.js';
 import wooden_shovel from './wooden_shovel.js';
 import wooden_pickaxe from './wooden_pickaxe.js';
 import wooden_axe from './wooden_axe.js';
@@ -60,7 +59,6 @@ import bucket from './bucket.js';
 import water_bucket from './water_bucket.js';
 export function registerAllItems(registry) {
   [
-    apple,
     wooden_shovel,
     wooden_pickaxe,
     wooden_axe,
@@ -119,5 +117,5 @@ export function registerAllItems(registry) {
     blacksmith_hammer,
     bucket,
     water_bucket
-  ].forEach(item => registry.register({ ...item, isItem: true }));
+  ].forEach((item) => registry.register({ ...item, isItem: true }));
 }

@@ -12,7 +12,6 @@ function makeShards() {
   return shards;
 }
 
-
 export class Breaker {
   constructor(registry) {
     this.registry = registry;
@@ -84,10 +83,10 @@ export class Breaker {
       this.cancel();
       const cell = world.getCell(x, y);
       if (cell.meta?.bgId) {
-        const meta = { ...cell.meta };
-        delete meta.bgId;
-        delete meta.bgMeta;
-        world.setBlock(x, y, cell.id, meta);
+        // The background block behind a front block: take it out without setBlock putting it
+        // straight back (it keeps a cell's background block), or it could be mined forever.
+        const { bgId, bgMeta, ...meta } = cell.meta;
+        world.setBlock(x, y, cell.id, Object.keys(meta).length ? meta : null, { keepLayers: false });
       } else if (cell.meta?.layer === 'bg') {
         world.setBlock(x, y, 'air', { noWall: true });
       } else {
@@ -121,7 +120,10 @@ export class Breaker {
           world.setBlock(x, y - 1, 'air', null);
         }
       }
-      for (const [sx, side] of [[x - 1, 'right'], [x + 1, 'left']]) {
+      for (const [sx, side] of [
+        [x - 1, 'right'],
+        [x + 1, 'left']
+      ]) {
         if (!world.inBounds(sx, y)) continue;
         const sideCell = world.getCell(sx, y);
         if ((this.registry.get(sideCell.id)?.shape === 'torch' || this.registry.get(sideCell.id)?.climbable) && sideCell.meta?.wall === side) {

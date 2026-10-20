@@ -10,7 +10,8 @@ function isConnectedToLog(world, startX, startY) {
   const visited = new Set();
   const queue = [startX, startY];
   for (let head = 0; head < queue.length; head += 2) {
-    const x = queue[head], y = queue[head + 1];
+    const x = queue[head],
+      y = queue[head + 1];
     const key = x * 65536 + y;
     if (visited.has(key)) continue;
     visited.add(key);
@@ -31,7 +32,7 @@ function isConnectedToLog(world, startX, startY) {
 // Natural leaves with no log anywhere in their tree fall away one at a time: each picks
 // its own random moment (the leaf block's leaves.decay [min, max] seconds) so the crown
 // thins gradually. Leaves with decay: null never fall.
-const CHECK_EVERY = 8;       // block ticks between connection checks
+const CHECK_EVERY = 8; // block ticks between connection checks
 
 export function createLeafDecayTick() {
   return function tick(world, x, y, meta) {

@@ -1,6 +1,6 @@
 {
   "name": "underwild",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "description": "Underwild - A 2D sandbox game",
   "main": "platforms/desktop/main.js",
   "scripts": {
@@ -9,18 +9,25 @@
     "postinstall": "echo No native modules to rebuild",
     "dist": "electron-builder --win --publish never",
     "release": "electron-builder --win --publish always",
-    "set-version": "node build/scripts/set-version.mjs"
+    "set-version": "node build/scripts/set-version.mjs",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.js\" \"assets/**/*.js\" \"mods/**/*.js\" \"platforms/desktop/**/*.js\" \"build/scripts/**/*.mjs\" \"*.css\" \"themes/**/*.css\"",
+    "format:check": "prettier --check \"src/**/*.js\" \"assets/**/*.js\" \"mods/**/*.js\" \"platforms/desktop/**/*.js\" \"build/scripts/**/*.mjs\" \"*.css\" \"themes/**/*.css\""
   },
   "devDependencies": {
     "@capacitor/android": "^6.1.2",
     "@capacitor/cli": "^6.1.2",
     "@capacitor/core": "^6.1.2",
+    "@eslint/js": "^9.39.5",
     "electron": "^28.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
+    "prettier": "^3.9.10"
   },
   "dependencies": {
     "electron-updater": "^6.1.8",
-    "liquidfun-wasm": "^7.0.0",
     "ws": "^8.18.0"
   },
   "author": "DillonRGaming",
@@ -40,7 +47,10 @@
       "!rules.txt",
       "!.claude/**",
       "!.github/**",
-      "!platforms/android/**"
+      "!platforms/android/**",
+      "!eslint.config.mjs",
+      "!.prettierrc.json",
+      "!.prettierignore"
     ],
     "win": {
       "target": "nsis",

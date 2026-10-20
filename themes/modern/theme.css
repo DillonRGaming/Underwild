@@ -116,12 +116,12 @@
   --stat-gap: -1px;
   --stat-icon-width: 18px;
   --stat-icon-height: 18px;
-  --icon-heart-full: url("themes/java/icons/heart_full.png");
-  --icon-heart-half: url("themes/java/icons/heart_half.png");
-  --icon-heart-empty: url("themes/java/icons/heart_empty.png");
-  --icon-hunger-full: url("themes/java/icons/hunger_full.png");
-  --icon-hunger-half: url("themes/java/icons/hunger_half.png");
-  --icon-hunger-empty: url("themes/java/icons/hunger_empty.png");
+  --icon-heart-full: url('themes/java/icons/heart_full.png');
+  --icon-heart-half: url('themes/java/icons/heart_half.png');
+  --icon-heart-empty: url('themes/java/icons/heart_empty.png');
+  --icon-hunger-full: url('themes/java/icons/hunger_full.png');
+  --icon-hunger-half: url('themes/java/icons/hunger_half.png');
+  --icon-hunger-empty: url('themes/java/icons/hunger_empty.png');
 
   --scroll-width: 6px;
   --scroll-track: transparent;
@@ -256,7 +256,7 @@
 }
 
 #mainMenu .menu-content::before {
-  content: "Absolutely no clutter!";
+  content: 'Absolutely no clutter!';
   position: absolute;
   top: 132px;
   left: calc(50% + 250px);
@@ -278,12 +278,28 @@
   grid-column: 1 / -1;
 }
 
-#mainMenu [data-action="single-player"] { order: 1; }
-#mainMenu [data-action="load-world"] { order: 2; }
-#mainMenu [data-action="mods"] { order: 3; }
-#mainMenu [data-action="skins-options"] { order: 4; }
-#mainMenu .menu-buttons [data-action="options"] { order: 5; grid-column: auto; margin-top: 16px; }
-#mainMenu .menu-buttons [data-action="quit"] { order: 6; grid-column: auto; margin-top: 16px; }
+#mainMenu [data-action='single-player'] {
+  order: 1;
+}
+#mainMenu [data-action='load-world'] {
+  order: 2;
+}
+#mainMenu [data-action='mods'] {
+  order: 3;
+}
+#mainMenu [data-action='skins-options'] {
+  order: 4;
+}
+#mainMenu .menu-buttons [data-action='options'] {
+  order: 5;
+  grid-column: auto;
+  margin-top: 16px;
+}
+#mainMenu .menu-buttons [data-action='quit'] {
+  order: 6;
+  grid-column: auto;
+  margin-top: 16px;
+}
 
 #mainMenu .changelog-section {
   position: absolute;
@@ -338,7 +354,7 @@
   width: 408px;
 }
 
-#pauseMenu [data-action="pause-back-to-main"] {
+#pauseMenu [data-action='pause-back-to-main'] {
   margin-top: 56px;
 }
 

@@ -7,7 +7,9 @@ import { hasOpenSide, openSidesMask } from './dirt.js';
 // A soil whose grassy form goes back to something else (coarse dirt -> grass -> dirt) keeps
 // its own id in meta.soil, so it comes back as itself.
 let registry = null;
-export function useGrassRegistry(r) { registry = r; }
+export function useGrassRegistry(r) {
+  registry = r;
+}
 const defOf = (id) => registry?.get(id);
 
 // The bare block a grassy cell shows / turns back into.
@@ -29,7 +31,8 @@ function canGrowGrass(cell) {
 }
 // What a cell turns into once grass grows on it / dies off it.
 function grownCell(cell, sides) {
-  if (cell.id === 'double_slab') return { id: 'double_slab', meta: { bottom: cell.meta.bottom, top: cell.meta.top, grassy: true, ...(sides != null ? { sides } : {}) } };
+  if (cell.id === 'double_slab')
+    return { id: 'double_slab', meta: { bottom: cell.meta.bottom, top: cell.meta.top, grassy: true, ...(sides != null ? { sides } : {}) } };
   const grownId = defOf(cell.id).growsGrass;
   const next = { ...shapeMeta(cell.meta), ...(sides != null ? { sides } : {}) };
   if (defOf(grownId)?.grassy?.bare !== cell.id) next.soil = cell.id;
@@ -41,7 +44,16 @@ function bareCell(cell) {
   return { id: bareIdOf(cell.id, cell.meta), meta: Object.keys(m).length ? m : null };
 }
 
-const NEIGHBORS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+const NEIGHBORS = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1]
+];
 
 // Slab position / stair facing survive turning grassy or bare.
 function shapeMeta(meta) {
@@ -61,8 +73,8 @@ export function spreadTick(world, x, y, meta, id) {
     const open = openSidesMask(world, x, y);
     let sides = 1;
     if (!(open & 1)) {
-      if (dx < 0 && (open & 8)) sides = 8;
-      else if (dx > 0 && (open & 2)) sides = 2;
+      if (dx < 0 && open & 8) sides = 8;
+      else if (dx > 0 && open & 2) sides = 2;
       else if (open & 4) sides = 4;
       else sides = open;
     }
@@ -98,15 +110,18 @@ export function grassTick(world, x, y, meta, id) {
     if (!(missing & bit)) return false;
     if (bit === 1) return true;
     // Round the corner from our own grass, or across from a grassy neighbour.
-    if ((bit === 8 || bit === 2) && (meta.sides & 5)) return true;
-    if (bit === 4 && (meta.sides & 10)) return true;
+    if ((bit === 8 || bit === 2) && meta.sides & 5) return true;
+    if (bit === 4 && meta.sides & 10) return true;
     if (bit === 8 && isGrassyCell(world.getCell(x - 1, y))) return true;
     if (bit === 2 && isGrassyCell(world.getCell(x + 1, y))) return true;
     if (bit === 4 && isGrassyCell(world.getCell(x, y + 1))) return true;
     return false;
   };
   for (const bit of [1, 8, 2, 4]) {
-    if (canGrow(bit)) { meta.sides |= bit; return; }
+    if (canGrow(bit)) {
+      meta.sides |= bit;
+      return;
+    }
   }
 }
 
@@ -117,7 +132,9 @@ export function settleGrass(world, x0, x1) {
   const loaded = (x) => world.inBounds(x, 0) && world.isChunkLoaded(world.chunkXFor(x));
   const put = (x, y, id, meta) => {
     const chunk = world.chunks.get(world.chunkKey(world.chunkXFor(x)));
-    chunk.cells[y * world.chunkSize + (x - chunk.chunkX * world.chunkSize)] = { id, meta };
+    const idx = y * world.chunkSize + (x - chunk.chunkX * world.chunkSize);
+    chunk.cells[idx] = { id, meta };
+    world._noteCellWritten?.(chunk, idx, id);
   };
   const grassyAt = (x, y) => world.inBounds(x, y) && isGrassyCell(world.getCell(x, y));
   for (let pass = 0; pass < 8; pass++) {
@@ -131,8 +148,7 @@ export function settleGrass(world, x0, x1) {
           const next = bareCell(cell);
           put(x, y, next.id, next.meta);
           changed = true;
-        } else if (canGrowGrass(cell) && hasOpenSide(world, x, y)
-          && NEIGHBORS.some(([dx, dy]) => grassyAt(x + dx, y + dy))) {
+        } else if (canGrowGrass(cell) && hasOpenSide(world, x, y) && NEIGHBORS.some(([dx, dy]) => grassyAt(x + dx, y + dy))) {
           const next = grownCell(cell);
           put(x, y, next.id, next.meta);
           changed = true;

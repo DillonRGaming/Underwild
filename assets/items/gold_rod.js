@@ -4,7 +4,8 @@ export default {
   material: 'gold',
   kind: 'rod',
   tab: 'materials',
-  recipes: [ // how it's crafted
+  recipes: [
+    // how it's crafted
     { shape: ['i', 'i'], ingredients: { i: 'gold_ingot' }, count: 4 }
   ],
   type: 'item',
