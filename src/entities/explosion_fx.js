@@ -1,6 +1,7 @@
 const FIRE_COLORS = ['#fff6d5', '#ffd23f', '#ff9a1f', '#ff5a1f', '#d62d12'];
 const SPARK_COLORS = ['#ffffff', '#fff2a8', '#ffc93c'];
 const MAX_PARTICLES = 900;
+const FLASH_MS = 1100; // how long the light of a blast takes to die away
 
 function pick(list) {
   return list[(Math.random() * list.length) | 0];
@@ -9,12 +10,24 @@ function pick(list) {
 export class ExplosionFX {
   constructor() {
     this.particles = [];
+    this.flashes = []; // the light of each recent blast: { x, y, radius (world px), born }
     this.shake = 0;
   }
 
   clear() {
     this.particles.length = 0;
+    this.flashes.length = 0;
     this.shake = 0;
+  }
+
+  // How bright each recent blast still is (1 at the bang, fading to 0), for the renderer's
+  // lighting: { x, y, radius, strength }. Old ones are dropped.
+  activeFlashes(now = performance.now()) {
+    this.flashes = this.flashes.filter((f) => now - f.born < FLASH_MS);
+    return this.flashes.map((f) => {
+      const t = (now - f.born) / FLASH_MS;
+      return { x: f.x, y: f.y, radius: f.radius, strength: 1 - t * t };
+    });
   }
 
   // shakeScale (0..1): how much of the blast reaches the viewer (distance, footing).
@@ -22,6 +35,7 @@ export class ExplosionFX {
     const room = MAX_PARTICLES - this.particles.length;
     const scale = Math.max(0, Math.min(1, room / 80));
     this.shake = Math.min(26, this.shake + 14 * shakeScale);
+    this.flashes.push({ x, y, radius: radiusPx, born: performance.now() });
 
     for (let i = 0; i < 25 * scale; i++) {
       const a = Math.random() * Math.PI * 2;

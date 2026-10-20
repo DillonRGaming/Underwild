@@ -11,6 +11,13 @@ const WALL_SHADOW = 'rgba(10, 9, 9, 0.32)';
 
 const mix = (a, b, t) => Math.round(a + (b - a) * t);
 
+// How thick block outlines (and the rounded corners cut to match) are, in screen pixels: a
+// texel, rounded up, so they never come out thin when the zoom isn't a whole number (as with a
+// lower render scale).
+export function outlineWidth(zoom) {
+  return Math.max(1, Math.ceil(zoom - 0.05));
+}
+
 // Sky: darker and bluer at the top, paler toward the horizon.
 export function drawSkyGradient(ctx, canvas, r, g, b, light = 1) {
   // The pale horizon fades out at night, so it never glows brighter than the land.
@@ -181,12 +188,16 @@ export function isOutlined(type, meta) {
 export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
   const { world, camera, registry } = r;
 
-  const u = Math.max(1, Math.round(camera.zoom));
+  const u = outlineWidth(camera.zoom);
   const sh = u * 2;
   const outlines = polishOn('outlines'),
     rounding = polishOn('rounding');
   const seams = polishOn('seams'),
     wallShadows = polishOn('wallShadows');
+
+  // Only the cells this says yes to get their edges drawn (the rest are still looked at as
+  // neighbours): see Renderer.updateTerrainCache, which draws still and moving blocks apart.
+  const own = r._cellFilter || (() => true);
 
   const minX = startX - 1,
     maxX = endX + 1;
@@ -267,7 +278,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         const colIdx = x - minX;
         const selfShape = shapeGrid[rowIdx * gridW + colIdx];
         const downShape = shapeGrid[(rowIdx + 1) * gridW + colIdx];
-        if (selfShape === 1 && downShape === 1) {
+        if (selfShape === 1 && downShape === 1 && own(x, y)) {
           if (!inSpan) {
             inSpan = true;
             spanStart = x;
@@ -295,7 +306,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     const sy0 = rowSy[0];
     for (let x = startX; x <= endX; x++) {
       const colIdx = x - minX;
-      if (shapeGrid[topRowIdx * gridW + colIdx] === 1 && shapeGrid[(topRowIdx - 1) * gridW + colIdx] === 1) {
+      if (shapeGrid[topRowIdx * gridW + colIdx] === 1 && shapeGrid[(topRowIdx - 1) * gridW + colIdx] === 1 && own(x, startY)) {
         if (!inTopSpan) {
           inTopSpan = true;
           topSpanStart = x;
@@ -325,7 +336,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         const rowIdx = y - minY;
         const selfShape = shapeGrid[rowIdx * gridW + colIdx];
         const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
-        if (selfShape === 1 && rightShape === 1) {
+        if (selfShape === 1 && rightShape === 1 && own(x, y)) {
           if (!inSpan) {
             inSpan = true;
             spanStart = y;
@@ -353,7 +364,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     const sx0 = colSx[0];
     for (let y = startY; y <= endY; y++) {
       const rowIdx = y - minY;
-      if (shapeGrid[rowIdx * gridW + leftColIdx] === 1 && shapeGrid[rowIdx * gridW + leftColIdx - 1] === 1) {
+      if (shapeGrid[rowIdx * gridW + leftColIdx] === 1 && shapeGrid[rowIdx * gridW + leftColIdx - 1] === 1 && own(startX, y)) {
         if (!inLeftSpan) {
           inLeftSpan = true;
           leftSpanStart = y;
@@ -384,7 +395,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         const right = shapeGrid[rowIdx * gridW + (colIdx + 1)];
         const down = shapeGrid[(rowIdx + 1) * gridW + colIdx];
         const diag = shapeGrid[(rowIdx + 1) * gridW + (colIdx + 1)];
-        if ((self === 1 ? 1 : 0) + (right === 1 ? 1 : 0) + (down === 1 ? 1 : 0) + (diag === 1 ? 1 : 0) >= 2) {
+        if ((self === 1 ? 1 : 0) + (right === 1 ? 1 : 0) + (down === 1 ? 1 : 0) + (diag === 1 ? 1 : 0) >= 2 && own(x, y)) {
           layerCtx.fillRect(ex - u, rowEy[y - startY] - u, u, u);
         }
       }
@@ -412,7 +423,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     for (let y = startY; y <= endY; y++) {
       const rowIdx = y - minY;
       const selfShape = shapeGrid[rowIdx * gridW + colIdx];
-      if (selfShape === 0) continue;
+      if (selfShape === 0 || !own(x, y)) continue;
 
       const yi = y - startY;
       const sy = rowSy[yi],
@@ -682,32 +693,38 @@ export function drawVignette(ctx, canvas) {
 }
 
 // A dark 1-pixel outline around everything drawn on an entity layer (players, items).
-export function outlineLayer(layer, zoom) {
+// `area` ({ x, y, w, h }, screen pixels): only there (what's drawn is all inside it).
+export function outlineLayer(layer, zoom, area = null) {
   const u = Math.max(1, Math.round(zoom));
+  const { x, y, w, h } = area || { x: 0, y: 0, w: layer.width, h: layer.height };
+  if (w <= 0 || h <= 0) return;
   let sil = outlineLayer._c;
   if (!sil) sil = outlineLayer._c = document.createElement('canvas');
   if (sil.width !== layer.width || sil.height !== layer.height) {
     sil.width = layer.width;
     sil.height = layer.height;
   }
+  // The silhouette: what's drawn, in black.
   const s = sil.getContext('2d');
   s.setTransform(1, 0, 0, 1, 0, 0);
-  s.globalCompositeOperation = 'copy';
-  s.drawImage(layer, 0, 0);
-  s.globalCompositeOperation = 'source-in';
-  s.fillStyle = 'rgba(0, 0, 0, 0.85)'; // pure black, so it's never lighter than the dark around it
-  s.fillRect(0, 0, sil.width, sil.height);
+  s.globalCompositeOperation = 'source-over';
+  s.clearRect(x, y, w, h);
+  s.drawImage(layer, x, y, w, h, x, y, w, h);
+  s.globalCompositeOperation = 'source-atop';
+  s.fillStyle = '#000';
+  s.fillRect(x, y, w, h);
   s.globalCompositeOperation = 'source-over';
   const l = layer.getContext('2d');
   l.save();
   l.setTransform(1, 0, 0, 1, 0, 0);
   l.globalCompositeOperation = 'destination-over';
+  l.globalAlpha = 0.85; // pure black, so it's never lighter than the dark around it
   for (const [dx, dy] of [
     [u, 0],
     [-u, 0],
     [0, u],
     [0, -u]
   ])
-    l.drawImage(sil, dx, dy);
+    l.drawImage(sil, x, y, w, h, x + dx, y + dy, w, h);
   l.restore();
 }

@@ -21,7 +21,7 @@ import {
   loadKeybinds,
   changeZoom,
   keybinds,
-  defaultZoom,
+  renderScale,
   perfOverlay,
   setPerfOverlay,
   setRenderDistance,
@@ -107,6 +107,7 @@ window.addEventListener(
   loadKeybinds();
   loadGameSettings();
   applyViewSettings();
+  window.dispatchEvent(new Event('resize')); // the canvas at the saved render scale
 })();
 
 game.tempKeybinds = { ...keybinds };
@@ -118,8 +119,9 @@ game.canvas = document.getElementById('gameCanvas');
 game.ctx = game.canvas.getContext('2d');
 
 function resizeCanvas() {
-  game.canvas.width = Math.floor(window.devicePixelRatio * game.canvas.clientWidth);
-  game.canvas.height = Math.floor(window.devicePixelRatio * game.canvas.clientHeight);
+  const scale = window.devicePixelRatio * renderScale();
+  game.canvas.width = Math.floor(scale * game.canvas.clientWidth);
+  game.canvas.height = Math.floor(scale * game.canvas.clientHeight);
 }
 
 function ensureCSSSize() {
@@ -170,7 +172,7 @@ setupTouchControls({
 
 game.camera = new Camera();
 
-game.camera.zoom = Math.max(2.5, Math.min(6, prefs.getNumber('cameraZoom', defaultZoom())));
+applyViewSettings();
 
 game.renderer = new Renderer(game.ctx, game.canvas, null, registry, game.camera, game.input, null, null, null, getRendererUI);
 

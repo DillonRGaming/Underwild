@@ -4,9 +4,10 @@ import { wind, exposureAt } from './wind.js';
 import { weather } from './weather.js';
 import { TILE_SIZE, darkenHex } from './utils.js';
 import { Clouds } from './clouds.js';
-import { polishOn } from './polishSettings.js';
+import { polishOn, polishState } from './polishSettings.js';
+import { Camera } from './camera.js';
 import { ClassicClouds } from './clouds_classic.js';
-import { drawSkyGradient, drawHills, isOutlined, edgePass, drawVignette, outlineLayer, blockSeams, screenOutline, cornerRect } from './polish.js';
+import { drawSkyGradient, drawHills, isOutlined, edgePass, drawVignette, outlineLayer, outlineWidth, blockSeams, screenOutline, cornerRect } from './polish.js';
 import { keptLeafCover } from '../logic/trunkLeaves.js';
 import { naturalHeightAt, naturalDirtDepthAt, lakeWaterTopAt, sampleBlockAt } from '../logic/terrainGen.js';
 import { SQ as WATER_SQ } from '../logic/water.js';
@@ -40,6 +41,8 @@ const HELD_LIGHT_KEY = 1 << 16;
 const PLACED_LIGHT_RANGE = 44;
 const PLACED_LIGHT_BRIGHTNESS = 0.85;
 const WHITE_LIGHT = [1, 1, 1];
+const BLAST_LIGHT = [1, 0.62, 0.28]; // the warm flash of an explosion
+const BLAST_LIGHT_RANGE = 3.5; // how far it reaches, in blast radii
 const LIGHT_TINT_STRENGTH = 0.9;
 const LIGHT_GLOW_STRENGTH = 0.35;
 const OPEN_AIR_LIGHT_COST = 4;
@@ -67,6 +70,7 @@ const FOG_TEX_W = 256; // width of the repeating part of the mist texture
 const FOG_TEX_PAD = 32; // extra columns copied from its start so slices never run off the end
 const FALL_SLIDE_MS = 120; // matches world.js FALL_TICK_INTERVAL
 const LEAF_FRINGE_DEPTH = 2;
+const CACHE_TILE = 16; // blocks across a terrain cache tile
 const SNOW_DEPTH = 6; // texels deep the lying snow gets once it's fully built up
 const SNOW_UNDER_TREES = 0.35; // share of it that gets through a tree's crown to the ground below
 const SNOW_COLOR = 'rgb(232, 239, 248)';
@@ -75,6 +79,18 @@ const SNOW_TOP_COLOR = 'rgb(255, 255, 255)';
 // A tiny steady brightness difference between leaf blocks, so a canopy isn't one flat colour.
 function leafShade(x, y) {
   return 0.8 + 0.2 * hash01(x * 3 + 1, y * 5 + 2);
+}
+
+// A screen area that drawing grows to cover (x0, y0, x1, y1), for layers that are mostly empty.
+function newArea() {
+  return { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+}
+
+function growArea(a, x, y, w, h, pad = 0) {
+  a.x0 = Math.min(a.x0, x - pad);
+  a.y0 = Math.min(a.y0, y - pad);
+  a.x1 = Math.max(a.x1, x + w + pad);
+  a.y1 = Math.max(a.y1, y + h + pad);
 }
 
 // v wrapped into [0, m).
@@ -166,11 +182,14 @@ export class Renderer {
     for (const textureId of ids) {
       if (textureId === 'air' || textureId === 'double_slab' || this.textures[textureId]) continue;
       const image = new Image();
+      // The terrain cache redraws with each texture that comes in.
       image.onload = () => {
         this.textures[textureId] = image;
+        this._textureVersion = (this._textureVersion || 0) + 1;
       };
       image.onerror = () => {
         this.missingTextures.add(textureId);
+        this._textureVersion = (this._textureVersion || 0) + 1;
       };
       image.src = `assets/textures/${textureId}.png`;
     }
@@ -215,6 +234,7 @@ export class Renderer {
       perf.startPhase('renderSkyHills');
       this.updateDaylight();
       this.updateHeldLight(ui);
+      this.updateBlastLight(ui);
       this.drawSky();
       // Clouds drift across the sky behind everything else; dimmer at night.
       const isMoon = this.world?.worldType === 'moon' || this.world?.dimensionId === 'moon' || this.world?.dimension?.id === 'moon';
@@ -270,83 +290,30 @@ export class Renderer {
       wctx.setTransform(ctx.getTransform());
       this.ctx = wctx;
       // Solid foreground blocks go on their own layer so their open corners can be rounded.
-      const terrain = polish && (polishOn('outlines') || polishOn('rounding') || polishOn('seams') || polishOn('wallShadows')) ? this.terrainLayer() : null;
+      const terrain = polish && (polishOn('outlines') || polishOn('rounding') || polishOn('seams') || polishOn('wallShadows')) ? this.areaLayer('_terrain') : null;
       const terrainCtx = terrain?.getContext('2d');
       if (terrainCtx) terrainCtx.setTransform(ctx.getTransform());
       // Leaves get a layer too, so the whole canopy can be outlined.
-      const leafLayer = polish && polishOn('leaves') ? this.terrainLayer('_leafLayer') : null;
+      const leafLayer = polish && polishOn('leaves') ? this.areaLayer('_leafLayer') : null;
       const leafCtx = leafLayer?.getContext('2d');
       if (leafCtx) leafCtx.setTransform(ctx.getTransform());
       this._splashes = [];
       this._waterFrame = (this._waterFrame || 0) + 1;
 
+      // The blocks that don't move (walls, ground, buildings, with their outlines and seams)
+      // come from the terrain cache; what moves (leaves and plants in the wind, trunks,
+      // falling blocks, burning furnaces) is drawn fresh on top every frame.
       perf.startPhase('renderBlocks');
-      let renderedBlocksCount = 0;
-      for (let x = startX; x <= endX; x++) {
-        if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
-        for (let y = startY; y <= endY; y++) {
-          const cell = world.getCell(x, y);
-          const t = this.registry.get(cell.id);
-          if (!t) continue;
-          // Anything that doesn't fill its cell (plants, slabs, stairs, trapdoors) shows the wall behind it.
-          if (!t.solid || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
-            // A background block placed behind this one (a torch on a planks wall...).
-            const bgType = cell.meta?.bgId ? this.registry.get(cell.meta.bgId) : null;
-            if (bgType) {
-              if (leafCtx && bgType.leaves) {
-                this.ctx = leafCtx;
-                this.drawBlock(x, y, bgType, { layer: 'bg', ...(cell.meta?.bgMeta || {}) });
-                this.ctx = wctx;
-              } else {
-                this.drawBlock(x, y, bgType, { layer: 'bg', ...(cell.meta?.bgMeta || {}) });
-                if (polish && bgType.solid && (!bgType.shape || bgType.shape === 'full') && polishOn('seams')) this.seamTile(x, y);
-              }
-              renderedBlocksCount++;
-            }
-            // Lakes have a fixed sand backdrop where their water was generated; it stays put
-            // whatever the water in front of it does.
-            else if (cell.meta?.noWall) {
-              /* the natural wall here was mined out */
-            } else if (this.isLakeBackdrop(x, y)) {
-              this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
-              renderedBlocksCount++;
-            } else if (!this.isOpenSky(x, y)) {
-              this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
-              renderedBlocksCount++;
-            }
-            if (cell.id === 'air') continue;
-          }
-          // A block still sliding into its cell leaves the cell's bottom uncovered: fill it.
-          if (cell.meta?.fellAt && gameClock.now() - cell.meta.fellAt < (cell.meta.slideMs || FALL_SLIDE_MS) && gameClock.now() >= cell.meta.fellAt) {
-            if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast', 'sand');
-            else if (y >= this.naturalSurfaceAt(x)) this.drawBackgroundWall(x, y, ui?.textureQuality === 'fast');
-          }
-          // Water (still and moving) is drawn after the blocks, all at once (drawWaterLayer).
-          if (cell.id === 'water') continue;
-          if (leafCtx && this.registry.get(cell.id)?.leaves) {
-            this.ctx = leafCtx;
-            this.drawBlock(x, y, t, cell.meta || {});
-            this.ctx = wctx;
-            renderedBlocksCount++;
-          } else if (terrainCtx && isOutlined(t, cell.meta)) {
-            this.ctx = terrainCtx;
-            this.drawBlock(x, y, t, cell.meta || {});
-            this.ctx = wctx;
-            renderedBlocksCount++;
-          } else {
-            this.drawBlock(x, y, t, cell.meta || {});
-            renderedBlocksCount++;
-          }
-        }
-      }
+      // Where on the leaf and moving-block layers anything gets drawn (they're mostly empty).
+      const layers = { wctx, terrainCtx, leafCtx, polish, flat: ui?.textureQuality === 'fast', leafArea: newArea(), terrainArea: newArea() };
+      const cache = this.updateTerrainCache(startX, endX, startY, endY, layers);
+      this.drawTerrainCache(wctx, startX, endX, startY, endY);
+      const liveAt = (x, y, cell, t) => this.cachedLive(x, y) || this.isMovingCell(cell, t);
+      const drawn = this.drawCells(startX, endX, startY, endY, layers, false, liveAt);
+      const renderedBlocksCount = cache.blocks + drawn.count;
       perf.endPhase('renderBlocks');
 
       perf.startPhase('renderPolish');
-      if (polish && polishOn('connectedGrass')) {
-        perf.startPhase('renderGrassCorners');
-        this.drawGrassCorners(terrainCtx || wctx, startX, endX, startY, endY);
-        perf.endPhase('renderGrassCorners');
-      }
       if (leafCtx) {
         perf.startPhase('renderLeafFringes');
         this.ctx = leafCtx;
@@ -355,26 +322,35 @@ export class Renderer {
         perf.endPhase('renderLeafFringes');
 
         perf.startPhase('renderLeafOutlines');
-        outlineLayer(leafLayer, camera.zoom);
-        wctx.save();
-        wctx.setTransform(1, 0, 0, 1, 0, 0);
-        wctx.drawImage(leafLayer, 0, 0);
-        wctx.restore();
+        const area = this.finishArea('_leafLayer', layers.leafArea, shake);
+        if (area) {
+          outlineLayer(leafLayer, camera.zoom, area);
+          wctx.save();
+          wctx.setTransform(1, 0, 0, 1, 0, 0);
+          wctx.drawImage(leafLayer, area.x, area.y, area.w, area.h, area.x, area.y, area.w, area.h);
+          wctx.restore();
+        }
         perf.endPhase('renderLeafOutlines');
       }
-      if (terrainCtx) {
+      if (terrainCtx && drawn.outlined) {
         perf.startPhase('renderEdgePass');
-        edgePass(this, terrainCtx, wctx, startX, endX, startY, endY);
-        wctx.save();
-        wctx.setTransform(1, 0, 0, 1, 0, 0);
-        wctx.drawImage(terrain, 0, 0);
-        wctx.restore();
+        this._cellFilter = (x, y) => {
+          const cell = world.getCell(x, y);
+          return liveAt(x, y, cell, this.registry.get(cell.id));
+        };
+        try {
+          edgePass(this, terrainCtx, wctx, startX, endX, startY, endY);
+        } finally {
+          this._cellFilter = null;
+        }
+        const area = this.finishArea('_terrain', layers.terrainArea, shake);
+        if (area) {
+          wctx.save();
+          wctx.setTransform(1, 0, 0, 1, 0, 0);
+          wctx.drawImage(terrain, area.x, area.y, area.w, area.h, area.x, area.y, area.w, area.h);
+          wctx.restore();
+        }
         perf.endPhase('renderEdgePass');
-      }
-      if (polish && polishOn('rounding') && !(shake && (shake.x || shake.y))) {
-        perf.startPhase('renderWallCorners');
-        this.roundWallCorners(startX, endX, startY, endY);
-        perf.endPhase('renderWallCorners');
       }
       perf.endPhase('renderPolish');
 
@@ -416,7 +392,7 @@ export class Renderer {
       // The player and dropped items are drawn on their own layer, so the water in front of
       // them can tint just their pixels (they look submerged) before it goes on screen.
       perf.startPhase('renderEntities');
-      const layer = this.entityLayer();
+      const layer = this.areaLayer('_entityLayer');
       const mainCtx = this.ctx;
       this.ctx = layer.getContext('2d');
       this.ctx.setTransform(mainCtx.getTransform());
@@ -428,21 +404,27 @@ export class Renderer {
       const rects = [[p.x - 8, p.y - 8, p.width + 16, p.height + 8]];
       for (const rp of others) rects.push([rp.x - 8, rp.y - 8, rp.width + 16, rp.height + 8]);
       for (const item of world.items || []) rects.push([item.x - 8, item.y - 8, 16, 16]);
-      if (polish && polishOn('entityOutlines')) {
+      // Everything on this layer is within a couple of blocks of one of those.
+      const drawnAt = newArea();
+      for (const [rx, ry, rw, rh] of rects) growArea(drawnAt, camera.worldToScreenX(rx), camera.worldToScreenY(ry), rw * camera.zoom, rh * camera.zoom, 2 * TILE_SIZE * camera.zoom);
+      const entityArea = this.finishArea('_entityLayer', drawnAt, shake);
+      if (polish && polishOn('entityOutlines') && entityArea) {
         perf.startPhase('renderEntityOutlines');
-        outlineLayer(layer, camera.zoom);
+        outlineLayer(layer, camera.zoom, entityArea);
         perf.endPhase('renderEntityOutlines');
       }
       this.ctx.globalCompositeOperation = 'source-atop';
       this.drawWaterOver(rects);
       this.ctx.globalCompositeOperation = 'source-over';
       // Lit by the same light as the world around them.
-      this.applyLightMap(this.ctx);
       this.ctx = mainCtx;
-      mainCtx.save();
-      mainCtx.setTransform(1, 0, 0, 1, 0, 0);
-      if (layer.width && layer.height) mainCtx.drawImage(layer, 0, 0);
-      mainCtx.restore();
+      if (entityArea) {
+        this.applyLightMap(layer.getContext('2d'), entityArea);
+        mainCtx.save();
+        mainCtx.setTransform(1, 0, 0, 1, 0, 0);
+        mainCtx.drawImage(layer, entityArea.x, entityArea.y, entityArea.w, entityArea.h, entityArea.x, entityArea.y, entityArea.w, entityArea.h);
+        mainCtx.restore();
+      }
       perf.endPhase('renderEntities');
 
       perf.startPhase('renderEffects');
@@ -471,6 +453,308 @@ export class Renderer {
       this.ctx = ctx;
       perf.endPhase('renderTotal');
     }
+  }
+
+  // Blocks that move, so can't be kept in the terrain cache: leaves (and background leaves),
+  // plants in the wind, standing trunks, blocks still falling, furnaces with a fire burning.
+  isMovingCell(cell, t) {
+    if (!t) return false;
+    const bg = cell.meta?.layer === 'bg';
+    if (t.leaves || cell.meta?.fellAt) return true;
+    if (cell.meta?.bgId && this.registry.get(cell.meta.bgId)?.leaves) return true;
+    if (!bg && (t.windSway || (t.trunk && cell.meta?.axis !== 'x'))) return true;
+    return t.id === 'furnace' && cell.meta?.burn > 0;
+  }
+
+  // Draws the blocks in a region onto the layers (L: wctx, terrainCtx and leafCtx, polish,
+  // flat): with `walls`, the walls behind open cells too; `blocks(x, y, cell, type)` says
+  // which blocks. Returns how many were drawn, and whether any of them get outlines.
+  drawCells(startX, endX, startY, endY, L, walls, blocks) {
+    const { world } = this;
+    const { wctx, terrainCtx, leafCtx, polish, flat } = L;
+    const { camera } = this;
+    // Leaves sway, bent trunks lean, leaf edges grow into the next block: a block and a half around.
+    const grow = (area, x, y) => area && growArea(area, camera.worldToScreenX(x * TILE_SIZE), camera.worldToScreenY(y * TILE_SIZE), TILE_SIZE * camera.zoom, TILE_SIZE * camera.zoom, 1.5 * TILE_SIZE * camera.zoom);
+    let count = 0,
+      outlined = false;
+    for (let x = startX; x <= endX; x++) {
+      if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
+      for (let y = startY; y <= endY; y++) {
+        const cell = world.getCell(x, y);
+        const t = this.registry.get(cell.id);
+        if (!t) continue;
+        const mine = blocks(x, y, cell, t);
+        // Anything that doesn't fill its cell (plants, slabs, stairs, trapdoors) shows the wall behind it.
+        if (!t.solid || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
+          // A background block placed behind this one (a torch on a planks wall...).
+          const bgType = cell.meta?.bgId ? this.registry.get(cell.meta.bgId) : null;
+          if (bgType) {
+            if (bgType.leaves) {
+              if (mine) {
+                if (leafCtx) grow(L.leafArea, x, y);
+                this.ctx = leafCtx || wctx;
+                this.drawBlock(x, y, bgType, { layer: 'bg', ...(cell.meta?.bgMeta || {}) });
+                this.ctx = wctx;
+                count++;
+              }
+            } else if (walls) {
+              this.drawBlock(x, y, bgType, { layer: 'bg', ...(cell.meta?.bgMeta || {}) });
+              if (polish && bgType.solid && (!bgType.shape || bgType.shape === 'full') && polishOn('seams')) this.seamTile(x, y);
+              count++;
+            }
+          }
+          // Lakes have a fixed sand backdrop where their water was generated; it stays put
+          // whatever the water in front of it does.
+          else if (!walls || cell.meta?.noWall) {
+            /* drawn elsewhere, or the natural wall here was mined out */
+          } else if (this.isLakeBackdrop(x, y)) {
+            this.drawBackgroundWall(x, y, flat, 'sand');
+            count++;
+          } else if (!this.isOpenSky(x, y)) {
+            this.drawBackgroundWall(x, y, flat);
+            count++;
+          }
+          if (cell.id === 'air') continue;
+        }
+        if (!mine) continue;
+        // A block still sliding into its cell leaves the cell's bottom uncovered: fill it.
+        if (cell.meta?.fellAt && gameClock.now() - cell.meta.fellAt < (cell.meta.slideMs || FALL_SLIDE_MS) && gameClock.now() >= cell.meta.fellAt) {
+          if (this.isLakeBackdrop(x, y)) this.drawBackgroundWall(x, y, flat, 'sand');
+          else if (y >= this.naturalSurfaceAt(x)) this.drawBackgroundWall(x, y, flat);
+        }
+        // Water (still and moving) is drawn after the blocks, all at once (drawWaterLayer).
+        if (cell.id === 'water') continue;
+        if (leafCtx && t.leaves) {
+          grow(L.leafArea, x, y);
+          this.ctx = leafCtx;
+          this.drawBlock(x, y, t, cell.meta || {});
+          this.ctx = wctx;
+        } else if (terrainCtx && isOutlined(t, cell.meta)) {
+          grow(L.terrainArea, x, y);
+          this.ctx = terrainCtx;
+          this.drawBlock(x, y, t, cell.meta || {});
+          this.ctx = wctx;
+          outlined = true;
+        } else {
+          this.drawBlock(x, y, t, cell.meta || {});
+        }
+        count++;
+      }
+    }
+    return { count, outlined };
+  }
+
+  // --- Terrain cache ---------------------------------------------------------------------
+  // Most of the world doesn't change from one frame to the next, so the still blocks are drawn
+  // once into tiles of CACHE_TILE x CACHE_TILE blocks (walls, blocks, outlines, seams, wall
+  // shadows, grass corners, rounded corners: everything but the light, which goes over the
+  // world layer afterwards), and each frame just puts the tiles on screen. A tile is redrawn
+  // when a block in it or next to it changes (World.noteRedraw), when its chunks load or
+  // unload, or when the zoom, graphics settings or textures change.
+
+  // Gets the tiles on screen ready; returns how many blocks they hold.
+  updateTerrainCache(startX, endX, startY, endY, L) {
+    const { world, camera } = this;
+    const key = `${camera.zoom}|${L.polish}|${L.flat}|${this._textureVersion || 0}|${JSON.stringify(polishState())}`;
+    if (this._cacheWorld !== world || this._cacheKey !== key) {
+      this._cacheWorld = world;
+      this._cacheKey = key;
+      this._tiles = new Map();
+    }
+    const tiles = this._tiles;
+    // Changed cells: their tiles, and those of the cells around them (their edges, corners
+    // and wall outlines look at their neighbours), are redrawn.
+    if (world.redrawAll) {
+      world.redrawAll = false;
+      tiles.clear();
+    }
+    const changed = world.redrawCells;
+    if (changed?.length) {
+      for (let i = 0; i < changed.length; i += 2) {
+        const x = changed[i],
+          y = changed[i + 1];
+        for (let tx = Math.floor((x - 1) / CACHE_TILE); tx <= Math.floor((x + 1) / CACHE_TILE); tx++)
+          for (let ty = Math.floor((y - 1) / CACHE_TILE); ty <= Math.floor((y + 1) / CACHE_TILE); ty++) {
+            const tile = tiles.get(tx * 65536 + ty);
+            if (tile) this.markTileCells(tile, x - 1, y - 1, x + 1, y + 1);
+          }
+      }
+      changed.length = 0;
+    }
+    const now = performance.now();
+    let blocks = 0,
+      built = 0;
+    const tx0 = Math.floor(startX / CACHE_TILE),
+      tx1 = Math.floor(endX / CACHE_TILE);
+    const ty0 = Math.floor(startY / CACHE_TILE),
+      ty1 = Math.floor(endY / CACHE_TILE);
+    for (let tx = tx0 - 1; tx <= tx1 + 1; tx++) {
+      for (let ty = ty0 - 1; ty <= ty1 + 1; ty++) {
+        const onScreen = tx >= tx0 && tx <= tx1 && ty >= ty0 && ty <= ty1;
+        let tile = tiles.get(tx * 65536 + ty);
+        const stale = !tile || tile.dirty || !this.tileChunksSame(tile);
+        // The ones on screen are always made; one just off it each frame, ready to scroll to.
+        if (stale && (onScreen || built === 0)) {
+          tile = this.buildTerrainTile(tx, ty, L, tile);
+          tiles.set(tx * 65536 + ty, tile);
+          built++;
+        } else if (tile?.part) {
+          // Just a few blocks changed: only they (and their neighbours) are redrawn.
+          const r = tile.part;
+          tile.part = null;
+          this.buildTerrainTile(tx, ty, L, tile, r);
+        }
+        if (tile) {
+          tile.used = now;
+          if (onScreen) blocks += tile.blocks;
+        }
+      }
+    }
+    // Keep the ones on screen and the ring around it (each is a few MB).
+    const keep = (tx1 - tx0 + 3) * (ty1 - ty0 + 3) + 4;
+    if (tiles.size > keep) {
+      const old = [...tiles.entries()].sort((a, b) => a[1].used - b[1].used);
+      for (let i = 0; i < old.length - keep; i++) tiles.delete(old[i][0]);
+    }
+    return { blocks };
+  }
+
+  // Blocks (x0..x1, y0..y1) of a tile need drawing again: added to the part of it redrawn next.
+  markTileCells(tile, x0, y0, x1, y1) {
+    x0 = Math.max(x0, tile.x);
+    y0 = Math.max(y0, tile.y);
+    x1 = Math.min(x1, tile.x + CACHE_TILE - 1);
+    y1 = Math.min(y1, tile.y + CACHE_TILE - 1);
+    if (x1 < x0 || y1 < y0) return;
+    const p = tile.part;
+    tile.part = p ? { x0: Math.min(p.x0, x0), y0: Math.min(p.y0, y0), x1: Math.max(p.x1, x1), y1: Math.max(p.y1, y1) } : { x0, y0, x1, y1 };
+  }
+
+  // Whether the chunks a tile was drawn from (and the ones beside it) are still the ones loaded.
+  tileChunksSame(tile) {
+    const world = this.world;
+    for (let i = 0; i < tile.chunkXs.length; i++) if (world.chunks.get(world.chunkKey(tile.chunkXs[i])) !== tile.chunks[i]) return false;
+    return true;
+  }
+
+  // Draws a tile (or, with `part`, just those blocks of it: { x0, y0, x1, y1 }) of the cache.
+  buildTerrainTile(tx, ty, L, reuse, part = null) {
+    const { world, camera } = this;
+    const M = 2; // blocks drawn around what's redrawn too, so its edges come out as on the full screen
+    const tileX = tx * CACHE_TILE,
+      tileY = ty * CACHE_TILE;
+    const r = part || { x0: tileX, y0: tileY, x1: tileX + CACHE_TILE - 1, y1: tileY + CACHE_TILE - 1 };
+    const x0 = r.x0 - M,
+      y0 = r.y0 - M;
+    const x1 = r.x1 + M,
+      y1 = r.y1 + M;
+    const zoom = camera.zoom;
+    const px = (blocks) => Math.round(blocks * TILE_SIZE * zoom);
+    const outer = Math.ceil((CACHE_TILE + 2 * M) * TILE_SIZE * zoom);
+    const size = Math.ceil(CACHE_TILE * TILE_SIZE * zoom);
+    const w = px(x1 - x0 + 1),
+      h = px(y1 - y0 + 1);
+    // Scratch layers big enough for a tile and its surround, standing in for the screen's.
+    const scratch = (key) => {
+      let c = this[key];
+      if (!c) c = this[key] = document.createElement('canvas');
+      if (c.width !== outer || c.height !== outer) {
+        c.width = outer;
+        c.height = outer;
+      }
+      const g = c.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, w, h);
+      g.imageSmoothingEnabled = false;
+      return c;
+    };
+    const back = scratch('_tileBack');
+    const front = L.terrainCtx ? scratch('_tileFront') : null;
+    const bctx = back.getContext('2d'),
+      fctx = front?.getContext('2d') || null;
+    const tileCamera = new Camera();
+    tileCamera.x = x0 * TILE_SIZE;
+    tileCamera.y = y0 * TILE_SIZE;
+    tileCamera.zoom = zoom;
+    const saved = { camera: this.camera, ctx: this.ctx };
+    const still = (x, y, cell, t) => !this.isMovingCell(cell, t);
+    let count = 0;
+    try {
+      this.camera = tileCamera;
+      this.ctx = bctx;
+      count = this.drawCells(x0, x1, y0, y1, { ...L, wctx: bctx, terrainCtx: fctx, leafCtx: null, leafArea: null, terrainArea: null }, true, still).count;
+      if (L.polish && polishOn('connectedGrass')) this.drawGrassCorners(fctx || bctx, x0, x1, y0, y1);
+      if (fctx) {
+        this._cellFilter = (x, y) => {
+          const cell = world.getCell(x, y);
+          return still(x, y, cell, this.registry.get(cell.id));
+        };
+        edgePass(this, fctx, bctx, x0, x1, y0, y1);
+        this._cellFilter = null;
+        bctx.drawImage(front, 0, 0, w, h, 0, 0, w, h);
+      }
+      if (L.polish && polishOn('rounding')) this.roundWallCorners(x0, x1, y0, y1);
+    } finally {
+      this._cellFilter = null;
+      Object.assign(this, saved);
+    }
+    const tile = reuse || { canvas: document.createElement('canvas'), moving: new Uint8Array(CACHE_TILE * CACHE_TILE) };
+    if (tile.canvas.width !== size || tile.canvas.height !== size) {
+      tile.canvas.width = size;
+      tile.canvas.height = size;
+      part = null;
+    }
+    // Copy what was redrawn (without its surround) into the tile.
+    const dx = px(r.x0 - tileX),
+      dy = px(r.y0 - tileY);
+    const dw = px(r.x1 + 1 - tileX) - dx,
+      dh = px(r.y1 + 1 - tileY) - dy;
+    const tctx = tile.canvas.getContext('2d');
+    tctx.imageSmoothingEnabled = false;
+    tctx.clearRect(dx, dy, dw, dh);
+    tctx.drawImage(back, px(M), px(M), dw, dh, dx, dy, dw, dh);
+    // Which of its blocks were left out (they're drawn every frame instead).
+    for (let x = r.x0; x <= r.x1; x++)
+      for (let y = r.y0; y <= r.y1; y++) {
+        const cell = world.getCell(x, y);
+        tile.moving[(y - tileY) * CACHE_TILE + (x - tileX)] = this.isMovingCell(cell, this.registry.get(cell.id)) ? 1 : 0;
+      }
+    if (!part) {
+      tile.chunkXs = [];
+      tile.chunks = [];
+      for (let cx = world.chunkXFor(Math.max(0, x0)); cx <= world.chunkXFor(Math.max(0, x1)); cx++) {
+        tile.chunkXs.push(cx);
+        tile.chunks.push(world.chunks.get(world.chunkKey(cx)));
+      }
+      tile.blocks = count;
+      tile.dirty = false;
+      tile.part = null;
+      tile.x = tileX;
+      tile.y = tileY;
+    }
+    return tile;
+  }
+
+  drawTerrainCache(target, startX, endX, startY, endY) {
+    const { camera } = this;
+    for (let tx = Math.floor(startX / CACHE_TILE); tx <= Math.floor(endX / CACHE_TILE); tx++)
+      for (let ty = Math.floor(startY / CACHE_TILE); ty <= Math.floor(endY / CACHE_TILE); ty++) {
+        const tile = this._tiles.get(tx * 65536 + ty);
+        if (!tile) continue;
+        target.drawImage(tile.canvas, Math.round(camera.worldToScreenX(tile.x * TILE_SIZE)), Math.round(camera.worldToScreenY(tile.y * TILE_SIZE)));
+      }
+  }
+
+  // Whether the cache left this block out when it drew its tile (so it's drawn every frame).
+  // A block that has started or stopped moving since then (a furnace lit or gone out) has its
+  // tile redrawn.
+  cachedLive(x, y) {
+    const tile = this._tiles?.get(Math.floor(x / CACHE_TILE) * 65536 + Math.floor(y / CACHE_TILE));
+    if (!tile) return true;
+    const moving = tile.moving[(y - tile.y) * CACHE_TILE + (x - tile.x)] === 1;
+    const cell = this.world.getCell(x, y);
+    if (moving !== this.isMovingCell(cell, this.registry.get(cell.id))) this.markTileCells(tile, x - 1, y - 1, x + 1, y + 1);
+    return moving;
   }
 
   // Whether weather shows in this world (only on Earth).
@@ -1035,6 +1319,7 @@ export class Renderer {
         const img = new Image();
         img.onload = () => {
           this.textures[key] = img;
+          this._textureVersion = (this._textureVersion || 0) + 1;
         };
         img.onerror = () => {
           this.missingTextures?.add(key);
@@ -1195,6 +1480,26 @@ export class Renderer {
     }
   }
 
+  // The light of recent explosions: a bright, warm flash spreading out like a torch's (walls
+  // hold it back) that dies away over about a second. Levels go in this.blastLight.
+  updateBlastLight(ui) {
+    this.blastLight = null;
+    const flashes = ui?.explosionFX?.activeFlashes?.() || [];
+    for (const f of flashes) {
+      const range = (BLAST_LIGHT_RANGE * f.radius) / TILE_SIZE;
+      const flood = this.floodHeldLight(f.x / TILE_SIZE, f.y / TILE_SIZE, range);
+      this.blastLight ||= new Map();
+      for (const [k, remaining] of flood) {
+        const level = 15 * f.strength * Math.pow(remaining / range, 1.2);
+        if ((this.blastLight.get(k) ?? 0) < level) this.blastLight.set(k, level);
+      }
+    }
+  }
+
+  blastLightLevel(tileX, tileY) {
+    return this.blastLight?.get(tileX * HELD_LIGHT_KEY + tileY) ?? 0;
+  }
+
   heldLightCost(tileX, tileY, wallCost = HELD_LIGHT_WALL_COST) {
     const world = this.world;
     if (!world.inBounds(tileX, tileY)) return Infinity;
@@ -1301,6 +1606,14 @@ export class Renderer {
       w = sum[3];
       peak = this.placedLightCache.levels.get(k) ?? 0;
     }
+    const blast = this.blastLightLevel(tileX, tileY);
+    if (blast > 0) {
+      r += BLAST_LIGHT[0] * blast;
+      g += BLAST_LIGHT[1] * blast;
+      b += BLAST_LIGHT[2] * blast;
+      w += blast;
+      peak = Math.max(peak, blast);
+    }
     const held = this.heldLightLevel(tileX, tileY);
     if (held > 0) {
       const [hr, hg, hb] = this.heldLightColor || WHITE_LIGHT;
@@ -1332,7 +1645,7 @@ export class Renderer {
   }
 
   drawLightTint(startX, endX, startY, endY) {
-    if (!this.placedLightCache?.colored && !this.heldLightColor) return;
+    if (!this.placedLightCache?.colored && !this.heldLightColor && !this.blastLight) return;
     const { ctx, camera } = this;
     const w = endX - startX + 1;
     const h = endY - startY + 1;
@@ -1392,7 +1705,7 @@ export class Renderer {
   }
 
   blockLightFactor(tileX, tileY) {
-    const level = Math.max(this.placedLightLevel(tileX, tileY), this.heldLightLevel(tileX, tileY));
+    const level = Math.max(this.placedLightLevel(tileX, tileY), this.heldLightLevel(tileX, tileY), this.blastLightLevel(tileX, tileY));
     if (level <= 0) return 0;
     const edge = Math.min(1, level / LIGHT_EDGE_FADE);
     return Math.min(1, Math.pow(level / 15, 0.6) * 1.15 * edge * edge);
@@ -1506,11 +1819,21 @@ export class Renderer {
   // cell with sky on two sides) gets its corner pixel cut out, so the sky shows through.
   roundWallCorners(startX, endX, startY, endY) {
     const { ctx, camera, world } = this;
-    const u = Math.max(1, Math.round(camera.zoom));
+    const u = outlineWidth(camera.zoom);
+    // hasBackdrop for every cell on screen and one around it, worked out once (each cell is
+    // asked about by its neighbours too).
+    const gx = startX - 1,
+      gy = startY - 1,
+      gw = endX - startX + 3,
+      gh = endY - startY + 3;
+    if (!this._backdropGrid || this._backdropGrid.length < gw * gh) this._backdropGrid = new Uint8Array(gw * gh);
+    const grid = this._backdropGrid;
+    for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) grid[j * gw + i] = this.hasBackdrop(gx + i, gy + j) ? 1 : 0;
+    const backdrop = (x, y) => grid[(y - gy) * gw + (x - gx)] === 1;
     const isWall = (x, y) => {
       const t = world.inBounds(x, y) ? world.getBlockType(x, y) : null;
       if (t && t.solid && (!t.shape || t.shape === 'full')) return false; // front blocks round themselves
-      return this.hasBackdrop(x, y);
+      return backdrop(x, y);
     };
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1519,7 +1842,7 @@ export class Renderer {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
       for (let y = startY; y <= endY; y++) {
         const wall = isWall(x, y);
-        const sky = !this.hasBackdrop(x, y);
+        const sky = !backdrop(x, y);
         if (!wall && !sky) continue;
         const sx = Math.round(camera.worldToScreenX(x * TILE_SIZE));
         const sy = Math.round(camera.worldToScreenY(y * TILE_SIZE));
@@ -1529,10 +1852,10 @@ export class Renderer {
           for (const dx of [-1, 1]) {
             const cx = dx < 0 ? sx : ex - u,
               cy = dy < 0 ? sy : ey - u;
-            if (sky && this.hasBackdrop(x + dx, y) && this.hasBackdrop(x, y + dy)) {
+            if (sky && backdrop(x + dx, y) && backdrop(x, y + dy)) {
               ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
               ctx.fillRect(cx, cy, u, u);
-            } else if (wall && !this.hasBackdrop(x + dx, y) && !this.hasBackdrop(x, y + dy) && !this.hasBackdrop(x + dx, y + dy)) {
+            } else if (wall && !backdrop(x + dx, y) && !backdrop(x, y + dy) && !backdrop(x + dx, y + dy)) {
               ctx.clearRect(cx, cy, u, u);
               ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
               ctx.fillRect(cx - dx * u, cy - dy * u, u, u);
@@ -1547,7 +1870,7 @@ export class Renderer {
   // Dark edges on a background wall where it meets open sky (they move as walls are mined).
   outlineWall(tileX, tileY, left, top, w, h) {
     const ctx = this.ctx;
-    const u = Math.max(1, Math.round(this.camera.zoom));
+    const u = outlineWidth(this.camera.zoom);
     ctx.fillStyle = 'rgba(14, 12, 12, 0.8)';
     if (!this.hasBackdrop(tileX, tileY - 1)) ctx.fillRect(left, top, w, u);
     if (!this.hasBackdrop(tileX, tileY + 1)) ctx.fillRect(left, top + h - u, w, u);
@@ -1621,7 +1944,7 @@ export class Renderer {
   // Darkens what's already drawn on a layer (the world, or the players and items) by the light
   // map, leaving its empty pixels empty. With smooth lighting the map is scaled up smoothly, so
   // light fades across blocks instead of stepping block by block.
-  applyLightMap(target) {
+  applyLightMap(target, area = null) {
     const map = this._lightMap;
     if (!map) return;
     const { camera } = this;
@@ -1629,6 +1952,15 @@ export class Renderer {
     const left = camera.worldToScreenX(map.startX * TILE_SIZE);
     const top = camera.worldToScreenY(map.startY * TILE_SIZE);
     target.save();
+    if (area) {
+      // Only there (area is in screen pixels, whatever the layer's transform).
+      const m = target.getTransform();
+      target.setTransform(1, 0, 0, 1, 0, 0);
+      target.beginPath();
+      target.rect(area.x, area.y, area.w, area.h);
+      target.clip();
+      target.setTransform(m);
+    }
     target.globalCompositeOperation = 'source-atop';
     target.imageSmoothingEnabled = polishOn('smoothLight');
     target.imageSmoothingQuality = 'high';
@@ -2188,20 +2520,41 @@ export class Renderer {
     return c;
   }
 
-  // A cleared offscreen canvas the size of the screen.
-  entityLayer() {
+  // A screen-sized layer that only ever has something in one area (finishArea): just that
+  // area from last time is cleared (and now and then all of it, to be safe).
+  areaLayer(key) {
     const { canvas } = this;
-    let layer = this._entityLayer;
-    if (!layer || layer.width !== canvas.width || layer.height !== canvas.height) {
-      layer = this._entityLayer = document.createElement('canvas');
-      layer.width = canvas.width;
-      layer.height = canvas.height;
+    let c = this[key];
+    if (!c) c = this[key] = document.createElement('canvas');
+    const g = c.getContext('2d');
+    if (c.width !== canvas.width || c.height !== canvas.height) {
+      c.width = canvas.width;
+      c.height = canvas.height;
+      this[`${key}Area`] = null;
     }
-    const lctx = layer.getContext('2d');
-    lctx.setTransform(1, 0, 0, 1, 0, 0);
-    lctx.clearRect(0, 0, layer.width, layer.height);
-    lctx.imageSmoothingEnabled = false;
-    return layer;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const prev = this[`${key}Area`];
+    this._areaSweep = (this._areaSweep || 0) + 1;
+    if (this._areaSweep % 240 === 0) g.clearRect(0, 0, c.width, c.height);
+    else if (prev) g.clearRect(prev.x, prev.y, prev.w, prev.h);
+    this[`${key}Area`] = null;
+    g.imageSmoothingEnabled = false;
+    return c;
+  }
+
+  // The area (screen pixels, on the canvas) a layer was drawn in this frame, from what was
+  // grown into `a`, allowing for the screen shake; remembered so it's cleared next time.
+  finishArea(key, a, shake) {
+    const { canvas } = this;
+    const s = shake ? Math.ceil(Math.abs(shake.x) + Math.abs(shake.y)) + 2 : 2;
+    const x0 = Math.max(0, Math.floor(a.x0 - s)),
+      y0 = Math.max(0, Math.floor(a.y0 - s));
+    const x1 = Math.min(canvas.width, Math.ceil(a.x1 + s)),
+      y1 = Math.min(canvas.height, Math.ceil(a.y1 + s));
+    if (x1 <= x0 || y1 <= y0) return null;
+    const area = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    this[`${key}Area`] = area;
+    return area;
   }
 
   // All the water on screen drawn as 4x4-pixel squares, four across a block (the water sim's

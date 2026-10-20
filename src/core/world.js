@@ -362,9 +362,23 @@ export class World {
   touchCell(x, y) {
     const chunk = this.chunks.get(this.chunkKey(this.chunkXFor(x)));
     if (chunk) chunk.dirty = true;
+    this.noteRedraw(x, y);
     // A door or trapdoor swinging changes what water can get through.
     this.water?.blockChanged(x, y);
     if (this.onBlockChanged) this.onBlockChanged(x, y);
+  }
+
+  // A cell looks different now: the renderer redraws what it has kept of the blocks there
+  // (see Renderer.updateTerrainCache). Too many waiting means everything is redrawn.
+  noteRedraw(x, y) {
+    if (this.redrawAll) return;
+    const list = (this.redrawCells ||= []);
+    if (list.length >= 40000) {
+      this.redrawAll = true;
+      list.length = 0;
+      return;
+    }
+    list.push(x, y);
   }
 
   // Replace a cell outright, with none of setBlock's side effects (used while saving).
@@ -439,10 +453,14 @@ export class World {
       chunk.cells[idx] = { id, meta };
       chunk.dirty = true;
       this._noteCellWritten(chunk, idx, id);
+      this.noteRedraw(x, y);
       this.blockVersion = (this.blockVersion || 0) + 1;
-      if (this._affectsLight(old, id, meta)) this.lightVersion = (this.lightVersion || 0) + 1;
-      this.updateLighting(x, y);
-      this.water?.blockChanged(x, y);
+      const lit = this._affectsLight(old, id, meta);
+      if (lit) this.lightVersion = (this.lightVersion || 0) + 1;
+      // Relighting is costly: only when the light could change (a solid block turning into
+      // another, like grass spreading over dirt, changes nothing), and the same for the water.
+      if (lit || !!old?.meta?.noWall !== !!meta?.noWall) this.updateLighting(x, y);
+      if (!this._sameToWater(old, id, meta)) this.water?.blockChanged(x, y);
       if (this.onBlockChanged) this.onBlockChanged(x, y);
     } else {
       if (!this._crossChunkPending.has(cx)) {
@@ -462,6 +480,15 @@ export class World {
     return (
       a?.lightLevel > 0 || b?.lightLevel > 0 || !!a?.solid !== !!b?.solid || (old.meta?.layer === 'bg') !== (meta?.layer === 'bg') || a?.opacity !== b?.opacity
     );
+  }
+
+  // Whether water sees no difference between `old` and (id, meta): both plain solid blocks in
+  // front (see WaterSim.closed).
+  _sameToWater(old, id, meta) {
+    if (!old || old.meta?.layer === 'bg' || meta?.layer === 'bg' || old.meta?.noCollision || meta?.noCollision) return false;
+    const a = this.registry.get(old.id);
+    const b = this.registry.get(id);
+    return !!a?.solid && !!b?.solid && typeof a.isSolid !== 'function' && typeof b.isSolid !== 'function';
   }
 
   // A cell was written: if its new block ticks, it joins the chunk's ticking cells. (Cells
@@ -512,6 +539,7 @@ export class World {
     if (!chunk) return;
     chunk.dirty = true;
     this._noteCellWritten(chunk, idx, id);
+    this.noteRedraw(x, y);
     this.blockVersion = (this.blockVersion || 0) + 1;
     if (this._affectsLight(old, id, meta)) this.lightVersion = (this.lightVersion || 0) + 1;
     if (!old || old.id !== id) this.updateLighting(x, y);

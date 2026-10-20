@@ -13,6 +13,8 @@ import {
   setBrowserFullscreen,
   setAppIcon,
   setGuiScale,
+  setRenderScale,
+  renderScale,
   saveBackgroundConfig,
   DEFAULT_KEYBINDS,
   keybinds,
@@ -232,6 +234,10 @@ export class MenuManager {
         break;
       case 'gui-scale':
         setGuiScale(Number(button.dataset.value));
+        this.markGuiScale();
+        break;
+      case 'render-scale':
+        setRenderScale(Number(button.dataset.value));
         this.markGuiScale();
         break;
       case 'background-options':
@@ -1110,11 +1116,13 @@ export class MenuManager {
   }
 
   markGuiScale() {
-    const scale = prefs.getNumber('guiScale', 1);
-    document.querySelectorAll('#guiScale .minecraft-button').forEach((b) => {
-      if (Number(b.dataset.value) === scale) b.setAttribute('data-selected', 'true');
-      else b.removeAttribute('data-selected');
-    });
+    const mark = (id, value) =>
+      document.querySelectorAll(`#${id} .minecraft-button`).forEach((b) => {
+        if (Number(b.dataset.value) === value) b.setAttribute('data-selected', 'true');
+        else b.removeAttribute('data-selected');
+      });
+    mark('guiScale', prefs.getNumber('guiScale', 1));
+    mark('renderScale', renderScale());
   }
 
   // Phones: "Tap" (tap to place, hold to break) or "Joystick" (an aim stick).

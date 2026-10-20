@@ -1,6 +1,6 @@
 {
   "name": "underwild",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Underwild - A 2D sandbox game",
   "main": "platforms/desktop/main.js",
   "scripts": {

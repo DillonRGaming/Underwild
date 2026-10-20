@@ -16,7 +16,7 @@ const SCALE = 3; // clouds are far away: they keep their size whatever the camer
 const STRIP = 384; // strip width in cloud blocks; wraps
 const DETAIL = 3; // each cloud block is drawn as DETAIL x DETAIL finer pixels
 const CLOUD_WIND = 4; // how far the clouds drift with the wind
-const REFRESH_MS = 90; // how often a layer's visible window is re-made
+const REFRESH_MS = 600; // how often a layer's visible window is re-made (the noise drifts slowly)
 const MARGIN = 6; // spare blocks either side of the screen, so drifting between re-makes never shows an edge
 const MORPH_Z = 0.1; // noise slices a second in calm air...
 const MORPH_Z_WIND = 0.06; // ...plus this many at wind strength 1
@@ -77,12 +77,14 @@ export class Clouds {
     this._seed = worldSeed;
     this._z = 0;
     this._lastSecs = null;
-    this._layers = LAYERS.map(() => ({ canvas: document.createElement('canvas'), first: 0, cols: 0, built: -1e9, light: -1 }));
+    this._layers = LAYERS.map(() => ({ base: document.createElement('canvas'), canvas: document.createElement('canvas'), first: 0, cols: 0, built: -1e9, light: -1 }));
   }
 
   // Makes the visible window of a layer (cols blocks from block `first`, wrapping) at the
-  // current morph and brightness: noise per block, smoothly stretched over fine pixels, then
-  // lit along the top and shaded underneath by how deep into the cloud each pixel is.
+  // current morph, at full brightness: noise per block, smoothly stretched over fine pixels,
+  // then lit along the top and shaded underneath by how deep into the cloud each pixel is.
+  // (The day's light is put on afterwards by tint, which is cheap, so it can follow the light
+  // every frame.)
   build(li, first, cols, light) {
     const L = LAYERS[li];
     const S = this._layers[li];
@@ -99,7 +101,13 @@ export class Clouds {
         B[r * cols + c] = d;
       }
     }
-    const t = new Float32Array(W * H);
+    // Buffers kept between re-makes (a layer's size rarely changes).
+    if (!S.t || S.t.length !== W * H) {
+      S.t = new Float32Array(W * H);
+      S.below = new Int16Array(H);
+      S.img = null;
+    }
+    const t = S.t;
     for (let y = 0; y < H; y++) {
       const fr = (y + 0.5) / DETAIL - 0.5;
       const r0 = Math.floor(fr),
@@ -117,17 +125,20 @@ export class Clouds {
         t[y * W + x] = top * (1 - ry) + bottom * ry;
       }
     }
-    const c = S.canvas;
+    const c = S.base;
     if (c.width !== W || c.height !== H) {
       c.width = W;
       c.height = H;
     }
     const ctx = c.getContext('2d');
-    const img = ctx.createImageData(W, H);
-    const grey = 40 + 215 * light; // the exact brightness, so it eases with the weather and the day instead of stepping
+    if (!S.img || S.img.width !== W || S.img.height !== H) S.img = ctx.createImageData(W, H);
+    const img = S.img;
+    img.data.fill(0);
+    const grey = 255;
     for (let x = 0; x < W; x++) {
       let above = 0; // solid pixels directly above
-      const below = new Int16Array(H); // solid pixels directly below, counted up to 8
+      const below = S.below; // solid pixels directly below, counted up to 8
+      below[H - 1] = 0;
       for (let y = H - 2; y >= 0; y--) below[y] = t[(y + 1) * W + x] > 0 ? Math.min(8, below[y + 1] + 1) : 0;
       for (let y = 0; y < H; y++) {
         const d = t[y * W + x];
@@ -152,8 +163,26 @@ export class Clouds {
     ctx.putImageData(img, 0, 0);
     S.first = first;
     S.cols = cols;
-    S.light = light;
     S.built = performance.now();
+    this.tint(S, light);
+  }
+
+  // The layer darkened for the light (0 night .. 1 day), at the exact brightness so it eases
+  // with the weather and the day instead of stepping.
+  tint(S, light) {
+    const { base, canvas } = S;
+    if (canvas.width !== base.width || canvas.height !== base.height) {
+      canvas.width = base.width;
+      canvas.height = base.height;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.globalCompositeOperation = 'copy';
+    ctx.drawImage(base, 0, 0);
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = `rgba(0, 0, 0, ${(1 - (40 + 215 * light) / 255).toFixed(4)})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.globalCompositeOperation = 'source-over';
+    S.light = light;
   }
 
   // light: 0 (night) .. 1 (day)
@@ -171,7 +200,7 @@ export class Clouds {
     const focusX = camera.x + canvas.width / camera.zoom / 2;
     const focusY = camera.y + canvas.height / camera.zoom / 2;
     const now = performance.now();
-    let budget = 2; // layers re-made this frame
+    let budget = 1; // layers re-made this frame
     // The clouds loom larger as a storm comes in (the blocks just draw bigger: no rebuild).
     const grow = 1 + 0.12 * weather.rain + 0.35 * weather.storm;
     ctx.save();
@@ -186,11 +215,11 @@ export class Clouds {
       const need = Math.ceil(canvas.width / size) + 2 * MARGIN + 2;
       const wantFirst = Math.floor(at - canvas.width / 2 / size) - MARGIN;
       const outside = S.cols === 0 || wantFirst + MARGIN < S.first || wantFirst + need - MARGIN > S.first + S.cols;
-      const stale = now - S.built > REFRESH_MS || Math.abs(S.light - l) > 0.004;
+      const stale = now - S.built > REFRESH_MS;
       if (outside || (stale && budget > 0)) {
         if (!outside) budget--;
         this.build(li, wantFirst, need, l);
-      }
+      } else if (Math.abs(S.light - l) > 0.004) this.tint(S, l);
       const x0 = Math.round(canvas.width / 2 - (at - S.first) * size);
       ctx.globalAlpha = Math.min(1, L.alpha * night * (1 + 0.9 * weather.rain + 0.6 * weather.snow));
       ctx.drawImage(S.canvas, x0, top, S.cols * size, L.rows * size);

@@ -60,17 +60,43 @@ export function defaultZoom() {
   return document.body.classList.contains('touch-mode') || /[?&]touch\b/.test(location.search) || matchMedia?.('(pointer: coarse)').matches ? 4.5 : 3;
 }
 
+// Render scale (Options > Graphics): the share of the screen's resolution the game is drawn
+// at, then stretched to fill it. Lower is blurrier but much lighter on a weak graphics chip;
+// you see just as much of the world either way (the camera's zoom is scaled with it).
+// The menu shows 25-100%, where its 100% is 70% of the screen's resolution: that looks the same
+// as full resolution for pixel art like this, at about half the cost.
+const FULL_RENDER_SCALE = 0.7;
+export const RENDER_SCALES = [0.7, 0.525, 0.35, 0.175]; // shown as 100%, 75%, 50%, 25%
+const DEFAULT_RENDER_SCALE = FULL_RENDER_SCALE;
+
+export function renderScale() {
+  const s = prefs.getNumber('renderScale', DEFAULT_RENDER_SCALE);
+  return RENDER_SCALES.includes(s) ? s : DEFAULT_RENDER_SCALE;
+}
+
+export function setRenderScale(scale) {
+  prefs.set('renderScale', scale);
+  window.dispatchEvent(new Event('resize')); // resizes the canvas (script.js)
+  applyViewSettings();
+}
+
+// The zoom you chose, before the render scale.
+function viewZoom() {
+  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prefs.getNumber('cameraZoom', defaultZoom())));
+}
+
 export function applyViewSettings() {
-  if (game.camera) game.camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prefs.getNumber('cameraZoom', defaultZoom())));
+  if (game.camera) game.camera.zoom = viewZoom() * renderScale();
   document.documentElement.style.setProperty('--gui-scale', String(prefs.getNumber('guiScale', 1)));
 }
 
 export function changeZoom(direction) {
   if (!game.camera) return;
-  game.camera.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, game.camera.zoom + direction * ZOOM_STEP));
-  prefs.set('cameraZoom', game.camera.zoom);
+  const zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, viewZoom() + direction * ZOOM_STEP));
+  prefs.set('cameraZoom', zoom);
+  game.camera.zoom = zoom * renderScale();
   game.lastPreloadChunk = null; // load more chunks if the wider view needs them
-  showHudNote(`Zoom: ${Math.round((game.camera.zoom / 3) * 100)}%`);
+  showHudNote(`Zoom: ${Math.round((zoom / 3) * 100)}%`);
 }
 
 export function setGuiScale(scale) {
