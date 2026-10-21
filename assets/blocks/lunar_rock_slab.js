@@ -1,4 +1,4 @@
-export default {
+const block = {
   id: 'lunar_rock_slab',
   displayName: 'Lunarstone Slab',
   material: 'stone',
@@ -11,10 +11,12 @@ export default {
   tool: 'pickaxe',
   shape: 'slab',
   solid: true,
-  color: '#f0f2f5',
   hardness: 1.5,
   rockOverlay: true,
   isSolid(meta) {
     return true;
   }
 };
+
+// Its old name, kept so older worlds still load (hidden from menus).
+export default [block, { ...block, id: 'lunarstone_slab', hidden: true, drop: 'lunar_rock_slab', recipes: [] }];

@@ -10,7 +10,6 @@ export default {
     { shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'pine_planks' }, count: 4 }
   ],
   tool: 'axe', // mined fastest with this
-  color: '#4a3528',
   shape: 'stairs',
   solid: true,
   transparent: false,

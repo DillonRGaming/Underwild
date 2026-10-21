@@ -7,6 +7,248 @@
   <link rel="icon" type="image/png" href="assets/textures/grass.png">
   <link rel="stylesheet" href="style.css">
   <link id="themeStylesheet" rel="stylesheet" href="themes/minimal/theme.css">
+  <script>
+    // The last menu backdrop, shown straight away while the game's code loads (it then draws
+    // the same picture over it). Saved by the renderer; nothing to show the very first time.
+    try {
+      const url = localStorage.getItem('underwild_menuBackdrop');
+      if (url) document.documentElement.style.setProperty('--boot-backdrop', `url(${url})`);
+    } catch (e) {}
+  </script>
+  <!-- modules:start -->
+  <link rel="modulepreload" href="assets/blocks/air.js">
+  <link rel="modulepreload" href="assets/blocks/bedrock.js">
+  <link rel="modulepreload" href="assets/blocks/birch_chest.js">
+  <link rel="modulepreload" href="assets/blocks/birch_leaves.js">
+  <link rel="modulepreload" href="assets/blocks/birch_log.js">
+  <link rel="modulepreload" href="assets/blocks/birch_log_base.js">
+  <link rel="modulepreload" href="assets/blocks/birch_planks.js">
+  <link rel="modulepreload" href="assets/blocks/birch_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/blue_torch.js">
+  <link rel="modulepreload" href="assets/blocks/bush.js">
+  <link rel="modulepreload" href="assets/blocks/cactus.js">
+  <link rel="modulepreload" href="assets/blocks/chest.js">
+  <link rel="modulepreload" href="assets/blocks/clay.js">
+  <link rel="modulepreload" href="assets/blocks/coal_block.js">
+  <link rel="modulepreload" href="assets/blocks/coal_ore.js">
+  <link rel="modulepreload" href="assets/blocks/coal_ore_rich.js">
+  <link rel="modulepreload" href="assets/blocks/coarse_dirt.js">
+  <link rel="modulepreload" href="assets/blocks/copper.js">
+  <link rel="modulepreload" href="assets/blocks/copper_exposed.js">
+  <link rel="modulepreload" href="assets/blocks/copper_ore.js">
+  <link rel="modulepreload" href="assets/blocks/copper_oxidized.js">
+  <link rel="modulepreload" href="assets/blocks/copper_weathered.js">
+  <link rel="modulepreload" href="assets/blocks/crafting_table.js">
+  <link rel="modulepreload" href="assets/blocks/cyan_torch.js">
+  <link rel="modulepreload" href="assets/blocks/dirt.js">
+  <link rel="modulepreload" href="assets/blocks/dirt_path.js">
+  <link rel="modulepreload" href="assets/blocks/dirt_slab.js">
+  <link rel="modulepreload" href="assets/blocks/dirt_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/double_slab.js">
+  <link rel="modulepreload" href="assets/blocks/explosive.js">
+  <link rel="modulepreload" href="assets/blocks/fern.js">
+  <link rel="modulepreload" href="assets/blocks/flower_short_grass.js">
+  <link rel="modulepreload" href="assets/blocks/forging_table.js">
+  <link rel="modulepreload" href="assets/blocks/furnace.js">
+  <link rel="modulepreload" href="assets/blocks/glass.js">
+  <link rel="modulepreload" href="assets/blocks/gold_block.js">
+  <link rel="modulepreload" href="assets/blocks/gold_ore.js">
+  <link rel="modulepreload" href="assets/blocks/grass.js">
+  <link rel="modulepreload" href="assets/blocks/grassSpread.js">
+  <link rel="modulepreload" href="assets/blocks/grass_slab.js">
+  <link rel="modulepreload" href="assets/blocks/grass_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/grass_tuft.js">
+  <link rel="modulepreload" href="assets/blocks/grassy_mud.js">
+  <link rel="modulepreload" href="assets/blocks/green_torch.js">
+  <link rel="modulepreload" href="assets/blocks/index.js">
+  <link rel="modulepreload" href="assets/blocks/ladder.js">
+  <link rel="modulepreload" href="assets/blocks/leafDecay.js">
+  <link rel="modulepreload" href="assets/blocks/lunar_pebble.js">
+  <link rel="modulepreload" href="assets/blocks/lunar_rock.js">
+  <link rel="modulepreload" href="assets/blocks/lunar_rock_decor.js">
+  <link rel="modulepreload" href="assets/blocks/lunar_rock_slab.js">
+  <link rel="modulepreload" href="assets/blocks/lunar_rock_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/maple_chest.js">
+  <link rel="modulepreload" href="assets/blocks/maple_green_leaves.js">
+  <link rel="modulepreload" href="assets/blocks/maple_log.js">
+  <link rel="modulepreload" href="assets/blocks/maple_orange_leaves.js">
+  <link rel="modulepreload" href="assets/blocks/maple_planks.js">
+  <link rel="modulepreload" href="assets/blocks/maple_red_leaves.js">
+  <link rel="modulepreload" href="assets/blocks/maple_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/mars_chiseled_sandstone.js">
+  <link rel="modulepreload" href="assets/blocks/mars_cut_sandstone.js">
+  <link rel="modulepreload" href="assets/blocks/mars_pebble.js">
+  <link rel="modulepreload" href="assets/blocks/mars_rippled_sand.js">
+  <link rel="modulepreload" href="assets/blocks/mars_rock_decor.js">
+  <link rel="modulepreload" href="assets/blocks/mars_sand.js">
+  <link rel="modulepreload" href="assets/blocks/mars_sandstone.js">
+  <link rel="modulepreload" href="assets/blocks/mars_sandstone_slab.js">
+  <link rel="modulepreload" href="assets/blocks/mars_sandstone_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/mars_smooth_sandstone.js">
+  <link rel="modulepreload" href="assets/blocks/mud.js">
+  <link rel="modulepreload" href="assets/blocks/mud_slab.js">
+  <link rel="modulepreload" href="assets/blocks/mud_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/oak_chest.js">
+  <link rel="modulepreload" href="assets/blocks/oak_leaves.js">
+  <link rel="modulepreload" href="assets/blocks/oak_log.js">
+  <link rel="modulepreload" href="assets/blocks/oak_planks.js">
+  <link rel="modulepreload" href="assets/blocks/oak_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/oxidize.js">
+  <link rel="modulepreload" href="assets/blocks/pebble.js">
+  <link rel="modulepreload" href="assets/blocks/pine_chest.js">
+  <link rel="modulepreload" href="assets/blocks/pine_leaves.js">
+  <link rel="modulepreload" href="assets/blocks/pine_log.js">
+  <link rel="modulepreload" href="assets/blocks/pine_planks.js">
+  <link rel="modulepreload" href="assets/blocks/pine_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/plant.js">
+  <link rel="modulepreload" href="assets/blocks/polished_stone.js">
+  <link rel="modulepreload" href="assets/blocks/poppy.js">
+  <link rel="modulepreload" href="assets/blocks/purple_torch.js">
+  <link rel="modulepreload" href="assets/blocks/red_torch.js">
+  <link rel="modulepreload" href="assets/blocks/rock.js">
+  <link rel="modulepreload" href="assets/blocks/sand.js">
+  <link rel="modulepreload" href="assets/blocks/sand_types.js">
+  <link rel="modulepreload" href="assets/blocks/seagrass.js">
+  <link rel="modulepreload" href="assets/blocks/shell.js">
+  <link rel="modulepreload" href="assets/blocks/short_grass.js">
+  <link rel="modulepreload" href="assets/blocks/spruce_chest.js">
+  <link rel="modulepreload" href="assets/blocks/spruce_leaves.js">
+  <link rel="modulepreload" href="assets/blocks/spruce_log.js">
+  <link rel="modulepreload" href="assets/blocks/spruce_planks.js">
+  <link rel="modulepreload" href="assets/blocks/spruce_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/steel_block.js">
+  <link rel="modulepreload" href="assets/blocks/steel_ore.js">
+  <link rel="modulepreload" href="assets/blocks/stone.js">
+  <link rel="modulepreload" href="assets/blocks/stone_bricks.js">
+  <link rel="modulepreload" href="assets/blocks/stone_gravel.js">
+  <link rel="modulepreload" href="assets/blocks/stone_pebbles.js">
+  <link rel="modulepreload" href="assets/blocks/stone_slab.js">
+  <link rel="modulepreload" href="assets/blocks/stone_stairs.js">
+  <link rel="modulepreload" href="assets/blocks/torch.js">
+  <link rel="modulepreload" href="assets/blocks/trapdoor.js">
+  <link rel="modulepreload" href="assets/blocks/water.js">
+  <link rel="modulepreload" href="assets/content.js">
+  <link rel="modulepreload" href="assets/items/blacksmith_hammer.js">
+  <link rel="modulepreload" href="assets/items/bucket.js">
+  <link rel="modulepreload" href="assets/items/coal.js">
+  <link rel="modulepreload" href="assets/items/copper_axe.js">
+  <link rel="modulepreload" href="assets/items/copper_axe_head.js">
+  <link rel="modulepreload" href="assets/items/copper_axe_head_heated.js">
+  <link rel="modulepreload" href="assets/items/copper_ingot.js">
+  <link rel="modulepreload" href="assets/items/copper_ingot_heated.js">
+  <link rel="modulepreload" href="assets/items/copper_pickaxe.js">
+  <link rel="modulepreload" href="assets/items/copper_pickaxe_head.js">
+  <link rel="modulepreload" href="assets/items/copper_pickaxe_head_heated.js">
+  <link rel="modulepreload" href="assets/items/copper_rod.js">
+  <link rel="modulepreload" href="assets/items/copper_shovel.js">
+  <link rel="modulepreload" href="assets/items/copper_shovel_head.js">
+  <link rel="modulepreload" href="assets/items/copper_shovel_head_heated.js">
+  <link rel="modulepreload" href="assets/items/copper_sword.js">
+  <link rel="modulepreload" href="assets/items/copper_sword_head.js">
+  <link rel="modulepreload" href="assets/items/copper_sword_head_heated.js">
+  <link rel="modulepreload" href="assets/items/gold_axe.js">
+  <link rel="modulepreload" href="assets/items/gold_axe_head.js">
+  <link rel="modulepreload" href="assets/items/gold_axe_head_heated.js">
+  <link rel="modulepreload" href="assets/items/gold_ingot.js">
+  <link rel="modulepreload" href="assets/items/gold_ingot_heated.js">
+  <link rel="modulepreload" href="assets/items/gold_pickaxe.js">
+  <link rel="modulepreload" href="assets/items/gold_pickaxe_head.js">
+  <link rel="modulepreload" href="assets/items/gold_pickaxe_head_heated.js">
+  <link rel="modulepreload" href="assets/items/gold_rod.js">
+  <link rel="modulepreload" href="assets/items/gold_shovel.js">
+  <link rel="modulepreload" href="assets/items/gold_shovel_head.js">
+  <link rel="modulepreload" href="assets/items/gold_shovel_head_heated.js">
+  <link rel="modulepreload" href="assets/items/gold_sword.js">
+  <link rel="modulepreload" href="assets/items/gold_sword_head.js">
+  <link rel="modulepreload" href="assets/items/gold_sword_head_heated.js">
+  <link rel="modulepreload" href="assets/items/gunpowder.js">
+  <link rel="modulepreload" href="assets/items/index.js">
+  <link rel="modulepreload" href="assets/items/raw_copper.js">
+  <link rel="modulepreload" href="assets/items/raw_gold.js">
+  <link rel="modulepreload" href="assets/items/raw_steel.js">
+  <link rel="modulepreload" href="assets/items/steel_axe.js">
+  <link rel="modulepreload" href="assets/items/steel_axe_head.js">
+  <link rel="modulepreload" href="assets/items/steel_axe_head_heated.js">
+  <link rel="modulepreload" href="assets/items/steel_ingot.js">
+  <link rel="modulepreload" href="assets/items/steel_ingot_heated.js">
+  <link rel="modulepreload" href="assets/items/steel_pickaxe.js">
+  <link rel="modulepreload" href="assets/items/steel_pickaxe_head.js">
+  <link rel="modulepreload" href="assets/items/steel_pickaxe_head_heated.js">
+  <link rel="modulepreload" href="assets/items/steel_rod.js">
+  <link rel="modulepreload" href="assets/items/steel_shovel.js">
+  <link rel="modulepreload" href="assets/items/steel_shovel_head.js">
+  <link rel="modulepreload" href="assets/items/steel_shovel_head_heated.js">
+  <link rel="modulepreload" href="assets/items/steel_sword.js">
+  <link rel="modulepreload" href="assets/items/steel_sword_head.js">
+  <link rel="modulepreload" href="assets/items/steel_sword_head_heated.js">
+  <link rel="modulepreload" href="assets/items/stick.js">
+  <link rel="modulepreload" href="assets/items/water_bucket.js">
+  <link rel="modulepreload" href="assets/items/wooden_axe.js">
+  <link rel="modulepreload" href="assets/items/wooden_pickaxe.js">
+  <link rel="modulepreload" href="assets/items/wooden_shovel.js">
+  <link rel="modulepreload" href="assets/items/wooden_sword.js">
+  <link rel="modulepreload" href="mods/index.js">
+  <link rel="modulepreload" href="src/core/camera.js">
+  <link rel="modulepreload" href="src/core/clouds.js">
+  <link rel="modulepreload" href="src/core/dimensions.js">
+  <link rel="modulepreload" href="src/core/engine.js">
+  <link rel="modulepreload" href="src/core/gameClock.js">
+  <link rel="modulepreload" href="src/core/input.js">
+  <link rel="modulepreload" href="src/core/legacyIds.js">
+  <link rel="modulepreload" href="src/core/perf.js">
+  <link rel="modulepreload" href="src/core/physics.js">
+  <link rel="modulepreload" href="src/core/polish.js">
+  <link rel="modulepreload" href="src/core/preferences.js">
+  <link rel="modulepreload" href="src/core/registry.js">
+  <link rel="modulepreload" href="src/core/renderer.js">
+  <link rel="modulepreload" href="src/core/saveManager.js">
+  <link rel="modulepreload" href="src/core/utils.js">
+  <link rel="modulepreload" href="src/core/waterPerf.js">
+  <link rel="modulepreload" href="src/core/weather.js">
+  <link rel="modulepreload" href="src/core/wind.js">
+  <link rel="modulepreload" href="src/core/world.js">
+  <link rel="modulepreload" href="src/core/worldSerializer.js">
+  <link rel="modulepreload" href="src/data/sorting.js">
+  <link rel="modulepreload" href="src/entities/explosion_fx.js">
+  <link rel="modulepreload" href="src/entities/item.js">
+  <link rel="modulepreload" href="src/entities/leaf_particle.js">
+  <link rel="modulepreload" href="src/entities/player.js">
+  <link rel="modulepreload" href="src/entities/primed_explosive.js">
+  <link rel="modulepreload" href="src/game/commands.js">
+  <link rel="modulepreload" href="src/game/content.js">
+  <link rel="modulepreload" href="src/game/entities.js">
+  <link rel="modulepreload" href="src/game/interaction.js">
+  <link rel="modulepreload" href="src/game/loop.js">
+  <link rel="modulepreload" href="src/game/net.js">
+  <link rel="modulepreload" href="src/game/players.js">
+  <link rel="modulepreload" href="src/game/session.js">
+  <link rel="modulepreload" href="src/game/settings.js">
+  <link rel="modulepreload" href="src/game/state.js">
+  <link rel="modulepreload" href="src/game/version.js">
+  <link rel="modulepreload" href="src/logic/biomes.js">
+  <link rel="modulepreload" href="src/logic/breaking.js">
+  <link rel="modulepreload" href="src/logic/crafting.js">
+  <link rel="modulepreload" href="src/logic/inventory.js">
+  <link rel="modulepreload" href="src/logic/particleWater.js">
+  <link rel="modulepreload" href="src/logic/placing.js">
+  <link rel="modulepreload" href="src/logic/terrainGen.js">
+  <link rel="modulepreload" href="src/logic/trunkLeaves.js">
+  <link rel="modulepreload" href="src/logic/water.js">
+  <link rel="modulepreload" href="src/multiplayer.js">
+  <link rel="modulepreload" href="src/platform/appUpdate.js">
+  <link rel="modulepreload" href="src/platform/webPlatform.js">
+  <link rel="modulepreload" href="src/script.js">
+  <link rel="modulepreload" href="src/ui/cameraCapture.js">
+  <link rel="modulepreload" href="src/ui/chatLog.js">
+  <link rel="modulepreload" href="src/ui/commandMenu.js">
+  <link rel="modulepreload" href="src/ui/craftingUI.js">
+  <link rel="modulepreload" href="src/ui/iconPolish.js">
+  <link rel="modulepreload" href="src/ui/inventoryUI.js">
+  <link rel="modulepreload" href="src/ui/menus.js">
+  <link rel="modulepreload" href="src/ui/music.js">
+  <link rel="modulepreload" href="src/ui/perfOverlay.js">
+  <link rel="modulepreload" href="src/ui/touchControls.js">
+  <!-- modules:end -->
 </head>
 <body>
   <div id="window-controls">
@@ -266,12 +508,12 @@
     <div class="menu-content">
       <h1 class="menu-title">Create New World</h1>
       <div class="form-section">
-        <label for="worldName">World Name:</label>
+        <label for="worldName">World Name</label>
         <input type="text" id="worldName" class="minecraft-input" placeholder="New World">
-        <label for="worldSeed">Seed (Optional):</label>
+        <label for="worldSeed">Seed</label>
         <input type="text" id="worldSeed" class="minecraft-input" placeholder="Random">
         <div class="option-group">
-          <label>Game Mode:</label>
+          <label>Game Mode</label>
           <div class="button-group">
             <button class="minecraft-button small" data-action="game-mode-survival" data-selected="true">Survival</button>
             <button class="minecraft-button small" data-action="game-mode-creative">Creative</button>
@@ -314,14 +556,14 @@
       <h1 class="menu-title">Background Settings</h1>
       <div class="form-section">
         <div class="option-group">
-          <label>Add New Block:</label>
+          <label>Add Block</label>
           <div class="dropdown-container">
             <input type="text" id="backgroundBlockInput" class="minecraft-input" placeholder="Type block name...">
             <div id="backgroundSuggestions" class="suggestions-dropdown hidden"></div>
           </div>
         </div>
         <div class="option-group">
-          <label>Current Background Blocks:</label>
+          <label>Blocks</label>
           <div class="background-blocks" id="backgroundBlocks">
           </div>
         </div>
@@ -343,16 +585,7 @@
       <h1 class="menu-title">Graphics</h1>
       <div class="form-section">
         <div class="option-group">
-          <label>Theme:</label>
-          <div class="button-group">
-            <button class="minecraft-button small" data-action="theme-minimal" data-selected="true">Minimal</button>
-            <button class="minecraft-button small" data-action="theme-java">Java Edition</button>
-            <button class="minecraft-button small" data-action="theme-modern">Modern</button>
-            <button class="minecraft-button small" data-action="theme-bedrock">Bedrock Edition</button>
-          </div>
-        </div>
-        <div class="option-group">
-          <label>GUI Scale:</label>
+          <label>GUI Scale</label>
           <div class="button-group" id="guiScale">
             <button class="minecraft-button small" data-action="gui-scale" data-value="0.75">75%</button>
             <button class="minecraft-button small" data-action="gui-scale" data-value="0.9">90%</button>
@@ -362,7 +595,7 @@
           </div>
         </div>
         <div class="option-group">
-          <label>Render Scale:</label>
+          <label>Render Scale</label>
           <div class="button-group" id="renderScale">
             <button class="minecraft-button small" data-action="render-scale" data-value="0.175">25%</button>
             <button class="minecraft-button small" data-action="render-scale" data-value="0.35">50%</button>
@@ -371,7 +604,7 @@
           </div>
         </div>
         <div class="option-group">
-          <label>Render Distance:</label>
+          <label>Render Distance</label>
           <div class="button-group">
             <button class="minecraft-button small" data-action="render-tiny">Tiny</button>
             <button class="minecraft-button small" data-action="render-short">Short</button>
@@ -381,28 +614,19 @@
           </div>
         </div>
         <div class="option-group">
-          <label>Texture Quality:</label>
-          <div class="button-group">
-            <button class="minecraft-button small" data-action="texture-fast">Fast</button>
-            <button class="minecraft-button small" data-action="texture-fancy" data-selected="true">Fancy</button>
-          </div>
-        </div>
-        <div class="option-group">
-          <label>Render Falling Leaves:</label>
+          <label>Falling Leaves</label>
           <div class="button-group">
             <button class="minecraft-button small" data-action="leaves-on" data-selected="true">ON</button>
             <button class="minecraft-button small" data-action="leaves-off">OFF</button>
           </div>
         </div>
         <div class="option-group">
-          <label>Performance Overlay (F3):</label>
+          <label>Performance Overlay</label>
           <div class="button-group">
             <button class="minecraft-button small" data-action="perf-overlay-on">ON</button>
             <button class="minecraft-button small" data-action="perf-overlay-off" data-selected="true">OFF</button>
           </div>
         </div>
-        <h2 class="polish-heading">Polish</h2>
-        <div id="polishOptions"></div>
       </div>
       <div class="menu-buttons">
         <button class="minecraft-button" data-action="back-to-options">Back</button>
@@ -416,7 +640,7 @@
       <h1 class="menu-title">Gameplay</h1>
       <div class="form-section">
         <div class="option-group">
-          <label>Auto Jump:</label>
+          <label>Auto Jump</label>
           <div class="button-group">
             <button class="minecraft-button small" data-action="auto-jump-on" data-selected="true">ON</button>
             <button class="minecraft-button small" data-action="auto-jump-off">OFF</button>
@@ -447,7 +671,14 @@
           <input type="range" id="sfxVolume" class="minecraft-slider" min="0" max="100" value="75">
         </div>
         <div class="option-group">
-          <label>Music Track:</label>
+          <label>Music in Menus</label>
+          <div class="button-group">
+            <button class="minecraft-button small" data-action="menu-music-on" data-selected="true">ON</button>
+            <button class="minecraft-button small" data-action="menu-music-off">OFF</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <label>Music Track</label>
           <div class="music-track-selector">
             <div class="music-track-item" data-track="underwild-mystic">
               <img src="ui/underwild-mystic.png" alt="Mystic" class="music-thumb">
@@ -493,13 +724,6 @@
      <div class="menu-content">
        <h1 class="menu-title">Controls</h1>
        <div class="form-section">
-        <div class="option-group touch-only">
-          <label>Touch Aiming:</label>
-          <div class="button-group" id="touchAimMode">
-            <button class="minecraft-button small" data-action="touch-aim" data-value="tap">Tap</button>
-            <button class="minecraft-button small" data-action="touch-aim" data-value="stick">Joystick</button>
-          </div>
-        </div>
         <div class="option-group">
            <label>Movement Controls</label>
            <div class="controls-list">
@@ -569,10 +793,6 @@
                <span>Flip Block</span>
                <button class="keybind-button" data-action="bind-flip" data-key="KeyF">F</button>
              </div>
-             <div class="keybind-row">
-               <span>Toggle Polish</span>
-               <button class="keybind-button" data-action="bind-polish" data-key="KeyO">O</button>
-             </div>
            </div>
          </div>
          <div class="option-group">
@@ -603,7 +823,14 @@
              </div>
            </div>
          </div>
-       </div>
+        <div class="option-group touch-only">
+          <label>Touch Aiming</label>
+          <div class="button-group" id="touchAimMode">
+            <button class="minecraft-button small" data-action="touch-aim" data-value="tap">Tap</button>
+            <button class="minecraft-button small" data-action="touch-aim" data-value="stick">Joystick</button>
+          </div>
+        </div>
+      </div>
        <div class="menu-buttons">
          <button class="minecraft-button" data-action="reset-controls">Reset to Defaults</button>
          <button class="minecraft-button" data-action="back-to-options">Back</button>
@@ -618,7 +845,7 @@
       <div class="advanced-options-grid">
         <div class="grid-column">
           <div class="option-group">
-            <label>World Type:</label>
+            <label>World Type</label>
             <div class="button-group">
               <button class="minecraft-button small" data-action="world-type-regular" data-selected="true">Regular</button>
               <button class="minecraft-button small" data-action="world-type-superflat">Superflat</button>
@@ -626,7 +853,7 @@
             </div>
           </div>
           <div class="option-group">
-            <label>World Size:</label>
+            <label>World Size</label>
             <div class="button-group">
               <button class="minecraft-button small" data-action="world-size-tiny">Tiny</button>
               <button class="minecraft-button small" data-action="world-size-small">Small</button>
@@ -635,7 +862,7 @@
             </div>
           </div>
           <div class="option-group">
-            <label>Difficulty:</label>
+            <label>Difficulty</label>
             <div class="button-group">
               <button class="minecraft-button small" data-action="difficulty-peaceful">Peaceful</button>
               <button class="minecraft-button small" data-action="difficulty-easy" data-selected="true">Easy</button>
@@ -646,7 +873,7 @@
         </div>
         <div class="grid-column">
           <div class="option-group">
-            <label>Starting Time:</label>
+            <label>Starting Time</label>
             <div class="button-group">
               <button class="minecraft-button small" data-action="time-day" data-selected="true">Day</button>
               <button class="minecraft-button small" data-action="time-night">Night</button>
@@ -657,14 +884,14 @@
         </div>
         <div class="grid-column">
           <div class="option-group">
-            <label>Enable Cheats:</label>
+            <label>Enable Cheats</label>
             <div class="button-group">
               <button class="minecraft-button small" data-action="cheats-on">ON</button>
               <button class="minecraft-button small" data-action="cheats-off" data-selected="true">OFF</button>
             </div>
           </div>
           <div class="option-group">
-            <label>Allow Commands:</label>
+            <label>Allow Commands</label>
             <div class="button-group">
               <button class="minecraft-button small" data-action="commands-on">ON</button>
               <button class="minecraft-button small" data-action="commands-off" data-selected="true">OFF</button>
@@ -673,44 +900,20 @@
         </div>
         <div class="grid-column">
           <div class="option-group">
-            <label>Starting Health:</label>
-            <div class="button-grid health-selector">
-              <button class="minecraft-button small" data-action="start-health-1" data-value="1">1</button>
-              <button class="minecraft-button small" data-action="start-health-2" data-value="2">2</button>
-              <button class="minecraft-button small" data-action="start-health-3" data-value="3">3</button>
-              <button class="minecraft-button small" data-action="start-health-4" data-value="4">4</button>
-              <button class="minecraft-button small" data-action="start-health-5" data-value="5">5</button>
-              <button class="minecraft-button small" data-action="start-health-6" data-value="6">6</button>
-              <button class="minecraft-button small" data-action="start-health-7" data-value="7">7</button>
-              <button class="minecraft-button small" data-action="start-health-8" data-value="8">8</button>
-              <button class="minecraft-button small" data-action="start-health-9" data-value="9">9</button>
-              <button class="minecraft-button small" data-action="start-health-10" data-value="10">10</button>
-              <button class="minecraft-button small" data-action="start-health-11" data-value="11">11</button>
-              <button class="minecraft-button small" data-action="start-health-12" data-value="12">12</button>
-              <button class="minecraft-button small" data-action="start-health-13" data-value="13">13</button>
-              <button class="minecraft-button small" data-action="start-health-14" data-value="14">14</button>
-              <button class="minecraft-button small" data-action="start-health-15" data-value="15">15</button>
+            <label>Starting Health</label>
+            <div class="stepper" data-stepper="startingHealth" data-min="1" data-max="15">
+              <button class="minecraft-button small" data-action="stepper" data-step="-1" aria-label="Less">&lt;</button>
+              <span class="stepper-value">10</span>
+              <button class="minecraft-button small" data-action="stepper" data-step="1" aria-label="More">&gt;</button>
             </div>
           </div>
           
           <div class="option-group">
-            <label>Starting Hunger:</label>
-            <div class="button-grid hunger-selector">
-              <button class="minecraft-button small" data-action="start-hunger-1" data-value="1">1</button>
-              <button class="minecraft-button small" data-action="start-hunger-2" data-value="2">2</button>
-              <button class="minecraft-button small" data-action="start-hunger-3" data-value="3">3</button>
-              <button class="minecraft-button small" data-action="start-hunger-4" data-value="4">4</button>
-              <button class="minecraft-button small" data-action="start-hunger-5" data-value="5">5</button>
-              <button class="minecraft-button small" data-action="start-hunger-6" data-value="6">6</button>
-              <button class="minecraft-button small" data-action="start-hunger-7" data-value="7">7</button>
-              <button class="minecraft-button small" data-action="start-hunger-8" data-value="8">8</button>
-              <button class="minecraft-button small" data-action="start-hunger-9" data-value="9">9</button>
-              <button class="minecraft-button small" data-action="start-hunger-10" data-value="10">10</button>
-              <button class="minecraft-button small" data-action="start-hunger-11" data-value="11">11</button>
-              <button class="minecraft-button small" data-action="start-hunger-12" data-value="12">12</button>
-              <button class="minecraft-button small" data-action="start-hunger-13" data-value="13">13</button>
-              <button class="minecraft-button small" data-action="start-hunger-14" data-value="14">14</button>
-              <button class="minecraft-button small" data-action="start-hunger-15" data-value="15">15</button>
+            <label>Starting Hunger</label>
+            <div class="stepper" data-stepper="startingHunger" data-min="1" data-max="15">
+              <button class="minecraft-button small" data-action="stepper" data-step="-1" aria-label="Less">&lt;</button>
+              <span class="stepper-value">10</span>
+              <button class="minecraft-button small" data-action="stepper" data-step="1" aria-label="More">&gt;</button>
             </div>
           </div>
         </div>
@@ -741,7 +944,7 @@
       <h1 class="menu-title">Players</h1>
       <div class="form-section">
         <div class="mp-list" id="mpPlayerList"></div>
-        <label>Banned:</label>
+        <label>Banned</label>
         <div class="mp-list" id="mpBanList"></div>
       </div>
       <div class="menu-buttons">
@@ -781,7 +984,6 @@
       <div class="mods-grid" id="modsGrid">
         <div class="no-mods-message">
           <p>No mods available</p>
-          <p style="font-size: 14px; color: #888;">WIP</p>
         </div>
       </div>
       <div class="menu-buttons">
@@ -806,7 +1008,7 @@
         <button id="modToggleButton" class="minecraft-button" data-action="toggle-mod">Enable Mod</button>
       </div>
       <div class="menu-buttons">
-        <button class="minecraft-button" data-action="back-to-mods">Back to Mods</button>
+        <button class="minecraft-button" data-action="back-to-mods">Back</button>
       </div>
     </div>
   </div>
@@ -867,10 +1069,10 @@
     <div class="menu-content mp-wide">
       <h1 class="menu-title">Create Game</h1>
       <div class="form-section">
-        <label>World:</label>
+        <label>World</label>
         <div class="mp-list" id="mpWorldList"></div>
         <div class="option-group">
-          <label>Max Players:</label>
+          <label>Max Players</label>
           <div class="button-group" id="mpMaxPlayers">
             <button class="minecraft-button small" data-action="mp-max" data-value="2">2</button>
             <button class="minecraft-button small" data-action="mp-max" data-value="4" data-selected="true">4</button>
@@ -879,14 +1081,14 @@
           </div>
         </div>
         <div class="option-group">
-          <label>Guests Can Build:</label>
+          <label>Guests Can Build</label>
           <div class="button-group" id="mpAllowBuild">
             <button class="minecraft-button small" data-action="mp-build" data-value="on" data-selected="true">ON</button>
             <button class="minecraft-button small" data-action="mp-build" data-value="off">OFF</button>
           </div>
         </div>
         <div class="option-group">
-          <label>Show On Network:</label>
+          <label>Show on Network</label>
           <div class="button-group" id="mpLan">
             <button class="minecraft-button small" data-action="mp-lan" data-value="on" data-selected="true">ON</button>
             <button class="minecraft-button small" data-action="mp-lan" data-value="off">OFF</button>
@@ -906,9 +1108,9 @@
     <div class="menu-content mp-wide">
       <h1 class="menu-title">Join Game</h1>
       <div class="form-section">
-        <label>Games On Your Network:</label>
+        <label>Nearby Games</label>
         <div class="mp-list" id="mpHostList"></div>
-        <label for="mpAddress">Or Join By Address:</label>
+        <label for="mpAddress">Join by Address</label>
         <div class="mp-address-row">
           <input type="text" id="mpAddress" class="minecraft-input" placeholder="192.168.1.20" spellcheck="false">
           <button class="minecraft-button small" data-action="mp-join-address">Join</button>
@@ -938,28 +1140,36 @@
     <div class="menu-content mp-wide">
       <h1 class="menu-title">App</h1>
       <div class="form-section">
+        <div class="option-group">
+          <label>UI Layout</label>
+          <div class="button-group" id="appUiMode">
+            <button class="minecraft-button small" data-action="app-ui-mode" data-value="auto">Auto</button>
+            <button class="minecraft-button small" data-action="app-ui-mode" data-value="desktop">Desktop</button>
+            <button class="minecraft-button small" data-action="app-ui-mode" data-value="mobile">Mobile</button>
+          </div>
+        </div>
         <div class="option-group desktop-only">
-          <label>Window Controls:</label>
+          <label>Window Controls</label>
           <div class="button-group" id="appWindowControls">
             <button class="minecraft-button small" data-action="app-controls" data-value="on">ON</button>
             <button class="minecraft-button small" data-action="app-controls" data-value="off">OFF</button>
           </div>
         </div>
         <div class="option-group">
-          <label>Fullscreen:</label>
+          <label>Fullscreen</label>
           <div class="button-group" id="appFullscreen">
             <button class="minecraft-button small" data-action="app-fullscreen" data-value="on">ON</button>
             <button class="minecraft-button small" data-action="app-fullscreen" data-value="off">OFF</button>
           </div>
         </div>
         <div class="option-group desktop-only">
-          <label>Graphics Acceleration (restart to apply):</label>
+          <label>GPU Acceleration</label>
           <div class="button-group" id="appGpu">
             <button class="minecraft-button small" data-action="app-gpu" data-value="on">ON</button>
             <button class="minecraft-button small" data-action="app-gpu" data-value="off">OFF</button>
           </div>
         </div>
-        <label class="desktop-only">App Icon:</label>
+        <label class="desktop-only">App Icon</label>
         <div class="app-icon-grid desktop-only" id="appIconGrid"></div>
       </div>
       <div class="menu-buttons">
@@ -977,22 +1187,17 @@
         <div class="player-viewer">
           <div class="player-nametag" id="playerNametag">Player</div>
           <canvas id="playerSkinPreview" class="player-viewer-canvas" width="160" height="320"></canvas>
-          <div class="player-viewer-controls">
-            <button class="minecraft-button small" data-action="player-view-prev" title="Turn left">&lt;</button>
-            <span class="player-view-label" id="playerViewLabel">Front</span>
-            <button class="minecraft-button small" data-action="player-view-next" title="Turn right">&gt;</button>
-          </div>
           <button class="minecraft-button small" data-action="player-view-walk" id="playerWalkButton">Walk: Off</button>
         </div>
         <div class="player-settings">
           <label for="playerNameInput">Name</label>
           <input type="text" id="playerNameInput" class="minecraft-input" maxlength="20" placeholder="Player" spellcheck="false">
-          <label>Name colour</label>
+          <label>Name Colour</label>
           <div class="player-colors" id="playerColors"></div>
           <label>Skins</label>
           <div class="skins-grid player-skins" id="playerSkinsGrid"></div>
           <div class="player-skin-actions">
-            <button class="minecraft-button small" data-action="player-import-skin">Add Skin (PNG)</button>
+            <button class="minecraft-button small" data-action="player-import-skin">Add Skin</button>
             <button class="minecraft-button small" data-action="player-rename-skin" id="playerRenameSkin">Rename</button>
             <button class="minecraft-button small" data-action="player-delete-skin" id="playerDeleteSkin">Delete</button>
           </div>

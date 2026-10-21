@@ -144,6 +144,8 @@ export default {
   displayName: 'Furnace',
   material: 'stone',
   kind: 'station',
+  opens: 'furnace', // right-click opens the furnace window
+  showsFire: true, // flames in its mouth while it burns (meta.burn)
   tab: 'functional',
   dropsContents: true, // spills what's inside when broken
   recipes: [
@@ -153,7 +155,6 @@ export default {
   tool: 'pickaxe', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#808080',
   hardness: 3,
   lightLevel: 10,
   // Runs on the world's slow tick; game time since the last run keeps it accurate.

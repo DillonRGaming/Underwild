@@ -8,6 +8,5 @@ export default {
   soil: ['land', 'lakebed'], // what plants can grow on it (see plant.js)
   shape: 'full',
   solid: true,
-  color: '#6a3b17',
   hardness: 1.8
 };

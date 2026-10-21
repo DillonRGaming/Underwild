@@ -15,7 +15,6 @@ export default {
   soil: ['land'], // what plants can grow on it (see plant.js)
   shape: 'full',
   solid: true,
-  color: '#8a5b37',
   hardness: 2.2,
   tick(world, x, y, meta) {
     spreadTick(world, x, y, meta, this.id);

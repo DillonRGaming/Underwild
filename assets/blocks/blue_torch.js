@@ -8,7 +8,6 @@ export default {
     // how it's crafted
     { shapeless: { torch: 1, raw_steel: 1 }, count: 1 }
   ],
-  color: '#3c6eff',
   shape: 'torch',
   solid: false,
   transparent: true,

@@ -8,7 +8,6 @@ export default {
   tool: 'pickaxe',
   shape: 'slab',
   solid: true,
-  color: '#c85a28',
   hardness: 2.0,
   rockOverlay: true,
   isSolid(meta) {

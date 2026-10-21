@@ -78,8 +78,7 @@ export function getRendererUI() {
     setPosition2: inThisWorld(game.setPosition2),
     isLoading: game.isLoading,
     gamePaused: game.gamePaused,
-    renderFallingLeaves: game.renderFallingLeaves,
-    textureQuality: game.textureQuality
+    renderFallingLeaves: game.renderFallingLeaves
   };
 }
 
@@ -236,10 +235,11 @@ export function initializeGameEngine() {
 
       if (game.openContainer) {
         const blockId = game.world.getBlockId(game.openContainer.tileX, game.openContainer.tileY);
-        if (!isChest(blockId) && blockId !== 'crafting_table' && blockId !== 'furnace' && blockId !== 'forging_table') closeInventory();
+        // Closed when the block it belongs to is gone.
+        if (!isChest(blockId) && !registry.get(blockId)?.opens) closeInventory();
         // Keep an open furnace's progress bars moving smoothly.
         else if (game.openContainer.kind === 'furnace' && !multiplayer.isGuest)
-          registry.get('furnace').tick(game.world, game.openContainer.tileX, game.openContainer.tileY, game.openContainer.meta);
+          registry.get(blockId).tick(game.world, game.openContainer.tileX, game.openContainer.tileY, game.openContainer.meta);
       }
 
       perf.startPhase('updateChunks');

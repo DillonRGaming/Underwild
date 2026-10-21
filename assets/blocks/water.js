@@ -11,7 +11,6 @@ export default {
   displayName: 'Water',
   shape: 'full',
   solid: false,
-  color: '#3b72d4',
   hardness: 100,
   isSolid() {
     return false;

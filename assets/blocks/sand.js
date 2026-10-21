@@ -97,7 +97,7 @@ export function fallTick(world, x, y, id, meta) {
   world.setBlock(x, top, waterMeta ? 'water' : 'air', waterMeta);
 }
 
-export function createFallingSand(id, displayName, color) {
+export function createFallingSand(id, displayName) {
   return {
     id,
     displayName,
@@ -109,7 +109,6 @@ export function createFallingSand(id, displayName, color) {
     soil: id === 'sand' ? ['land', 'beach', 'lakebed'] : id === 'wet_sand' ? ['beach', 'lakebed'] : [],
     shape: 'full',
     solid: true,
-    color,
     hardness: 1.5,
     falls: true,
     isSolid(meta) {
@@ -122,7 +121,7 @@ export function createFallingSand(id, displayName, color) {
 }
 
 export default {
-  ...createFallingSand('sand', 'Sand', '#f4dc81'),
+  ...createFallingSand('sand', 'Sand'),
   smelt: { into: 'glass', time: 4 },
   recipes: [
     { shapeless: { rippled_sand: 1 }, count: 1 },

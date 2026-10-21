@@ -34,7 +34,6 @@ export function makeExplosive(id, displayName, settings = {}) {
     tab: 'functional',
     shape: 'full',
     solid: true,
-    color: '#8a8f96',
     texture: `${id}.png`,
     hardness: 0.5,
     maxStack: 24,
@@ -145,7 +144,9 @@ export const explosive3 = {
     { shapeless: { explosive_1: 1, gunpowder: 2 }, count: 1 }
   ]
 };
-export default {
+const explosive = {
   ...makeExplosive('explosive', 'Explosive (Instant)', { fuse: 0, radius: 4 }),
   recipes: [{ shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'sand' }, count: 1 }]
 };
+
+export default [explosive, explosive1, explosive2, explosive3];

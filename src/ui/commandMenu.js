@@ -24,6 +24,11 @@ let panel = null;
 
 const next = (key, list) => list[(cycles[key]++) % list.length];
 
+export function closeCommandMenu() {
+  panel?.remove();
+  panel = null;
+}
+
 export function toggleCommandMenu(run) {
   if (panel) {
     panel.remove();
@@ -69,9 +74,11 @@ export function toggleCommandMenu(run) {
       const up = () => {
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
       };
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
     });
   };
   drag(panel.querySelector('.cmd-menu-title'), (r, dx, dy) => {

@@ -14,6 +14,7 @@ export default {
   displayName: 'Forging Table',
   material: 'wood',
   kind: 'station',
+  opens: 'forge', // right-click opens the forging window
   tab: 'functional',
   dropsContents: true, // spills what's inside when broken
   burnTime: 7.5, // seconds it burns as furnace fuel
@@ -24,7 +25,6 @@ export default {
   tool: 'axe', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#5a5a62',
   hardness: 3,
   maxStack: 24
 };

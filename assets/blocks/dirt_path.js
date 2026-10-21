@@ -8,7 +8,6 @@ export default {
   tool: 'shovel', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#8c6a44',
   hardness: 2.0,
   // Its top sits one texel below a normal block (see physics topSurfaceY).
   surfaceInset: 1,

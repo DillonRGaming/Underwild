@@ -8,7 +8,6 @@ export default {
     // how it's crafted
     { shape: ['c', 's'], ingredients: { c: 'coal', s: 'stick' }, count: 4 }
   ],
-  color: '#ff6b35',
   shape: 'torch',
   solid: false,
   transparent: true,

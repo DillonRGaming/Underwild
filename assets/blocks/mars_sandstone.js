@@ -9,7 +9,6 @@ export default {
   shape: 'full',
   solid: true,
   soil: ['mars', 'mars_sandstone', 'stone'],
-  color: '#c85a28',
   hardness: 2.5,
   rockOverlay: true,
   isSolid(meta) {

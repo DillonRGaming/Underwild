@@ -10,7 +10,6 @@ export default {
     { shapeless: { pine_log: 1 }, count: 4 }
   ],
   tool: 'axe', // mined fastest with this
-  color: '#4a3528',
   shape: 'full',
   solid: true,
   transparent: false,

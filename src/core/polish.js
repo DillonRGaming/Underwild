@@ -1,7 +1,6 @@
 // Visual polish: sky gradient, far hills with haze, outlined and rounded block edges,
 // soft shadows on walls, entity outlines and a vignette.
 import { TILE_SIZE } from './utils.js';
-import { polishOn } from './polishSettings.js';
 import { naturalHeightAt } from '../logic/terrainGen.js';
 
 const OUTLINE = 'rgba(14, 12, 12, 0.8)';
@@ -203,10 +202,6 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
 
   const u = outlineWidth(camera.zoom);
   const sh = u * 2;
-  const outlines = polishOn('outlines'),
-    rounding = polishOn('rounding');
-  const seams = polishOn('seams'),
-    wallShadows = polishOn('wallShadows');
 
   // Only the cells this says yes to get their edges drawn (the rest are still looked at as
   // neighbours): see Renderer.updateTerrainCache, which draws still and moving blocks apart.
@@ -303,143 +298,141 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
   }
 
   // 1. Efficient batched seams: horizontal spans, vertical spans, and intersection corners
-  if (seams) {
-    layerCtx.fillStyle = SEAM;
+  layerCtx.fillStyle = SEAM;
 
-    // Horizontal seam spans between solid full blocks
-    for (let y = startY; y <= endY; y++) {
-      const rowIdx = y - minY;
-      const ey = rowEy[y - startY];
-      let inSpan = false,
-        spanStart = 0;
-      for (let x = startX; x <= endX; x++) {
-        const colIdx = x - minX;
-        const selfShape = shapeGrid[rowIdx * gridW + colIdx];
-        const downShape = shapeGrid[(rowIdx + 1) * gridW + colIdx];
-        if (selfShape === 1 && downShape === 1 && sameGroup(rowIdx * gridW + colIdx, (rowIdx + 1) * gridW + colIdx) && own(x, y)) {
-          if (!inSpan) {
-            inSpan = true;
-            spanStart = x;
-          }
-        } else {
-          if (inSpan) {
-            const x0 = colSx[spanStart - startX];
-            const x1 = colEx[x - 1 - startX];
-            layerCtx.fillRect(x0, ey - u, x1 - x0, u);
-            inSpan = false;
-          }
-        }
-      }
-      if (inSpan) {
-        const x0 = colSx[spanStart - startX];
-        const x1 = colEx[endX - startX];
-        layerCtx.fillRect(x0, ey - u, x1 - x0, u);
-      }
-    }
-
-    // Top horizontal seam for solid blocks meeting top boundary
-    const topRowIdx = startY - minY;
-    let inTopSpan = false,
-      topSpanStart = 0;
-    const sy0 = rowSy[0];
+  // Horizontal seam spans between solid full blocks
+  for (let y = startY; y <= endY; y++) {
+    const rowIdx = y - minY;
+    const ey = rowEy[y - startY];
+    let inSpan = false,
+      spanStart = 0;
     for (let x = startX; x <= endX; x++) {
       const colIdx = x - minX;
-      if (shapeGrid[topRowIdx * gridW + colIdx] === 1 && shapeGrid[(topRowIdx - 1) * gridW + colIdx] === 1 && sameGroup(topRowIdx * gridW + colIdx, (topRowIdx - 1) * gridW + colIdx) && own(x, startY)) {
-        if (!inTopSpan) {
-          inTopSpan = true;
-          topSpanStart = x;
+      const selfShape = shapeGrid[rowIdx * gridW + colIdx];
+      const downShape = shapeGrid[(rowIdx + 1) * gridW + colIdx];
+      if (selfShape === 1 && downShape === 1 && sameGroup(rowIdx * gridW + colIdx, (rowIdx + 1) * gridW + colIdx) && own(x, y)) {
+        if (!inSpan) {
+          inSpan = true;
+          spanStart = x;
         }
       } else {
-        if (inTopSpan) {
-          const x0 = colSx[topSpanStart - startX];
+        if (inSpan) {
+          const x0 = colSx[spanStart - startX];
           const x1 = colEx[x - 1 - startX];
-          layerCtx.fillRect(x0, sy0, x1 - x0, u);
-          inTopSpan = false;
+          layerCtx.fillRect(x0, ey - u, x1 - x0, u);
+          inSpan = false;
         }
       }
     }
-    if (inTopSpan) {
-      const x0 = colSx[topSpanStart - startX];
+    if (inSpan) {
+      const x0 = colSx[spanStart - startX];
       const x1 = colEx[endX - startX];
-      layerCtx.fillRect(x0, sy0, x1 - x0, u);
+      layerCtx.fillRect(x0, ey - u, x1 - x0, u);
     }
+  }
 
-    // Vertical seam spans between solid full blocks
-    for (let x = startX; x <= endX; x++) {
-      const colIdx = x - minX;
-      const ex = colEx[x - startX];
-      let inSpan = false,
-        spanStart = 0;
-      for (let y = startY; y <= endY; y++) {
-        const rowIdx = y - minY;
-        const selfShape = shapeGrid[rowIdx * gridW + colIdx];
-        const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
-        if (selfShape === 1 && rightShape === 1 && sameGroup(rowIdx * gridW + colIdx, rowIdx * gridW + colIdx + 1) && own(x, y)) {
-          if (!inSpan) {
-            inSpan = true;
-            spanStart = y;
-          }
-        } else {
-          if (inSpan) {
-            const y0 = rowSy[spanStart - startY];
-            const y1 = rowEy[y - 1 - startY];
-            layerCtx.fillRect(ex - u, y0, u, y1 - y0);
-            inSpan = false;
-          }
-        }
+  // Top horizontal seam for solid blocks meeting top boundary
+  const topRowIdx = startY - minY;
+  let inTopSpan = false,
+    topSpanStart = 0;
+  const sy0 = rowSy[0];
+  for (let x = startX; x <= endX; x++) {
+    const colIdx = x - minX;
+    if (shapeGrid[topRowIdx * gridW + colIdx] === 1 && shapeGrid[(topRowIdx - 1) * gridW + colIdx] === 1 && sameGroup(topRowIdx * gridW + colIdx, (topRowIdx - 1) * gridW + colIdx) && own(x, startY)) {
+      if (!inTopSpan) {
+        inTopSpan = true;
+        topSpanStart = x;
       }
-      if (inSpan) {
-        const y0 = rowSy[spanStart - startY];
-        const y1 = rowEy[endY - startY];
-        layerCtx.fillRect(ex - u, y0, u, y1 - y0);
+    } else {
+      if (inTopSpan) {
+        const x0 = colSx[topSpanStart - startX];
+        const x1 = colEx[x - 1 - startX];
+        layerCtx.fillRect(x0, sy0, x1 - x0, u);
+        inTopSpan = false;
       }
     }
+  }
+  if (inTopSpan) {
+    const x0 = colSx[topSpanStart - startX];
+    const x1 = colEx[endX - startX];
+    layerCtx.fillRect(x0, sy0, x1 - x0, u);
+  }
 
-    // Left vertical seam for solid blocks meeting left boundary
-    const leftColIdx = startX - minX;
-    let inLeftSpan = false,
-      leftSpanStart = 0;
-    const sx0 = colSx[0];
+  // Vertical seam spans between solid full blocks
+  for (let x = startX; x <= endX; x++) {
+    const colIdx = x - minX;
+    const ex = colEx[x - startX];
+    let inSpan = false,
+      spanStart = 0;
     for (let y = startY; y <= endY; y++) {
       const rowIdx = y - minY;
-      if (shapeGrid[rowIdx * gridW + leftColIdx] === 1 && shapeGrid[rowIdx * gridW + leftColIdx - 1] === 1 && sameGroup(rowIdx * gridW + leftColIdx, rowIdx * gridW + leftColIdx - 1) && own(startX, y)) {
-        if (!inLeftSpan) {
-          inLeftSpan = true;
-          leftSpanStart = y;
+      const selfShape = shapeGrid[rowIdx * gridW + colIdx];
+      const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
+      if (selfShape === 1 && rightShape === 1 && sameGroup(rowIdx * gridW + colIdx, rowIdx * gridW + colIdx + 1) && own(x, y)) {
+        if (!inSpan) {
+          inSpan = true;
+          spanStart = y;
         }
       } else {
-        if (inLeftSpan) {
-          const y0 = rowSy[leftSpanStart - startY];
+        if (inSpan) {
+          const y0 = rowSy[spanStart - startY];
           const y1 = rowEy[y - 1 - startY];
-          layerCtx.fillRect(sx0, y0, u, y1 - y0);
-          inLeftSpan = false;
+          layerCtx.fillRect(ex - u, y0, u, y1 - y0);
+          inSpan = false;
         }
       }
     }
-    if (inLeftSpan) {
-      const y0 = rowSy[leftSpanStart - startY];
+    if (inSpan) {
+      const y0 = rowSy[spanStart - startY];
       const y1 = rowEy[endY - startY];
-      layerCtx.fillRect(sx0, y0, u, y1 - y0);
+      layerCtx.fillRect(ex - u, y0, u, y1 - y0);
     }
+  }
 
-    // Corner dots at grid intersections where solid blocks meet
-    layerCtx.fillStyle = CORNER;
-    for (let x = startX; x <= endX; x++) {
-      const colIdx = x - minX;
-      const ex = colEx[x - startX];
-      for (let y = startY; y <= endY; y++) {
-        const rowIdx = y - minY;
-        const si = rowIdx * gridW + colIdx;
-        const grid1 = (i) => (sameGroup(si, i) ? shapeGrid[i] : 0);
-        const self = shapeGrid[si];
-        const right = grid1(si + 1);
-        const down = grid1(si + gridW);
-        const diag = grid1(si + gridW + 1);
-        // The dot sits in this cell's own corner pixel, so only on a solid block (otherwise it
-        // pokes up out of the ground into the air above).
-        if (self === 1 && 1 + (right === 1 ? 1 : 0) + (down === 1 ? 1 : 0) + (diag === 1 ? 1 : 0) >= 2 && own(x, y)) {
-          layerCtx.fillRect(ex - u, rowEy[y - startY] - u, u, u);
-        }
+  // Left vertical seam for solid blocks meeting left boundary
+  const leftColIdx = startX - minX;
+  let inLeftSpan = false,
+    leftSpanStart = 0;
+  const sx0 = colSx[0];
+  for (let y = startY; y <= endY; y++) {
+    const rowIdx = y - minY;
+    if (shapeGrid[rowIdx * gridW + leftColIdx] === 1 && shapeGrid[rowIdx * gridW + leftColIdx - 1] === 1 && sameGroup(rowIdx * gridW + leftColIdx, rowIdx * gridW + leftColIdx - 1) && own(startX, y)) {
+      if (!inLeftSpan) {
+        inLeftSpan = true;
+        leftSpanStart = y;
+      }
+    } else {
+      if (inLeftSpan) {
+        const y0 = rowSy[leftSpanStart - startY];
+        const y1 = rowEy[y - 1 - startY];
+        layerCtx.fillRect(sx0, y0, u, y1 - y0);
+        inLeftSpan = false;
+      }
+    }
+  }
+  if (inLeftSpan) {
+    const y0 = rowSy[leftSpanStart - startY];
+    const y1 = rowEy[endY - startY];
+    layerCtx.fillRect(sx0, y0, u, y1 - y0);
+  }
+
+  // Corner dots at grid intersections where solid blocks meet
+  layerCtx.fillStyle = CORNER;
+  for (let x = startX; x <= endX; x++) {
+    const colIdx = x - minX;
+    const ex = colEx[x - startX];
+    for (let y = startY; y <= endY; y++) {
+      const rowIdx = y - minY;
+      const si = rowIdx * gridW + colIdx;
+      const grid1 = (i) => (sameGroup(si, i) ? shapeGrid[i] : 0);
+      const self = shapeGrid[si];
+      const right = grid1(si + 1);
+      const down = grid1(si + gridW);
+      const diag = grid1(si + gridW + 1);
+      // The dot sits in this cell's own corner pixel, so only on a solid block (otherwise it
+      // pokes up out of the ground into the air above).
+      if (self === 1 && 1 + (right === 1 ? 1 : 0) + (down === 1 ? 1 : 0) + (diag === 1 ? 1 : 0) >= 2 && own(x, y)) {
+        layerCtx.fillRect(ex - u, rowEy[y - startY] - u, u, u);
       }
     }
   }
@@ -452,8 +445,8 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     // A natural tree trunk stands in front like a background block does.
     return m?.layer === 'bg' || !!m?.bgId || (!!m?.noCollision && !!registry.get(c.id)?.trunk);
   };
-  const outlinePath = outlines ? new Path2D() : null;
-  const shadowPath = wallShadows ? new Path2D() : null;
+  const outlinePath = new Path2D();
+  const shadowPath = new Path2D();
   let hasOutlines = false,
     hasShadows = false;
 
@@ -492,30 +485,26 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
           bh = ey7 - sy7;
           if (m.hinge !== 'left') bx = ex - t;
         } else if ((m.slabPos || 'bottom') !== 'top') by = ey7 - t;
-        if (outlinePath) {
-          outlinePath.rect(bx, by, bw, u);
-          outlinePath.rect(bx, by + bh - u, bw, u);
-          outlinePath.rect(bx, by, u, bh);
-          outlinePath.rect(bx + bw - u, by, u, bh);
-          hasOutlines = true;
-        }
-        if (rounding) {
-          for (const [cx, cy, dx, dy] of [
-            [bx, by, 1, 1],
-            [bx + bw - u, by, -1, 1],
-            [bx, by + bh - u, 1, -1],
-            [bx + bw - u, by + bh - u, -1, -1]
-          ]) {
-            if (cornerCount + 4 > edgePass._cornerBuf.length) {
-              const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
-              newBuf.set(edgePass._cornerBuf);
-              edgePass._cornerBuf = newBuf;
-            }
-            edgePass._cornerBuf[cornerCount++] = cx;
-            edgePass._cornerBuf[cornerCount++] = cy;
-            edgePass._cornerBuf[cornerCount++] = dx;
-            edgePass._cornerBuf[cornerCount++] = dy;
+        outlinePath.rect(bx, by, bw, u);
+        outlinePath.rect(bx, by + bh - u, bw, u);
+        outlinePath.rect(bx, by, u, bh);
+        outlinePath.rect(bx + bw - u, by, u, bh);
+        hasOutlines = true;
+        for (const [cx, cy, dx, dy] of [
+          [bx, by, 1, 1],
+          [bx + bw - u, by, -1, 1],
+          [bx, by + bh - u, 1, -1],
+          [bx + bw - u, by + bh - u, -1, -1]
+        ]) {
+          if (cornerCount + 4 > edgePass._cornerBuf.length) {
+            const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+            newBuf.set(edgePass._cornerBuf);
+            edgePass._cornerBuf = newBuf;
           }
+          edgePass._cornerBuf[cornerCount++] = cx;
+          edgePass._cornerBuf[cornerCount++] = cy;
+          edgePass._cornerBuf[cornerCount++] = dx;
+          edgePass._cornerBuf[cornerCount++] = dy;
         }
         continue;
       }
@@ -538,7 +527,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
       // Stairs, and blocks touching stairs: outlined quarter by quarter, wherever a filled
       // quarter meets an empty one.
       if (selfShape === 6 || leftShape === 6 || rightShape === 6 || upShape === 6 || downShape === 6) {
-        if (selfShape === 4 || !outlinePath) continue;
+        if (selfShape === 4) continue;
         const mask = quarterGrid[rowIdx * gridW + colIdx];
         const filled = (qx, qy) => {
           const cx = colIdx + Math.floor(qx / 2),
@@ -566,38 +555,34 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
           if (rightOpen) outlinePath.rect(x1 - u, y0, u, y1 - y0);
           // Outside corners (open on both sides and across), rounded like a full block's,
           // including the step's own corner in the middle of a stair.
-          if (rounding) {
-            const corners = [
-              [upOpen && leftOpen && !filled(qx - 1, qy - 1), x0, y0, 1, 1, qx === 0 && qy === 0],
-              [upOpen && rightOpen && !filled(qx + 1, qy - 1), x1 - u, y0, -1, 1, qx === 1 && qy === 0],
-              [downOpen && leftOpen && !filled(qx - 1, qy + 1), x0, y1 - u, 1, -1, qx === 0 && qy === 1],
-              [downOpen && rightOpen && !filled(qx + 1, qy + 1), x1 - u, y1 - u, -1, -1, qx === 1 && qy === 1]
-            ];
-            for (const [open, cx, cy, dx, dy, cellCorner] of corners) {
-              if (!open) continue;
-              if (cornerCount + 4 > edgePass._cornerBuf.length) {
-                const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
-                newBuf.set(edgePass._cornerBuf);
-                edgePass._cornerBuf = newBuf;
-              }
-              edgePass._cornerBuf[cornerCount++] = cx;
-              edgePass._cornerBuf[cornerCount++] = cy;
-              edgePass._cornerBuf[cornerCount++] = dx;
-              edgePass._cornerBuf[cornerCount++] = dy;
-              // A cut at the cell's own corner shows what's behind: the wall, as for full blocks.
-              if (cellCorner) r.drawWallBehindCorner(mainCtx, x, y, cx, cy, dx, dy, u);
+          const corners = [
+            [upOpen && leftOpen && !filled(qx - 1, qy - 1), x0, y0, 1, 1, qx === 0 && qy === 0],
+            [upOpen && rightOpen && !filled(qx + 1, qy - 1), x1 - u, y0, -1, 1, qx === 1 && qy === 0],
+            [downOpen && leftOpen && !filled(qx - 1, qy + 1), x0, y1 - u, 1, -1, qx === 0 && qy === 1],
+            [downOpen && rightOpen && !filled(qx + 1, qy + 1), x1 - u, y1 - u, -1, -1, qx === 1 && qy === 1]
+          ];
+          for (const [open, cx, cy, dx, dy, cellCorner] of corners) {
+            if (!open) continue;
+            if (cornerCount + 4 > edgePass._cornerBuf.length) {
+              const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+              newBuf.set(edgePass._cornerBuf);
+              edgePass._cornerBuf = newBuf;
             }
+            edgePass._cornerBuf[cornerCount++] = cx;
+            edgePass._cornerBuf[cornerCount++] = cy;
+            edgePass._cornerBuf[cornerCount++] = dx;
+            edgePass._cornerBuf[cornerCount++] = dy;
+            // A cut at the cell's own corner shows what's behind: the wall, as for full blocks.
+            if (cellCorner) r.drawWallBehindCorner(mainCtx, x, y, cx, cy, dx, dy, u);
           }
           // Soft shadows on the wall below and to the right, as full blocks cast.
-          if (shadowPath) {
-            if (qy === 1 && downOpen && !r.isOpenSky(x, y + 1) && r.hasBackdrop(x, y + 1)) {
-              shadowPath.rect(x0, ey, x1 - x0, sh);
-              hasShadows = true;
-            }
-            if (qx === 1 && rightOpen && !r.isOpenSky(x + 1, y) && r.hasBackdrop(x + 1, y)) {
-              shadowPath.rect(ex, y0, sh, y1 - y0);
-              hasShadows = true;
-            }
+          if (qy === 1 && downOpen && !r.isOpenSky(x, y + 1) && r.hasBackdrop(x, y + 1)) {
+            shadowPath.rect(x0, ey, x1 - x0, sh);
+            hasShadows = true;
+          }
+          if (qx === 1 && rightOpen && !r.isOpenSky(x + 1, y) && r.hasBackdrop(x + 1, y)) {
+            shadowPath.rect(ex, y0, sh, y1 - y0);
+            hasShadows = true;
           }
         }
         hasOutlines = true;
@@ -616,47 +601,41 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         const topOpen = isTopSlab ? upShape === 0 || upShape === 3 : true;
         const bottomOpen = isTopSlab ? true : downShape === 0 || downShape === 2;
 
-        if (seams) {
-          layerCtx.fillStyle = SEAM;
-          layerCtx.fillRect(sx, slabY, w, u);
-          layerCtx.fillRect(sx, slabY + slabH - u, w, u);
-          layerCtx.fillRect(sx, slabY + u, u, slabH - 2 * u);
-          layerCtx.fillRect(ex - u, slabY + u, u, slabH - 2 * u);
-          layerCtx.fillStyle = CORNER;
-          layerCtx.fillRect(sx, slabY, u, u);
-          layerCtx.fillRect(ex - u, slabY, u, u);
-          layerCtx.fillRect(sx, slabY + slabH - u, u, u);
-          layerCtx.fillRect(ex - u, slabY + slabH - u, u, u);
-        }
+        layerCtx.fillStyle = SEAM;
+        layerCtx.fillRect(sx, slabY, w, u);
+        layerCtx.fillRect(sx, slabY + slabH - u, w, u);
+        layerCtx.fillRect(sx, slabY + u, u, slabH - 2 * u);
+        layerCtx.fillRect(ex - u, slabY + u, u, slabH - 2 * u);
+        layerCtx.fillStyle = CORNER;
+        layerCtx.fillRect(sx, slabY, u, u);
+        layerCtx.fillRect(ex - u, slabY, u, u);
+        layerCtx.fillRect(sx, slabY + slabH - u, u, u);
+        layerCtx.fillRect(ex - u, slabY + slabH - u, u, u);
 
-        if (outlinePath) {
-          if (topOpen) outlinePath.rect(sx, slabY, w, u);
-          if (bottomOpen) outlinePath.rect(sx, slabY + slabH - u, w, u);
-          if (leftOpen) outlinePath.rect(sx, slabY, u, slabH);
-          if (rightOpen) outlinePath.rect(ex - u, slabY, u, slabH);
-          hasOutlines = true;
-        }
+        if (topOpen) outlinePath.rect(sx, slabY, w, u);
+        if (bottomOpen) outlinePath.rect(sx, slabY + slabH - u, w, u);
+        if (leftOpen) outlinePath.rect(sx, slabY, u, slabH);
+        if (rightOpen) outlinePath.rect(ex - u, slabY, u, slabH);
+        hasOutlines = true;
 
-        if (rounding) {
-          const slabCorners = [
-            [topOpen && leftOpen, sx, slabY, 1, 1],
-            [topOpen && rightOpen, ex - u, slabY, -1, 1],
-            [bottomOpen && leftOpen, sx, slabY + slabH - u, 1, -1],
-            [bottomOpen && rightOpen, ex - u, slabY + slabH - u, -1, -1]
-          ];
-          for (let i = 0; i < 4; i++) {
-            const [openC, cx, cy, dx, dy] = slabCorners[i];
-            if (!openC) continue;
-            if (cornerCount + 4 > edgePass._cornerBuf.length) {
-              const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
-              newBuf.set(edgePass._cornerBuf);
-              edgePass._cornerBuf = newBuf;
-            }
-            edgePass._cornerBuf[cornerCount++] = cx;
-            edgePass._cornerBuf[cornerCount++] = cy;
-            edgePass._cornerBuf[cornerCount++] = dx;
-            edgePass._cornerBuf[cornerCount++] = dy;
+        const slabCorners = [
+          [topOpen && leftOpen, sx, slabY, 1, 1],
+          [topOpen && rightOpen, ex - u, slabY, -1, 1],
+          [bottomOpen && leftOpen, sx, slabY + slabH - u, 1, -1],
+          [bottomOpen && rightOpen, ex - u, slabY + slabH - u, -1, -1]
+        ];
+        for (let i = 0; i < 4; i++) {
+          const [openC, cx, cy, dx, dy] = slabCorners[i];
+          if (!openC) continue;
+          if (cornerCount + 4 > edgePass._cornerBuf.length) {
+            const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+            newBuf.set(edgePass._cornerBuf);
+            edgePass._cornerBuf = newBuf;
           }
+          edgePass._cornerBuf[cornerCount++] = cx;
+          edgePass._cornerBuf[cornerCount++] = cy;
+          edgePass._cornerBuf[cornerCount++] = dx;
+          edgePass._cornerBuf[cornerCount++] = dy;
         }
         continue;
       }
@@ -675,7 +654,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
 
       // A trunk bent by the wind: its outline moves with each row of it.
       const bend = r.trunkOffsetFn(x, y, w);
-      if (bend && outlinePath) {
+      if (bend) {
         const top = bend(0),
           bottom = bend(15);
         if (up) outlinePath.rect(sx + top, sy, w, u);
@@ -695,7 +674,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
           row = end;
         }
         hasOutlines = true;
-      } else if (outlinePath) {
+      } else {
         if (up) outlinePath.rect(sx, sy, w, u);
         if (down) outlinePath.rect(sx, ey - u, w, u);
 
@@ -719,49 +698,45 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
       }
 
       // Round open corners
-      if (rounding) {
-        const leftTopOpen = left || leftShape === 2;
-        const rightTopOpen = right || rightShape === 2;
-        const corners = [
-          [up && leftTopOpen, sx, sy, 1, 1],
-          [up && rightTopOpen, ex - u, sy, -1, 1],
-          [down && left, sx, ey - u, 1, -1],
-          [down && right, ex - u, ey - u, -1, -1]
-        ];
-        for (let i = 0; i < 4; i++) {
-          const [open, cx, cy, dx, dy] = corners[i];
-          if (!open) continue;
-          // Against a placed background block the corner stays square: cutting it would show
-          // the sky through the gap between the two.
-          if (placedBg(x - dx, y) || placedBg(x, y - dy)) continue;
-          // A trunk's corner against the ground (or the ground's against a trunk) stays square too.
-          const other = (i) => shapeGrid[i] !== 0 && !sameGroup(selfIdx, i);
-          if (other(selfIdx - dx) || other(selfIdx - dy * gridW)) continue;
-          if (cornerCount + 4 > edgePass._cornerBuf.length) {
-            const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
-            newBuf.set(edgePass._cornerBuf);
-            edgePass._cornerBuf = newBuf;
-          }
-          const cornerX = bend ? cx + bend(dy > 0 ? 0 : 15) : cx;
-          edgePass._cornerBuf[cornerCount++] = cornerX;
-          edgePass._cornerBuf[cornerCount++] = cy;
-          edgePass._cornerBuf[cornerCount++] = dx;
-          edgePass._cornerBuf[cornerCount++] = dy;
-          // Nothing is drawn behind a full block, so the cut corner would show the sky even
-          // deep underground: put the wall that's behind it there.
-          r.drawWallBehindCorner(mainCtx, x, y, cornerX, cy, dx, dy, u);
+      const leftTopOpen = left || leftShape === 2;
+      const rightTopOpen = right || rightShape === 2;
+      const corners = [
+        [up && leftTopOpen, sx, sy, 1, 1],
+        [up && rightTopOpen, ex - u, sy, -1, 1],
+        [down && left, sx, ey - u, 1, -1],
+        [down && right, ex - u, ey - u, -1, -1]
+      ];
+      for (let i = 0; i < 4; i++) {
+        const [open, cx, cy, dx, dy] = corners[i];
+        if (!open) continue;
+        // Against a placed background block the corner stays square: cutting it would show
+        // the sky through the gap between the two.
+        if (placedBg(x - dx, y) || placedBg(x, y - dy)) continue;
+        // A trunk's corner against the ground (or the ground's against a trunk) stays square too.
+        const other = (i) => shapeGrid[i] !== 0 && !sameGroup(selfIdx, i);
+        if (other(selfIdx - dx) || other(selfIdx - dy * gridW)) continue;
+        if (cornerCount + 4 > edgePass._cornerBuf.length) {
+          const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+          newBuf.set(edgePass._cornerBuf);
+          edgePass._cornerBuf = newBuf;
         }
+        const cornerX = bend ? cx + bend(dy > 0 ? 0 : 15) : cx;
+        edgePass._cornerBuf[cornerCount++] = cornerX;
+        edgePass._cornerBuf[cornerCount++] = cy;
+        edgePass._cornerBuf[cornerCount++] = dx;
+        edgePass._cornerBuf[cornerCount++] = dy;
+        // Nothing is drawn behind a full block, so the cut corner would show the sky even
+        // deep underground: put the wall that's behind it there.
+        r.drawWallBehindCorner(mainCtx, x, y, cornerX, cy, dx, dy, u);
       }
 
-      if (shadowPath) {
-        if (down && !r.isOpenSky(x, y + 1) && r.hasBackdrop(x, y + 1)) {
-          shadowPath.rect(sx, ey, w, sh);
-          hasShadows = true;
-        }
-        if (right && !r.isOpenSky(x + 1, y) && r.hasBackdrop(x + 1, y)) {
-          shadowPath.rect(ex, sy, sh, h);
-          hasShadows = true;
-        }
+      if (down && !r.isOpenSky(x, y + 1) && r.hasBackdrop(x, y + 1)) {
+        shadowPath.rect(sx, ey, w, sh);
+        hasShadows = true;
+      }
+      if (right && !r.isOpenSky(x + 1, y) && r.hasBackdrop(x + 1, y)) {
+        shadowPath.rect(ex, sy, sh, h);
+        hasShadows = true;
       }
     }
   }
@@ -773,19 +748,17 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
   }
 
   // 4. Round the open corners: cut the corner pixel, darken the one inside it
-  if (rounding && cornerCount > 0) {
+  if (cornerCount > 0) {
     const cBuf = edgePass._cornerBuf;
     for (let i = 0; i < cornerCount; i += 4) {
       layerCtx.clearRect(cBuf[i], cBuf[i + 1], u, u);
     }
-    if (outlines) {
-      const innerOutlinePath = new Path2D();
-      for (let i = 0; i < cornerCount; i += 4) {
-        innerOutlinePath.rect(cBuf[i] + cBuf[i + 2] * u, cBuf[i + 1] + cBuf[i + 3] * u, u, u);
-      }
-      layerCtx.fillStyle = OUTLINE;
-      layerCtx.fill(innerOutlinePath);
+    const innerOutlinePath = new Path2D();
+    for (let i = 0; i < cornerCount; i += 4) {
+      innerOutlinePath.rect(cBuf[i] + cBuf[i + 2] * u, cBuf[i + 1] + cBuf[i + 3] * u, u, u);
     }
+    layerCtx.fillStyle = OUTLINE;
+    layerCtx.fill(innerOutlinePath);
   }
 
   // 5. Wall shadows cast on mainCtx

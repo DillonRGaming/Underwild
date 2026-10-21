@@ -10,7 +10,6 @@ export default {
   variants: { count: 3, key: 'v' }, // looks: textures shell_1..3, picked by meta.v
   shape: 'full',
   solid: false,
-  color: '#ecd6be',
   hardness: 0.1,
   ...plant({ growsOn: ['lakebed', 'land'] })
 };

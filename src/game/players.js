@@ -96,9 +96,8 @@ export function localPlayerState() {
   };
 }
 
-// The four ways the skin viewer can face, and where each part's face is on a 64x64 skin
-// ([x, y] of the part's face; legacy 64x32 skins mirror the right limbs for the left ones).
-export const SKIN_VIEWS = ['Front', 'Right', 'Back', 'Left'];
+// Where each part's face is on a 64x64 skin, for each way a player can face ([x, y] of the
+// part's face; legacy 64x32 skins mirror the right limbs for the left ones).
 const FACES = {
   Front: { head: [8, 8], hat: [40, 8], body: [20, 20], rArm: [44, 20], lArm: [36, 52], rLeg: [4, 20], lLeg: [20, 52] },
   Back: { head: [24, 8], hat: [56, 8], body: [32, 20], rArm: [52, 20], lArm: [44, 52], rLeg: [12, 20], lLeg: [28, 52] },

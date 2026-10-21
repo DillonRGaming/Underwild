@@ -78,7 +78,7 @@ export function switchMusicTrack(trackId) {
   game.currentTrackId = trackId;
   prefs.set('underwild_musicTrack', trackId);
   setupBackgroundMusic();
-  startBackgroundMusic(MUSIC_SWITCH_FADE_MS);
+  if (musicAllowed()) startBackgroundMusic(MUSIC_SWITCH_FADE_MS);
 }
 
 export function updateMusicTrackSelection() {
@@ -108,7 +108,50 @@ function handleMusicEnd() {
   }, 2000);
 }
 
+// Music plays while you're playing a world, and in menus (the title screen, the pause menu)
+// only when "Music in Menus" is on.
+function musicAllowed() {
+  return (game.inWorld && !game.gamePaused) || game.menuMusic;
+}
+
+export function stopBackgroundMusic(fadeMs = 1000) {
+  if (game.musicLoopTimeout) {
+    clearTimeout(game.musicLoopTimeout);
+    game.musicLoopTimeout = null;
+  }
+  if (!game.isMusicPlaying || !game.backgroundMusic) return;
+  game.isMusicPlaying = false;
+  const track = game.backgroundMusic;
+  const pause = () => {
+    if (!game.isMusicPlaying && game.backgroundMusic === track) track.pause();
+  };
+  fadeMusic(0, fadeMs).then(pause);
+  // The fade runs on animation frames, which stop while the window is hidden: this makes
+  // sure it still goes quiet.
+  setTimeout(pause, fadeMs + 200);
+}
+
+// Call when entering or leaving a world (or pausing: see syncMusic); starts or stops the
+// music to match. `fadeMs`: how long it takes to fade in.
+export function setMusicContext(inWorld, fadeMs = inWorld ? 10000 : 3000) {
+  game.inWorld = inWorld;
+  if (musicAllowed()) startBackgroundMusic(fadeMs);
+  else stopBackgroundMusic();
+}
+
+// After pausing or resuming: the pause menu counts as a menu.
+export function syncMusic() {
+  setMusicContext(game.inWorld, 1500);
+}
+
+export function setMenuMusic(on) {
+  game.menuMusic = !!on;
+  prefs.set('underwild_menuMusic', game.menuMusic);
+  setMusicContext(game.inWorld);
+}
+
 export function startBackgroundMusic(fadeMs = 10000) {
+  if (!musicAllowed()) return;
   if (!game.backgroundMusic) setupBackgroundMusic();
   if (game.isMusicPlaying) return;
   const track = game.backgroundMusic;
@@ -129,6 +172,13 @@ export function loadAudioSettings() {
   const savedMasterVolume = prefs.get('underwild_masterVolume');
   const savedMusicVolume = prefs.get('underwild_musicVolume');
   const savedMusicTrack = prefs.get('underwild_musicTrack');
+  const savedMenuMusic = prefs.get('underwild_menuMusic');
+
+  if (savedMenuMusic !== null) game.menuMusic = savedMenuMusic === true || savedMenuMusic === 'true';
+  document.querySelectorAll('[data-action^="menu-music-"]').forEach((b) => {
+    if (b.dataset.action === (game.menuMusic ? 'menu-music-on' : 'menu-music-off')) b.dataset.selected = 'true';
+    else b.removeAttribute('data-selected');
+  });
 
   if (savedMasterVolume !== null) {
     game.masterVolume = parseInt(savedMasterVolume, 10);

@@ -14,7 +14,6 @@ export default {
   growsGrass: 'grass_stairs', // grass creeping onto it turns it into this
   shape: 'stairs',
   solid: true,
-  color: '#7a4b27',
   hardness: 2.0,
   isSolid(meta) {
     return true;

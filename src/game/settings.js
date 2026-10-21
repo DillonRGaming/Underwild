@@ -1,7 +1,5 @@
-// Options: themes, graphics, zoom and GUI scale, keybinds, the app window and the menu background.
+// Options: graphics, zoom and GUI scale, keybinds, the app window and the menu background.
 import { PerfOverlay } from '../ui/perfOverlay.js';
-import { refreshIcons } from '../ui/iconPolish.js';
-import { POLISH_OPTIONS, polishState, setPolish, polishOn, loadPolish } from '../core/polishSettings.js';
 import { game, prefs } from './state.js';
 import { showHudNote } from '../ui/chatLog.js';
 import { syncCreativeSort } from '../ui/inventoryUI.js';
@@ -117,7 +115,7 @@ export function saveBackgroundConfig() {
   prefs.set('underwild_background_blocks', JSON.stringify(game.backgroundBlocks));
   if (game.renderer) {
     game.renderer.backgroundBlocks = game.backgroundBlocks;
-    game.renderer.menuBackgroundPatterns = null;
+    game.renderer._menuBgKey = null;
   }
 }
 
@@ -154,7 +152,6 @@ export const DEFAULT_KEYBINDS = Object.freeze({
   background: 'KeyZ',
   rotate: 'KeyR',
   flip: 'KeyF',
-  polish: 'KeyO',
   outline: 'KeyP',
   zoomOut: 'Minus',
   zoomIn: 'Equal',
@@ -165,28 +162,8 @@ export const DEFAULT_KEYBINDS = Object.freeze({
 
 export const keybinds = { ...DEFAULT_KEYBINDS };
 
-const THEMES = {
-  minimal: { name: 'Minimal', stylesheet: 'themes/minimal/theme.css' },
-  java: { name: 'Java Edition', stylesheet: 'themes/java/theme.css' },
-  modern: { name: 'Modern', stylesheet: 'themes/modern/theme.css' },
-  bedrock: { name: 'Bedrock Edition', stylesheet: 'themes/bedrock/theme.css' }
-};
-
-export const DEFAULT_THEME = 'minimal';
-
-export function applyTheme(themeId) {
-  const theme = THEMES[themeId] || THEMES[DEFAULT_THEME];
-  game.currentTheme = THEMES[themeId] ? themeId : DEFAULT_THEME;
-  const link = document.getElementById('themeStylesheet');
-  if (link && !link.href.endsWith(theme.stylesheet)) link.href = theme.stylesheet;
-  document.documentElement.dataset.theme = game.currentTheme;
-  selectSettingButton('theme', `theme-${game.currentTheme}`);
-}
-
 const SETTING_GROUPS = {
-  theme: Object.keys(THEMES).map((id) => `theme-${id}`),
   renderDistance: ['render-tiny', 'render-short', 'render-normal', 'render-far', 'render-extreme'],
-  textureQuality: ['texture-fast', 'texture-fancy'],
   fallingLeaves: ['leaves-on', 'leaves-off'],
   autoJump: ['auto-jump-on', 'auto-jump-off'],
   perfOverlay: ['perf-overlay-on', 'perf-overlay-off']
@@ -215,72 +192,24 @@ export function saveGameSettings() {
     JSON.stringify({
       renderDistance: game.renderDistance,
       renderChunks: game.chunkRenderDistance,
-      textureQuality: game.textureQuality,
       renderFallingLeaves: game.renderFallingLeaves,
-      autoJump: game.autoJump,
-      theme: game.currentTheme
+      autoJump: game.autoJump
     })
   );
 }
 
-// Graphics > Polish: a master switch and an ON/OFF pair per effect.
-function buildPolishOptions() {
-  const box = document.getElementById('polishOptions');
-  if (!box) return;
-  const rows = [['enabled', 'Polish (all)'], ...POLISH_OPTIONS];
-  box.innerHTML = rows
-    .map(
-      ([key, label]) => `
-    <div class="option-group" data-polish-row="${key}">
-      <label>${label}:</label>
-      <div class="button-group">
-        <button class="minecraft-button small" data-polish="${key}" data-value="on">ON</button>
-        <button class="minecraft-button small" data-polish="${key}" data-value="off">OFF</button>
-      </div>
-    </div>`
-    )
-    .join('');
-  box.addEventListener('click', (e) => {
-    const button = e.target.closest('[data-polish]');
-    if (!button) return;
-    setPolish(button.dataset.polish, button.dataset.value === 'on');
-    prefs.set('underwild_polish', JSON.stringify(polishState()));
-    syncPolishOptions();
-    refreshIcons();
-  });
-  syncPolishOptions();
-}
-
-export function syncPolishOptions() {
-  const state = polishState();
-  document.body.classList.toggle('polish-ui-corners', polishOn('uiCorners'));
-  document.querySelectorAll('[data-polish]').forEach((b) => {
-    const on = state[b.dataset.polish] !== false;
-    if ((b.dataset.value === 'on') === on) b.setAttribute('data-selected', 'true');
-    else b.removeAttribute('data-selected');
-  });
-  // The individual effects only matter while the master switch is on.
-  document.querySelectorAll('[data-polish-row]').forEach((row) => {
-    if (row.dataset.polishRow !== 'enabled') row.classList.toggle('polish-disabled', !state.enabled);
-  });
-}
-
 export function loadGameSettings() {
+  prefs.delete('underwild_polish'); // the old polish toggles, now always on
   game.creativeSortMode = prefs.get('creativeSort') === 'type' ? 'type' : 'material';
   game.creativeCategoriesCache = null;
   game.renderedCreativeTab = null;
   syncCreativeSort();
-  loadPolish(prefs.getJSON('underwild_polish', {}));
-  buildPolishOptions();
   try {
     const saved = JSON.parse(prefs.get('underwild_gameSettings') || '{}');
     if (RENDER_DISTANCE_CHUNKS[saved.renderDistance]) game.renderDistance = saved.renderDistance;
-    if (saved.textureQuality === 'fast' || saved.textureQuality === 'fancy') game.textureQuality = saved.textureQuality;
     if (typeof saved.renderFallingLeaves === 'boolean') game.renderFallingLeaves = saved.renderFallingLeaves;
     if (typeof saved.autoJump === 'boolean') game.autoJump = saved.autoJump;
-    if (THEMES[saved.theme]) game.currentTheme = saved.theme;
   } catch (e) {}
-  applyTheme(game.currentTheme);
   let savedChunks = null;
   try {
     savedChunks = JSON.parse(prefs.get('underwild_gameSettings') || '{}').renderChunks;
@@ -288,7 +217,6 @@ export function loadGameSettings() {
   // The exact distance set with the keys, if there is one; otherwise the menu's choice.
   setRenderDistance(Number.isFinite(savedChunks) ? savedChunks : RENDER_DISTANCE_CHUNKS[game.renderDistance]);
   selectSettingButton('renderDistance', `render-${game.renderDistance}`);
-  selectSettingButton('textureQuality', `texture-${game.textureQuality}`);
   selectSettingButton('fallingLeaves', game.renderFallingLeaves ? 'leaves-on' : 'leaves-off');
   selectSettingButton('autoJump', game.autoJump ? 'auto-jump-on' : 'auto-jump-off');
   perfOverlay.setVisible(prefs.getBool('perfOverlay', false));
@@ -307,7 +235,8 @@ export function loadKeybinds() {
   const saved = prefs.get('underwild_keybinds');
   if (saved) {
     try {
-      Object.assign(keybinds, JSON.parse(saved));
+      // Only keys the game still has (old saves may carry removed ones, like Toggle Polish).
+      for (const [action, code] of Object.entries(JSON.parse(saved))) if (action in DEFAULT_KEYBINDS) keybinds[action] = code;
     } catch (e) {}
   }
 }

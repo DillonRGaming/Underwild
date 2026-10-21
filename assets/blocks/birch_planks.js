@@ -10,7 +10,6 @@ export default {
     { shapeless: { birch_log: 1 }, count: 4 }
   ],
   tool: 'axe', // mined fastest with this
-  color: '#d4c89f',
   shape: 'full',
   solid: true,
   transparent: false,

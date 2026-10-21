@@ -5,7 +5,6 @@ export default {
   kind: 'ore',
   tab: 'materials',
   tool: 'pickaxe', // mined fastest with this
-  color: '#262626',
   shape: 'full',
   solid: true,
   transparent: false,

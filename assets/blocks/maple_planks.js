@@ -12,6 +12,5 @@ export default {
   tool: 'axe', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#D2691E',
   hardness: 2
 };

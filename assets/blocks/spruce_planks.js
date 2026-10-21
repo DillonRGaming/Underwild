@@ -10,7 +10,6 @@ export default {
     { shapeless: { spruce_log: 1 }, count: 4 }
   ],
   tool: 'axe', // mined fastest with this
-  color: '#8a6e3d',
   shape: 'full',
   solid: true,
   transparent: false,

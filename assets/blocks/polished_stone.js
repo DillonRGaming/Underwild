@@ -11,6 +11,5 @@ export default {
   tool: 'pickaxe', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#888888',
   hardness: 8.0
 };

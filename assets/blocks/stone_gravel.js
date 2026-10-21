@@ -13,7 +13,6 @@ export default {
   tool: 'pickaxe', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#8f8f8f',
   hardness: 1.5,
   isSolid(meta) {
     return meta?.layer !== 'bg';

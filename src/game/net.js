@@ -66,7 +66,7 @@ export const multiplayer = new Multiplayer({
     saveManager.markDirty();
     if (game.openContainer && game.openContainer.tileY === y && (game.openContainer.tileX === x || game.openContainer.ownerX === x)) {
       const blockId = game.world.getBlockId(game.openContainer.tileX, game.openContainer.tileY);
-      if (!isChest(blockId) && blockId !== 'crafting_table' && blockId !== 'furnace' && blockId !== 'forging_table') closeInventory();
+      if (!isChest(blockId) && !registry.get(blockId)?.opens) closeInventory();
     }
   },
   containerSignature: () => {

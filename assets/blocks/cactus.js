@@ -9,6 +9,5 @@ export default {
   tool: 'axe',
   shape: 'full',
   solid: true,
-  color: '#56963e',
   hardness: 1
 };

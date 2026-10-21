@@ -1,7 +1,7 @@
 import { rockMeta } from '../../src/logic/biomes.js';
 import { plant } from './plant.js';
 
-export default {
+const block = {
   id: 'lunar_pebble',
   displayName: 'Lunar Pebble',
   material: 'plant',
@@ -11,7 +11,9 @@ export default {
   placeMeta: () => rockMeta(Math.random(), Math.random(), Math.random()),
   shape: 'full',
   solid: false,
-  color: '#acafb4',
   hardness: 0.3,
   ...plant({ growsOn: ['moon', 'lunar_rock', 'stone', 'land', 'beach'] })
 };
+
+// Its old name, kept so older worlds still load (hidden from menus).
+export default [block, { ...block, id: 'lunarstone_pebble', hidden: true, drop: 'lunar_pebble', recipes: [] }];

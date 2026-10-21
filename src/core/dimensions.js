@@ -67,6 +67,9 @@ registerDimension({
   gravityMultiplier: 1.0,
   hasClouds: true,
   hasHills: true,
+  hasWeather: true, // rain, snow, storms
+  hasFog: true,
+  hasGrass: true,
   starsAlwaysVisible: false,
   seedOffset: 0,
   blocks: {
@@ -89,8 +92,15 @@ registerDimension({
   gravityMultiplier: 0.2, // Low lunar gravity (1/5 Earth)
   hasClouds: false, // Vacuum / no clouds
   hasHills: false, // No earthly hills
+  hasWeather: false,
+  hasFog: false,
+  hasGrass: false,
   starsAlwaysVisible: true, // Stars always shine in the black sky
   skyColor: [0, 0, 0], // Pure black space sky
+  skyPlanet: true, // the Earth hangs in the sky, with a glow along the horizon
+  fixedDaylight: { sunVisible: true, travelT: 0.5, base: 0.9, ambient: 0.55 }, // no day and night
+  wallBlock: 'lunar_rock', // behind dug-out ground
+  wallColor: 'rgb(145, 150, 160)', // the wall before its texture loads
   ambientLight: 0.25,
   seedOffset: 7777,
   blocks: {
@@ -116,8 +126,15 @@ registerDimension({
   gravityMultiplier: 0.38, // 38% Earth gravity (~0.38g)
   hasClouds: false, // Thin atmosphere / no earth clouds
   hasHills: true, // Martian rusty dunes/ridges
+  hasWeather: false,
+  hasFog: true,
+  hasGrass: false,
   starsAlwaysVisible: false, // Visible during night, dim reddish butterscotch during day
+  starsWhenDark: true,
   skyColor: [195, 115, 75], // Butterscotch / dusty salmon-orange Martian sky
+  skyGradient: true,
+  wallBlock: 'mars_sandstone',
+  wallColor: 'rgb(160, 85, 45)',
   ambientLight: 0.32,
   seedOffset: 9999,
   blocks: {

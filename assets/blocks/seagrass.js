@@ -10,7 +10,6 @@ export default {
   variants: { count: 3, key: 'v' }, // looks: textures seagrass_1..3, picked by meta.v
   shape: 'full',
   solid: false,
-  color: '#2e8042',
   hardness: 0.1,
   ...plant({ growsOn: ['lakebed'], windSway: 0.6 })
 };

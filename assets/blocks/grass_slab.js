@@ -15,7 +15,6 @@ export default {
   biomeTint: true, // green pixels take the local biome's grass colour
   shape: 'slab',
   solid: true,
-  color: '#5aa84f',
   hardness: 2.5,
   isSolid(meta) {
     return true;

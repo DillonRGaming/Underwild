@@ -9,7 +9,6 @@ export default {
   trunk: true, // holds leaves up (no decay) and sways in the wind
   shape: 'full',
   solid: true,
-  color: '#d9d9d9',
   hardness: 2,
   isSolid(meta) {
     return meta?.layer !== 'bg';

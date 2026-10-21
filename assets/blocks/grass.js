@@ -12,7 +12,6 @@ export default {
   soil: ['land'], // what plants can grow on it (see plant.js)
   shape: 'full',
   solid: true,
-  color: '#5aa84f',
   hardness: 2.5,
   tick(world, x, y, meta) {
     grassTick(world, x, y, meta, this.id);

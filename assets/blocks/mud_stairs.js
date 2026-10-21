@@ -11,7 +11,6 @@ export default {
   tool: 'shovel', // mined fastest with this
   shape: 'stairs',
   solid: true,
-  color: '#6a3b17',
   hardness: 1.8,
   isSolid(meta) {
     return true;

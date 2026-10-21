@@ -234,7 +234,7 @@ export class World {
     this._ghostCells.delete(chunkX);
     // Fresh ground: grow / kill grass now rather than over the first minutes of play. Only
     // the edge column of a neighbour that was already generated earlier gets looked at too.
-    if (!chunk.dirty && this.dimension?.functions?.canSpreadGrass !== false && this.worldType !== 'moon') {
+    if (!chunk.dirty && this.dimension?.functions?.canSpreadGrass !== false) {
       const startX = chunkX * this.chunkSize;
       settleGrass(this, startX - 1, startX + this.chunkSize);
     }

@@ -1,7 +1,6 @@
 // Gives every 16x16 block/item icon in the UI (hotbar, inventory, creative menu, /give
 // suggestions...) the same polish as the world: full blocks get a shaded edge and darker
 // corner pixels, everything else a dark 1-pixel outline.
-import { polishOn } from '../core/polishSettings.js';
 
 const OUT = [14, 12, 12];
 const made = new Set(); // URLs we produced, never reprocessed
@@ -39,13 +38,11 @@ function polish(src) {
               d.data[k + 1] *= f;
               d.data[k + 2] *= f;
             }
-          // If rounding is on, soften open corners
-          if (polishOn('rounding')) {
-            d.data[(0 * 16 + 0) * 4 + 3] = 0;
-            d.data[(0 * 16 + 15) * 4 + 3] = 0;
-            d.data[(15 * 16 + 0) * 4 + 3] = 0;
-            d.data[(15 * 16 + 15) * 4 + 3] = 0;
-          }
+          // Rounded corners, like the blocks in the world.
+          d.data[(0 * 16 + 0) * 4 + 3] = 0;
+          d.data[(0 * 16 + 15) * 4 + 3] = 0;
+          d.data[(15 * 16 + 0) * 4 + 3] = 0;
+          d.data[(15 * 16 + 15) * 4 + 3] = 0;
           x.putImageData(d, 0, 0);
           out = c;
         } else {
@@ -96,7 +93,6 @@ function wanted(el) {
 }
 
 function apply(el) {
-  if (!polishOn('icons')) return;
   const src = wanted(el);
   if (!src) return;
   // Already made: swapped in now, before the plain one is ever shown.
@@ -112,16 +108,6 @@ function apply(el) {
       el.setAttribute('src', url);
     }
   });
-}
-
-// After the setting changes: polish every icon, or put the plain ones back.
-export function refreshIcons() {
-  if (polishOn('icons')) scan(document.body);
-  else
-    document.querySelectorAll('img[data-raw-src]').forEach((el) => {
-      el.setAttribute('src', el.dataset.rawSrc);
-      delete el.dataset.rawSrc;
-    });
 }
 
 function scan(root) {

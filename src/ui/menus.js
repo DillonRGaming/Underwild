@@ -18,7 +18,6 @@ import {
   saveBackgroundConfig,
   DEFAULT_KEYBINDS,
   keybinds,
-  applyTheme,
   setPerfOverlay,
   saveGameSettings,
   saveKeybinds,
@@ -26,12 +25,16 @@ import {
   RENDER_DISTANCE_CHUNKS,
   setRenderDistance
 } from '../game/settings.js';
-import { musicTracks, updateMusicVolume, switchMusicTrack, updateMusicTrackSelection, startBackgroundMusic } from './music.js';
+import { isTouchDevice } from './touchControls.js';
+import { closeCommandMenu } from './commandMenu.js';
+import { stopRecording } from './cameraCapture.js';
+import { musicTracks, updateMusicVolume, switchMusicTrack, updateMusicTrackSelection, setMusicContext, setMenuMusic, syncMusic } from './music.js';
 import { game, leafParticles, explosionFX, primedExplosives, tpVisited, saveManager, prefs } from '../game/state.js';
 import { multiplayer } from '../game/net.js';
-import { playerName, applyLocalSkin, drawSkinView, SKIN_VIEWS, savedSkins, setSavedSkins, playerSkin, playerColor, setPlayerColor, setPlayerName, NAMED_COLORS } from '../game/players.js';
+import { playerName, applyLocalSkin, drawSkinView, savedSkins, setSavedSkins, playerSkin, playerColor, setPlayerColor, setPlayerName, NAMED_COLORS } from '../game/players.js';
 import { showToast } from './chatLog.js';
 import { registry } from '../game/content.js';
+import { warmIcons } from './iconPolish.js';
 import { startMenuLoop, getRendererUI, initializeGameEngine } from '../game/loop.js';
 import {
   findSurfaceY,
@@ -51,6 +54,16 @@ function textSeed(text) {
   let h = 0;
   for (let i = 0; i < text.length; i++) h = (Math.imul(h, 31) + text.charCodeAt(i)) | 0;
   return Math.abs(h) % 2147483647;
+}
+
+// Shows each < value > picker's setting, and greys out an arrow at its limit.
+function syncSteppers() {
+  document.querySelectorAll('.stepper').forEach((stepper) => {
+    const value = game[stepper.dataset.stepper];
+    stepper.querySelector('.stepper-value').textContent = value;
+    stepper.querySelector('[data-step="-1"]').disabled = value <= Number(stepper.dataset.min);
+    stepper.querySelector('[data-step="1"]').disabled = value >= Number(stepper.dataset.max);
+  });
 }
 
 export class MenuManager {
@@ -75,7 +88,19 @@ export class MenuManager {
     this.updateVersionNumber();
   }
 
+  // The textures and icons a world needs, loaded once. Started as soon as you head towards a
+  // world (Single Player, Multiplayer), so entering one rarely has to wait for them.
+  prepareWorldAssets() {
+    if (!this._worldAssets) {
+      this._worldAssets = game.renderer.loadWorldTextures();
+      // Every block and item icon, polished before the inventory is first opened.
+      warmIcons([...registry.entries()].filter(([, d]) => !d.hidden).map(([id]) => `assets/textures/${id}.png`));
+    }
+    return this._worldAssets;
+  }
+
   showMenu(menuId) {
+    if (menuId === 'singlePlayerMenu' || menuId === 'multiplayerMenu') this.prepareWorldAssets();
     document.querySelectorAll('.menu-container').forEach((menu) => menu.classList.add('hidden'));
     const menu = menuId && document.getElementById(menuId);
     if (menu) menu.classList.remove('hidden');
@@ -189,12 +214,6 @@ export class MenuManager {
       case 'player-delete-skin':
         this.deleteSelectedSkin();
         break;
-      case 'player-view-prev':
-        this.turnSkinViewer(-1);
-        break;
-      case 'player-view-next':
-        this.turnSkinViewer(1);
-        break;
       case 'player-view-walk':
         this.playerWalk = !this.playerWalk;
         this.startSkinViewer();
@@ -210,6 +229,12 @@ export class MenuManager {
         prefs.set('appWindowControls', button.dataset.value === 'on');
         applyAppSettings();
         this.showAppOptions();
+        break;
+      case 'app-ui-mode':
+        prefs.set('uiMode', button.dataset.value);
+        // The touch UI is built at startup, so the page reloads to switch (in a world, on returning to the title).
+        if (!game.world) location.reload();
+        else this.showAppOptions();
         break;
       case 'app-gpu':
         // main.js reads this at startup (it also turns it off itself if the screen stays black).
@@ -345,23 +370,11 @@ export class MenuManager {
         saveGameSettings();
         break;
 
-      case 'theme-minimal':
-      case 'theme-java':
-      case 'theme-modern':
-      case 'theme-bedrock':
-        applyTheme(action.slice('theme-'.length));
-        saveGameSettings();
-        break;
 
-      case 'texture-fast':
-        this.updateButtonGroup(button, 'texture-fast', 'texture-fancy');
-        game.textureQuality = 'fast';
-        saveGameSettings();
-        break;
-      case 'texture-fancy':
-        this.updateButtonGroup(button, 'texture-fast', 'texture-fancy');
-        game.textureQuality = 'fancy';
-        saveGameSettings();
+      case 'menu-music-on':
+      case 'menu-music-off':
+        this.updateButtonGroup(button, 'menu-music-on', 'menu-music-off');
+        setMenuMusic(action === 'menu-music-on');
         break;
 
       case 'auto-jump-on':
@@ -406,7 +419,6 @@ export class MenuManager {
       case 'bind-background':
       case 'bind-rotate':
       case 'bind-flip':
-      case 'bind-polish':
       case 'bind-outline':
       case 'bind-zoomOut':
       case 'bind-zoomIn':
@@ -502,51 +514,15 @@ export class MenuManager {
         game.worldAllowCommands = false;
         break;
 
-      case 'start-health-1':
-      case 'start-health-2':
-      case 'start-health-3':
-      case 'start-health-4':
-      case 'start-health-5':
-      case 'start-health-6':
-      case 'start-health-7':
-      case 'start-health-8':
-      case 'start-health-9':
-      case 'start-health-10':
-      case 'start-health-11':
-      case 'start-health-12':
-      case 'start-health-13':
-      case 'start-health-14':
-      case 'start-health-15':
-        const healthValue = parseInt(button.dataset.value);
-        game.startingHealth = healthValue;
-        document.querySelectorAll('.health-selector .minecraft-button').forEach((btn) => {
-          btn.removeAttribute('data-selected');
-        });
-        button.setAttribute('data-selected', 'true');
+      case 'stepper': {
+        // < value > pickers: step the game setting they name, kept within their limits.
+        const stepper = button.closest('.stepper');
+        const key = stepper.dataset.stepper;
+        const value = game[key] + Number(button.dataset.step);
+        game[key] = Math.max(Number(stepper.dataset.min), Math.min(Number(stepper.dataset.max), value));
+        syncSteppers();
         break;
-
-      case 'start-hunger-1':
-      case 'start-hunger-2':
-      case 'start-hunger-3':
-      case 'start-hunger-4':
-      case 'start-hunger-5':
-      case 'start-hunger-6':
-      case 'start-hunger-7':
-      case 'start-hunger-8':
-      case 'start-hunger-9':
-      case 'start-hunger-10':
-      case 'start-hunger-11':
-      case 'start-hunger-12':
-      case 'start-hunger-13':
-      case 'start-hunger-14':
-      case 'start-hunger-15':
-        const hungerValue = parseInt(button.dataset.value);
-        game.startingHunger = hungerValue;
-        document.querySelectorAll('.hunger-selector .minecraft-button').forEach((btn) => {
-          btn.removeAttribute('data-selected');
-        });
-        button.setAttribute('data-selected', 'true');
-        break;
+      }
 
       case 'resume-game':
         this.resumeGame();
@@ -618,17 +594,7 @@ export class MenuManager {
     if (worldNameInput) worldNameInput.value = game.worldName;
     if (worldSeedInput) worldSeedInput.value = game.worldSeed;
 
-    document.querySelectorAll('.health-selector .minecraft-button').forEach((btn) => {
-      btn.removeAttribute('data-selected');
-    });
-    const healthButton = document.querySelector(`.health-selector [data-value="${game.startingHealth}"]`);
-    if (healthButton) healthButton.setAttribute('data-selected', 'true');
-
-    document.querySelectorAll('.hunger-selector .minecraft-button').forEach((btn) => {
-      btn.removeAttribute('data-selected');
-    });
-    const hungerButton = document.querySelector(`.hunger-selector [data-value="${game.startingHunger}"]`);
-    if (hungerButton) hungerButton.setAttribute('data-selected', 'true');
+    syncSteppers();
   }
 
   bindSliders() {
@@ -751,7 +717,9 @@ export class MenuManager {
     game.renderer.getUI = getRendererUI;
   }
 
-  beginSession() {
+  async beginSession() {
+    // The loading screen stays up until every texture is in, so no block is ever drawn without one.
+    await this.prepareWorldAssets();
     document.querySelectorAll('.menu-container').forEach((menu) => menu.classList.add('hidden'));
     this.currentMenu = null;
     game.canvas.style.display = 'block';
@@ -766,7 +734,7 @@ export class MenuManager {
     game.isLoading = false;
     game.engine.start();
     if (this.pendingHost) this.beginHosting();
-    setTimeout(() => startBackgroundMusic(), 500);
+    setTimeout(() => setMusicContext(true), 500);
   }
 
   failSession(message) {
@@ -990,9 +958,12 @@ export class MenuManager {
     this.showWorldList();
   }
 
-  // save = false leaves the world file as it was last saved (autosave runs every few seconds).
+  // save = false leaves the world file as it was last saved.
   showMainMenu(save = true) {
     if (game.engine) game.engine.stop();
+    setMusicContext(false);
+    closeCommandMenu();
+    stopRecording();
     startMenuLoop();
     multiplayer.stop(save);
     saveManager.stopAutoSave();
@@ -1005,6 +976,8 @@ export class MenuManager {
     game.renderer.player = null;
     this.showMenu('mainMenu');
     updateHTMLUI();
+    // UI Layout was changed in the world: switch now that it's saved.
+    if (document.body.classList.contains('touch-mode') !== isTouchDevice(prefs.get('uiMode') || 'auto')) location.reload();
   }
 
   // --- Multiplayer menus ---------------------------------------------------------------
@@ -1233,6 +1206,10 @@ export class MenuManager {
     mark('appWindowControls', prefs.getBool('appWindowControls', true));
     mark('appFullscreen', prefs.getBool('appFullscreen', false));
     mark('appGpu', !prefs.getBool('disableGpu', false));
+    document.querySelectorAll('#appUiMode .minecraft-button').forEach((b) => {
+      if (b.dataset.value === (prefs.get('uiMode') || 'auto')) b.setAttribute('data-selected', 'true');
+      else b.removeAttribute('data-selected');
+    });
     const grid = document.getElementById('appIconGrid');
     if (grid.childElementCount) {
       grid.querySelectorAll('img').forEach((img) => img.classList.toggle('selected', img.dataset.id === (prefs.get('appIcon') || 'grass')));
@@ -1270,7 +1247,6 @@ export class MenuManager {
       nameInput.addEventListener('change', () => this.savePlayerName());
       nameInput.addEventListener('input', () => this.updateNametag());
     }
-    this.playerView ??= 0;
     this.drawPlayerColors();
     this.drawPlayerSkins();
     this.updateNametag();
@@ -1294,9 +1270,9 @@ export class MenuManager {
     const current = playerColor();
     const swatch = (color, title) => {
       const b = document.createElement('button');
-      b.className = 'player-color' + (color === current ? ' selected' : '') + (color ? '' : ' default');
+      b.className = 'swatch' + (color === current ? ' selected' : '') + (color ? '' : ' swatch-none');
       b.title = title;
-      if (color) b.style.background = color;
+      if (color) b.style.setProperty('--swatch', color);
       b.addEventListener('click', () => {
         setPlayerColor(color);
         this.drawPlayerColors();
@@ -1309,7 +1285,7 @@ export class MenuManager {
     // Any other colour, from the colour picker.
     const custom = document.createElement('input');
     custom.type = 'color';
-    custom.className = 'player-color custom' + (current && !Object.values(NAMED_COLORS).includes(current) ? ' selected' : '');
+    custom.className = 'swatch swatch-any' + (current && !Object.values(NAMED_COLORS).includes(current) ? ' selected' : '');
     custom.title = 'Pick any colour';
     custom.value = current || '#ffffff';
     custom.addEventListener('change', () => {
@@ -1320,7 +1296,7 @@ export class MenuManager {
     box.appendChild(custom);
   }
 
-  // The big viewer: the selected skin, turned with < > and walking if Walk is on.
+  // The big viewer: the selected skin from the front, walking if Walk is on.
   startSkinViewer() {
     const { skin, skinData } = playerSkin();
     const src = skinData || `assets/textures/${skin}.png`;
@@ -1330,7 +1306,6 @@ export class MenuManager {
       img.src = src;
       this._viewerImg = img;
     }
-    document.getElementById('playerViewLabel').textContent = SKIN_VIEWS[this.playerView];
     document.getElementById('playerWalkButton').textContent = `Walk: ${this.playerWalk ? 'On' : 'Off'}`;
     if (this._viewerLoop) return;
     const frame = (t) => {
@@ -1340,15 +1315,10 @@ export class MenuManager {
         return;
       }
       const swing = this.playerWalk ? Math.sin(t / 160) : 0;
-      if (this._viewerImg?.complete) drawSkinView(document.getElementById('playerSkinPreview'), this._viewerImg, SKIN_VIEWS[this.playerView], swing);
+      if (this._viewerImg?.complete) drawSkinView(document.getElementById('playerSkinPreview'), this._viewerImg, 'Front', swing);
       this._viewerLoop = requestAnimationFrame(frame);
     };
     this._viewerLoop = requestAnimationFrame(frame);
-  }
-
-  turnSkinViewer(step) {
-    this.playerView = (this.playerView + step + SKIN_VIEWS.length) % SKIN_VIEWS.length;
-    this.startSkinViewer();
   }
 
   drawPlayerSkins() {
@@ -1448,6 +1418,7 @@ export class MenuManager {
   showPauseMenu() {
     if (game.inventoryOpen || game.openContainer) closeInventory();
     game.gamePaused = true;
+    syncMusic();
     game.breaker.cancel();
     const exit = document.querySelector('#pauseMenu [data-action="pause-exit"]');
     if (exit) exit.textContent = multiplayer.isGuest ? 'Leave' : 'Exit World';
@@ -1507,6 +1478,7 @@ export class MenuManager {
   resumeGame() {
     this.showMenu(null);
     game.gamePaused = false;
+    syncMusic();
   }
 
   populateModsMenu() {

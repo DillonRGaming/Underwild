@@ -543,7 +543,7 @@ export class GamePerf {
       recommendations.push({
         title: 'Batch Block Edge Pass & Seams (`edgePass`)',
         impact: 'HIGH (Saves ~2-4ms per frame)',
-        desc: `\`edgePass\` in \`src/core/polish.js\` loops through every block on screen, performing multiple neighbour lookups and calling \`fillRect\` individually for seams, outlines, and wall shadows. Batching rectangles by color or switching Texture Quality to 'Fast' on mobile eliminates this overhead.`
+        desc: `\`edgePass\` in \`src/core/polish.js\` loops through every block on screen, performing multiple neighbour lookups and calling \`fillRect\` individually for seams, outlines, and wall shadows. Batching rectangles by color would cut this overhead.`
       });
     }
 

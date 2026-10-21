@@ -12,7 +12,6 @@ export default {
   tool: 'axe', // mined fastest with this
   shape: 'stairs',
   solid: true,
-  color: '#D2691E',
   hardness: 2,
   isSolid(meta) {
     return true;

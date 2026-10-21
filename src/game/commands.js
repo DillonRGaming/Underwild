@@ -652,7 +652,7 @@ export function updateCommandSuggestions() {
         addRow('suggestion-section', escapeHtml(section));
       }
       const icon = choice.swatch
-        ? `<span class="suggestion-icon suggestion-swatch" style="--swatch:${choice.swatch}"></span>`
+        ? `<span class="swatch" style="--swatch:${choice.swatch}"></span>`
         : choice.glyph
         ? `<svg class="suggestion-icon" viewBox="0 0 16 16" fill="currentColor" shape-rendering="crispEdges">${GLYPHS[choice.glyph]}</svg>`
         : choice.icon

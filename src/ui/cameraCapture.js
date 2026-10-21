@@ -3,7 +3,9 @@
 import { FILTERS } from '../core/camera.js';
 
 function stamp() {
-  return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  // Local time, so the file name matches the clock.
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19).replace(/[:T]/g, '-');
 }
 
 function download(url, name) {

@@ -38,15 +38,18 @@ const ICONS = {
   pause: '<path d="M4 3 H7 V13 H4 Z M9 3 H12 V13 H9 Z"/>'
 };
 
-export function isTouchDevice() {
+// uiMode (App > UI Layout): 'mobile' forces the touch UI on, 'desktop' forces it off, 'auto' detects.
+export function isTouchDevice(uiMode = 'auto') {
+  if (uiMode === 'mobile') return true;
+  if (uiMode === 'desktop') return false;
   // ?touch in the address forces them on (for trying them out on a computer).
   if (typeof location !== 'undefined' && /[?&]touch\b/.test(location.search)) return true;
   return typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0) && window.matchMedia?.('(pointer: coarse)').matches;
 }
 
 // playerScreen() -> { x, y }: the player's middle in canvas pixels. reach() -> canvas pixels.
-export function setupTouchControls({ canvas, input, keybinds, inGame, onInventory, onZoom, playerScreen, reach, aimMode, tileAt, canReach }) {
-  if (!isTouchDevice() || document.getElementById('touchControls')) return null;
+export function setupTouchControls({ uiMode, canvas, input, keybinds, inGame, onInventory, onZoom, playerScreen, reach, aimMode, tileAt, canReach }) {
+  if (!isTouchDevice(uiMode) || document.getElementById('touchControls')) return null;
   document.body.classList.add('touch-mode');
 
   const root = document.createElement('div');

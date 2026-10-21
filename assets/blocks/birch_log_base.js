@@ -10,7 +10,6 @@ export default {
   trunk: true, // holds leaves up (no decay) and sways in the wind
   shape: 'full',
   solid: true,
-  color: '#5a5754',
   hardness: 2,
   drop: 'birch_log',
   isSolid() {

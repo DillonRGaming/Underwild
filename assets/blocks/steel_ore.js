@@ -6,7 +6,6 @@ export default {
   tab: 'materials',
   smelt: { into: 'raw_steel', time: 8 }, // what the furnace turns it into, and how many seconds
   tool: 'pickaxe', // mined fastest with this
-  color: '#7d8894',
   shape: 'full',
   solid: true,
   transparent: false,

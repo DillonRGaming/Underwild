@@ -3,6 +3,7 @@ export default {
   displayName: 'Crafting Table',
   material: 'wood',
   kind: 'station',
+  opens: 'crafting', // right-click opens the 3x3 crafting grid
   tab: 'functional',
   burnTime: 7.5, // seconds it burns as furnace fuel
   recipes: [
@@ -12,7 +13,6 @@ export default {
   tool: 'axe', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#8B4513',
   texture: 'crafting_table.png',
   hardness: 2.5,
   lightLevel: 0,

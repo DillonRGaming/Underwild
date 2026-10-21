@@ -34,6 +34,7 @@
   --btn-small-padding: 10px 8px 8px;
   --option-group-gap: 8px;
   --option-group-margin: 20px;
+  --field-height: 44px; /* text boxes and other fields */
   --label-align: center;
 
   --card-padding: 10px;
@@ -102,7 +103,8 @@ body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: #000;
+  /* The saved menu backdrop (see index.html) until the game draws over it. */
+  background: #000 var(--boot-backdrop, none) 0 0 / 100% 100% no-repeat;
   color: var(--text);
   scrollbar-width: none;
 }
@@ -359,22 +361,12 @@ body.game-paused .menu-background,
   margin-bottom: var(--option-group-margin);
 }
 
-.button-group,
-.button-grid {
+.button-group {
   display: flex;
   flex-wrap: wrap;
   justify-content: var(--menu-align-x);
   align-items: center;
   gap: var(--option-group-gap);
-}
-
-.button-grid {
-  gap: 4px;
-}
-
-.button-grid .minecraft-button.small {
-  min-width: 36px;
-  padding: 8px 4px;
 }
 
 .advanced-options-grid {
@@ -447,6 +439,7 @@ body.game-paused .menu-background,
 .minecraft-input {
   display: block;
   width: 100%;
+  height: var(--field-height);
   padding: 10px 12px;
   font-size: 16px;
   outline: none;
@@ -786,9 +779,51 @@ body.game-paused .menu-background,
   box-shadow: var(--slot-shadow);
 }
 
-.suggestion-swatch {
-  background: var(--swatch);
+/* A colour swatch: the standard look for any colour choice (/color suggestions, Name Colour).
+   Set --swatch to the colour. .selected marks the chosen one. */
+.swatch {
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  box-sizing: content-box;
+  flex-shrink: 0;
+  cursor: pointer;
+  background-color: var(--slot-bg);
+  background-image: linear-gradient(var(--swatch, transparent), var(--swatch, transparent));
+  background-origin: content-box;
   background-clip: content-box;
+  background-repeat: no-repeat;
+  border: var(--slot-border);
+  border-radius: var(--radius);
+  box-shadow: var(--slot-shadow);
+}
+button.swatch:hover,
+input.swatch:hover {
+  border: var(--slot-border-hover);
+}
+.swatch.selected {
+  border: var(--input-border-focus);
+}
+/* No colour (the default name colour): a slash through an empty swatch. */
+.swatch-none {
+  background-image: linear-gradient(135deg, transparent 45%, var(--line) 45% 55%, transparent 55%);
+}
+/* Any colour, from the colour picker. */
+.swatch-any {
+  background-image: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.swatch-any::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.swatch-any::-webkit-color-swatch {
+  border: none;
+  opacity: 0;
+}
+.swatch-any::-moz-color-swatch {
+  border: none;
+  opacity: 0;
 }
 
 .suggestion-text {
@@ -810,18 +845,23 @@ body.game-paused .menu-background,
 
 /* Background block editor */
 
+/* The chosen background blocks: styled as a field, like the Add Block box beside it and
+   just as tall for one row (slots fill it bar the 4px padding and 2px border). */
 .background-blocks {
+  --slot-size: calc(var(--field-height) - 12px);
+  --item-size: 22px;
   display: flex;
   flex-wrap: wrap;
   gap: var(--slot-gap);
-  min-height: 68px;
+  min-height: var(--field-height);
   max-height: 180px;
   overflow-y: auto;
   align-content: flex-start;
-  padding: 8px;
-  background: var(--panel-bg);
-  border: var(--panel-border);
-  box-shadow: var(--panel-shadow);
+  box-sizing: border-box;
+  padding: 4px;
+  background: var(--input-bg);
+  border: var(--input-border);
+  box-shadow: var(--input-shadow);
   border-radius: var(--radius);
 }
 
@@ -885,32 +925,6 @@ body.game-paused .menu-background,
   overflow-y: auto;
   padding: 12px 16px;
   color: var(--panel-text);
-}
-
-.info-section {
-  margin-bottom: 20px;
-}
-
-.info-section:last-child {
-  margin-bottom: 0;
-}
-
-.info-section-header {
-  margin-bottom: 8px;
-  font-size: 16px;
-  color: var(--panel-title);
-}
-
-.info-section ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
-.info-section li {
-  margin-bottom: 4px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--panel-text-muted);
 }
 
 .credits-content {
@@ -1284,8 +1298,7 @@ body.game-paused .menu-background,
   height: var(--item-size);
 }
 
-.item-count,
-.dragging-count {
+.item-count {
   position: absolute;
   right: 3px;
   bottom: 1px;
@@ -1677,64 +1690,10 @@ img {
   }
 }
 
-/* Furnace window: input over a flame over fuel, an arrow showing cooking progress, output. */
+/* Furnace window: chest-sized slots (the layout is .furnace-layout below). */
 #furnaceUI {
   --slot-size: var(--chest-slot-size);
   --item-size: var(--chest-item-size);
-}
-
-.furnace-area {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: calc(var(--slot-size) * 0.6);
-  margin-bottom: var(--inventory-section-gap);
-}
-
-.furnace-left {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
-.furnace-flame {
-  position: relative;
-  width: calc(var(--slot-size) * 0.45);
-  height: calc(var(--slot-size) * 0.5);
-  background: rgba(0, 0, 0, 0.35);
-  clip-path: polygon(50% 0, 85% 45%, 100% 100%, 0 100%, 15% 45%);
-}
-
-.furnace-flame-fill {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 0;
-  background: linear-gradient(to top, #ff6a00, #ffd23f);
-}
-
-.furnace-arrow {
-  position: relative;
-  width: calc(var(--slot-size) * 1.1);
-  height: calc(var(--slot-size) * 0.4);
-  background: rgba(0, 0, 0, 0.35);
-  clip-path: polygon(0 30%, 65% 30%, 65% 0, 100% 50%, 65% 100%, 65% 70%, 0 70%);
-}
-
-.furnace-arrow-fill {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 0;
-  background: #f0f0f0;
-}
-
-.furnace-output {
-  width: calc(var(--slot-size) * 1.3);
-  height: calc(var(--slot-size) * 1.3);
 }
 
 /* Forging table: hammer + ingot on the left, an arrow, a panel of tool heads, the output. */
@@ -2370,22 +2329,21 @@ img {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 12px 8px;
-  background: var(--slot-bg);
-  border: var(--thumb-border);
+  padding: 12px;
+  background: var(--input-bg);
+  border: var(--input-border);
   border-radius: var(--radius);
+  box-shadow: var(--input-shadow);
 }
 
 .player-nametag {
   max-width: 100%;
-  padding: 2px 8px;
   overflow: hidden;
-  font-size: 15px;
+  font-size: var(--label-font-size);
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.45);
-  border-radius: 3px;
+  color: var(--label-color);
+  text-shadow: var(--text-shadow);
 }
 
 .player-viewer-canvas {
@@ -2394,16 +2352,8 @@ img {
   image-rendering: pixelated;
 }
 
-.player-viewer-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.player-viewer-controls .minecraft-button {
-  width: 36px;
-  min-width: 0;
-  padding: 4px 0;
+.player-viewer > .minecraft-button {
+  width: 100%;
 }
 
 .player-skin-actions .minecraft-button {
@@ -2413,10 +2363,33 @@ img {
   padding-right: 12px;
 }
 
-.player-view-label {
-  min-width: 48px;
-  text-align: center;
+/* < value > pickers (Starting Health and Hunger): arrows either side of a value box. */
+.stepper {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  gap: 6px;
+  align-items: stretch;
+}
+.stepper .minecraft-button {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+}
+.stepper-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  font-size: 16px;
+  color: var(--input-text);
+  background: var(--input-bg);
+  border: var(--input-border);
+  border-radius: var(--radius);
   text-shadow: var(--text-shadow);
+}
+.minecraft-button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .player-settings {
@@ -2437,40 +2410,6 @@ img {
   margin-bottom: 6px;
 }
 
-.player-color {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  cursor: pointer;
-  border: 2px solid rgba(0, 0, 0, 0.6);
-  border-radius: 4px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
-}
-
-.player-color.default {
-  background: linear-gradient(135deg, #fff 45%, #d33 45% 55%, #fff 55%);
-}
-
-.player-color.custom {
-  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
-  -webkit-appearance: none;
-  appearance: none;
-}
-
-.player-color.custom::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-
-.player-color.custom::-webkit-color-swatch {
-  border: none;
-  opacity: 0;
-}
-
-.player-color.selected {
-  border-color: #fff;
-  outline: 2px solid #000;
-}
-
 .player-skins {
   max-height: 220px;
 }
@@ -2489,11 +2428,6 @@ img {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.player-skin-actions .minecraft-button:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 @media (max-width: 560px) {
@@ -2988,18 +2922,9 @@ body.touch-mode #inventory .inventory-header .recipe-panel {
   width: auto;
 }
 
-.polish-heading {
-  margin: 18px 0 8px;
-  font-size: 18px;
-  text-align: center;
-}
-.option-group.polish-disabled {
-  opacity: 0.45;
-}
-
-/* Polish > UI Corners: every bordered box gets pixel-cut corners, like the blocks in game. */
-body.polish-ui-corners
-  :is(
+/* Every bordered box gets pixel-cut corners, like the blocks in game. A new kind of box
+   gets them by being added here (or by using one of these classes). */
+:is(
     .coordinates,
     .cmd-menu,
     .cmd-menu-btn,
@@ -3012,6 +2937,9 @@ body.polish-ui-corners
     .chat-input,
     .suggestions-dropdown,
     .suggestion-icon,
+    .swatch,
+    .stepper-value,
+    .player-viewer,
     .background-blocks,
     .bg-block-remove,
     .info-panel,
@@ -3218,4 +3146,284 @@ body.touch-mode .perf-overlay {
   border: var(--slot-border);
   image-rendering: pixelated;
   cursor: pointer;
+}
+
+/* --- Phone menus (landscape) ------------------------------------------------------------
+   One layout for every menu: a full-height panel, Back in the top-left beside the title,
+   content below it (scrolling if needed), and any main action in the bottom-right. */
+
+body.touch-mode .menu-container .menu-content {
+  zoom: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: calc(100vw - 2 * var(--option-group-margin)); /* the same gap to the screen edge on every side */
+  max-width: none;
+  height: calc(100vh - 2 * var(--option-group-margin));
+  max-height: none;
+  box-sizing: border-box;
+  padding: var(--option-group-margin); /* the same on every side, so Back and the bottom buttons sit equally far in */
+  overflow: hidden;
+}
+body.touch-mode .menu-container .menu-title {
+  flex: 0 0 auto;
+  min-height: 44px;
+  margin: 0 0 var(--option-group-margin);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+body.touch-mode .menu-container .menu-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+
+/* Back (or Done) always sits in the top-left corner, level with the title. */
+body.touch-mode .menu-container:not(#noticeMenu) .menu-content > .menu-buttons:last-child > :is(
+  [data-action="back-to-main"], [data-action="back-to-options"], [data-action="back-to-create-world"],
+  [data-action="create-world-back"], [data-action="exit-back"], [data-action="back-to-mods"],
+  [data-action="multiplayer"], [data-action="mp-join-back"], [data-action="player-done"]) {
+  position: absolute;
+  top: var(--option-group-margin);
+  left: var(--option-group-margin);
+}
+
+/* The remaining bottom buttons (Create World, Start Game, Apply, Reset) sit bottom-right. */
+body.touch-mode .menu-container .menu-content > .menu-buttons:last-child {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--button-gap);
+  width: 100%;
+  margin: var(--option-group-margin) 0 0; /* the same gap above it as under the title row */
+}
+/* Back and the bottom-corner buttons share one size (wide enough for "Reset to Defaults"). */
+body.touch-mode .menu-container .menu-content > .menu-buttons:last-child > .minecraft-button {
+  width: 170px;
+  height: 44px;
+  font-size: 16px;
+}
+body.touch-mode .menu-container .menu-content > .menu-buttons:last-child:not(:has(> :not([data-action$="back"]):not([data-action^="back-"]):not([data-action="multiplayer"]):not([data-action="player-done"]))) {
+  margin: 0;
+}
+
+/* Settings: options in two columns. Headings, lists, text boxes and loose labels span both. */
+body.touch-mode .menu-container .form-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--option-group-margin);
+  align-items: start;
+  margin: 0;
+}
+body.touch-mode .menu-container .form-section > * {
+  margin: 0;
+}
+body.touch-mode .menu-container .form-section > :not(.option-group):not(.slider-group) {
+  grid-column: 1 / -1;
+}
+body.touch-mode .menu-container .form-section > label + * {
+  margin-top: -6px;
+}
+body.touch-mode .menu-container .option-group > label,
+body.touch-mode .menu-container .slider-group > label,
+body.touch-mode .menu-container .form-section > label {
+  margin: 0 0 6px;
+}
+body.touch-mode .menu-container .button-group .minecraft-button.small,
+body.touch-mode .menu-container .minecraft-input {
+  height: 44px;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+/* Advanced World Options has its own column wrappers: flatten them into the same two columns. */
+body.touch-mode #advancedOptionsMenu .advanced-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--option-group-margin);
+  width: 100%;
+  max-width: none;
+}
+body.touch-mode #advancedOptionsMenu .grid-column {
+  display: contents;
+}
+body.touch-mode #advancedOptionsMenu .option-group {
+  margin: 0;
+}
+
+/* Lists (worlds, nearby games, keybinds) keep a sensible height. */
+body.touch-mode #mpCreateMenu .mp-list {
+  max-height: 150px;
+}
+
+/* Tile menus, like Options: big buttons right under the title. */
+body.touch-mode :is(#optionsMenu, #multiplayerMenu) .menu-scroll .menu-buttons,
+body.touch-mode :is(#pauseMenu, #singlePlayerMenu, #exitMenu) .menu-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--button-gap);
+  width: 100%;
+  margin: 0;
+}
+body.touch-mode #optionsMenu .menu-scroll .menu-buttons {
+  grid-template-columns: repeat(4, 1fr);
+}
+body.touch-mode :is(#optionsMenu, #multiplayerMenu) .menu-scroll .menu-buttons .minecraft-button,
+body.touch-mode :is(#pauseMenu, #singlePlayerMenu, #exitMenu) .menu-buttons .minecraft-button:not([data-action$="back"]):not([data-action^="back-"]) {
+  width: 100%;
+  height: 96px;
+  margin: 0;
+  font-size: 17px;
+}
+/* These menus have their tiles in the bottom group, so it can't be pushed down. */
+body.touch-mode :is(#pauseMenu, #singlePlayerMenu, #exitMenu) .menu-content > .menu-buttons:last-child {
+  margin: 0;
+}
+
+/* Controls: the key groups (and Touch Aiming, last) flow down two columns, each starting
+   right under the one above it (they're different lengths, so no fixed rows). */
+body.touch-mode #controlsOptionsMenu .form-section {
+  display: block;
+  columns: 2;
+  column-gap: var(--option-group-margin);
+}
+body.touch-mode #controlsOptionsMenu .form-section > .option-group {
+  break-inside: avoid;
+  margin: 0 0 var(--option-group-margin);
+}
+
+
+/* Main menu: title on the left, big buttons on the right, version and Changelog along the bottom. */
+body.touch-mode #mainMenu .menu-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  align-content: center;
+  gap: var(--button-gap) var(--option-group-margin);
+  height: 100%;
+  padding: 0 24px;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+body.touch-mode #mainMenu .game-title {
+  grid-row: 1 / 3;
+  font-size: 56px;
+  margin: 0;
+  text-align: center;
+}
+body.touch-mode #mainMenu .menu-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--button-gap);
+  width: 100%;
+  margin: 0;
+}
+body.touch-mode #mainMenu .menu-buttons .minecraft-button {
+  height: 64px;
+  width: 100%;
+  margin: 0;
+  font-size: 16px;
+}
+body.touch-mode #mainMenu .menu-buttons .minecraft-button:first-child {
+  grid-column: 1 / 3;
+  height: 76px;
+  font-size: 20px;
+}
+body.touch-mode #mainMenu .changelog-section {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 26px;
+  width: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin: 0;
+}
+body.touch-mode #mainMenu .changelog-section .changelog-button {
+  margin: 0;
+  width: 150px;
+  height: 42px;
+  font-size: 16px;
+}
+body.touch-mode #mainMenu .changelog-section .version-number {
+  font-size: 22px;
+  line-height: 1;
+}
+
+/* Audio: sliders and toggles on the left, the track list scrolling on the right. */
+body.touch-mode #audioOptionsMenu .form-section {
+  grid-auto-flow: column;
+  grid-template-rows: repeat(4, auto);
+}
+body.touch-mode #audioOptionsMenu .form-section > .option-group:last-child {
+  grid-column: 2;
+  grid-row: 1 / 5;
+}
+body.touch-mode #audioOptionsMenu .music-track-selector {
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* Create New World: name and seed side by side, then game mode and Advanced Options. */
+body.touch-mode #createWorldMenu .form-section > label[for="worldName"] { grid-area: 1 / 1; }
+body.touch-mode #createWorldMenu .form-section > #worldName { grid-area: 2 / 1; margin: 0; }
+body.touch-mode #createWorldMenu .form-section > label[for="worldSeed"] { grid-area: 1 / 2; }
+body.touch-mode #createWorldMenu .form-section > #worldSeed { grid-area: 2 / 2; margin: 0; }
+body.touch-mode #createWorldMenu .form-section > .option-group { grid-area: 3 / 1; }
+body.touch-mode #createWorldMenu .form-section > .menu-buttons {
+  grid-area: 3 / 2;
+  align-self: end;
+  width: 100%;
+}
+body.touch-mode #createWorldMenu .form-section > .menu-buttons .minecraft-button {
+  height: 44px;
+}
+
+/* Advanced World Options: the theme sets its width by id, so match it here. */
+body.touch-mode #advancedOptionsMenu .menu-content {
+  width: calc(100vw - 2 * var(--option-group-margin));
+}
+/* An option with four or more buttons gets a line to itself, so its buttons aren't squeezed. */
+body.touch-mode .menu-container .option-group:has(.button-group > .minecraft-button:nth-child(4)) {
+  grid-column: 1 / -1;
+}
+/* Half-width options fill in beside each other instead of leaving gaps next to full-width ones. */
+body.touch-mode .menu-container .form-section,
+body.touch-mode #advancedOptionsMenu .advanced-options-grid {
+  grid-auto-flow: row dense;
+}
+body.touch-mode .menu-container .stepper {
+  grid-template-columns: 44px 1fr 44px;
+}
+body.touch-mode .menu-container .stepper .minecraft-button,
+body.touch-mode .menu-container .stepper-value {
+  height: 44px;
+}
+
+/* Small buttons keep their whole label (Normal, Extreme...) instead of cutting it off. */
+body.touch-mode .menu-container .button-group .minecraft-button.small {
+  padding-left: 2px;
+  padding-right: 2px;
+  min-width: 0;
+  font-size: 13px;
+  text-overflow: clip;
+}
+
+/* Player: the screen scrolls inside the panel, with a shorter preview so the controls show. */
+body.touch-mode #playerOptionsMenu .player-screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  grid-template-columns: 180px 1fr;
+}
+body.touch-mode #playerOptionsMenu .player-viewer-canvas {
+  width: 80px;
+  height: 160px;
+}
+body.touch-mode #playerOptionsMenu .player-viewer .minecraft-button {
+  height: 40px;
 }

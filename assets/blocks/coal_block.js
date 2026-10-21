@@ -6,7 +6,6 @@ export default {
   tab: 'materials',
   burnTime: 400, // seconds it burns as furnace fuel
   tool: 'pickaxe', // mined fastest with this
-  color: '#1c1c1c',
   shape: 'full',
   solid: true,
   transparent: false,

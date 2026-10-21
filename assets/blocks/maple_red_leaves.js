@@ -12,11 +12,9 @@ export default {
     fallOnPlace: 0.35, // chance of a falling leaf when placed
     fallOnDecay: 1, // falling-leaf particles when it decays
     idleFall: 0.002, // chance per check that it drops a leaf on its own
-    particleColor: '#ff5555' // falling-leaf colour when there's no texture
   },
   shape: 'full',
   solid: false,
-  color: '#ff8a65',
   hardness: 0.2,
   isSolid(meta) {
     return meta?.placed === true;

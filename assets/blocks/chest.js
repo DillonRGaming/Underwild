@@ -18,7 +18,7 @@ function fit(inv, n) {
 
 export const isChest = (id) => typeof id === 'string' && id.endsWith('_chest');
 
-export const createChest = (id, displayName, color) => ({
+export const createChest = (id, displayName) => ({
   id,
   displayName,
   material: id.replace(/_chest$/, ''),
@@ -31,7 +31,6 @@ export const createChest = (id, displayName, color) => ({
   placeMeta: () => ({ inv: Array.from({ length: CHEST_SLOTS }, () => null) }), // starts empty
   shape: 'full',
   solid: true,
-  color,
   hardness: 3,
   onPlace: function (world, x, y) {
     const cell = world.getCell(x, y);

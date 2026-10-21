@@ -9,7 +9,6 @@ export default {
     { shape: ['iii', 'iii', 'iii'], ingredients: { i: 'gold_ingot' }, count: 1 }
   ],
   tool: 'pickaxe', // mined fastest with this
-  color: '#e8a83a',
   shape: 'full',
   solid: true,
   transparent: false,

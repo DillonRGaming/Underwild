@@ -15,7 +15,6 @@ export default {
   solid: false,
   transparent: true,
   needsSupport: true,
-  color: '#a0763f',
   hardness: 0.4,
   maxStack: 24
 };

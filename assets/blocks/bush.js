@@ -10,7 +10,6 @@ export default {
   biomeTint: true, // green pixels take the local biome's grass colour
   shape: 'full',
   solid: false,
-  color: '#4a8034',
   hardness: 0.1,
   ...plant({ growsOn: ['land'], windSway: 0.45 })
 };

@@ -8,7 +8,6 @@ export default {
   tool: 'pickaxe',
   shape: 'full',
   solid: true,
-  color: '#d0642e',
   hardness: 2.5,
   isSolid(meta) {
     return meta?.layer !== 'bg';

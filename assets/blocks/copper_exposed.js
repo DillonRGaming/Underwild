@@ -9,7 +9,6 @@ export default {
   tool: 'pickaxe', // mined fastest with this
   shape: 'full',
   solid: true,
-  color: '#a76750',
   hardness: 2,
   tick: oxidizeTick('copper_weathered', 120)
 };

@@ -232,16 +232,6 @@
   width: min(600px, 94vw);
 }
 
-#advancedOptionsMenu .button-grid {
-  display: grid;
-  grid-template-columns: repeat(15, 1fr);
-}
-
-#advancedOptionsMenu .button-grid .minecraft-button.small {
-  min-width: 0;
-  padding: 8px 0 6px;
-}
-
 /* Pause and title: the glow title sits over a narrow centered column */
 #mainMenu .menu-buttons,
 #pauseMenu .menu-buttons {

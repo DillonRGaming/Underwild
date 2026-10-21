@@ -1,4 +1,4 @@
-export default {
+const block = {
   id: 'lunar_rock',
   displayName: 'Lunarstone',
   material: 'stone',
@@ -9,7 +9,9 @@ export default {
   shape: 'full',
   solid: true,
   soil: ['moon', 'lunar_rock', 'stone'],
-  color: '#f0f2f5',
   hardness: 1.5,
   rockOverlay: true
 };
+
+// Its old name, kept so older worlds still load (hidden from menus).
+export default [block, { ...block, id: 'lunarstone', hidden: true, drop: 'lunar_rock', recipes: [] }];

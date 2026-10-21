@@ -13,6 +13,5 @@ export default {
   connected: true,
   opacity: 0,
   outline: false,
-  color: '#cfeaf5',
   hardness: 1
 };

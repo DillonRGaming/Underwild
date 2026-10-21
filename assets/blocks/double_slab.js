@@ -8,7 +8,6 @@ export default {
   hidden: true, // only made by putting two slabs together, never in the creative menu
   shape: 'full',
   solid: true,
-  color: '#888888',
   hardness: 2.0,
   // Two dirt/grass slabs grow grass like a dirt block.
   tick(world, x, y, meta) {

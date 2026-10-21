@@ -8,8 +8,7 @@ import { Renderer } from './core/renderer.js';
 import { ModManager } from '../mods/index.js';
 import { Placer } from './logic/placing.js';
 import { Breaker } from './logic/breaking.js';
-import { startIconPolish, refreshIcons, warmIcons } from './ui/iconPolish.js';
-import { polishState, setPolish } from './core/polishSettings.js';
+import { startIconPolish } from './ui/iconPolish.js';
 import { GAME_VERSION } from './game/version.js';
 import { game, prefs, saveManager } from './game/state.js';
 import {
@@ -21,14 +20,12 @@ import {
   loadKeybinds,
   changeZoom,
   keybinds,
-  renderScale,
   effectiveRenderScale,
   perfOverlay,
   setPerfOverlay,
-  stepRenderDistance,
-  syncPolishOptions
+  stepRenderDistance
 } from './game/settings.js';
-import { loadAudioSettings } from './ui/music.js';
+import { loadAudioSettings, setMusicContext } from './ui/music.js';
 import {
   SURVIVAL_REACH,
   CREATIVE_TOUCH_REACH,
@@ -102,9 +99,12 @@ window.addEventListener(
 (async () => {
   await prefs.init();
   applyAppSettings();
+  startTouchControls();
   window.electronAPI?.app?.ready?.({ ua: navigator.userAgent });
   loadBackgroundConfig();
   loadAudioSettings();
+  // Browsers block audio until the first gesture; start the title music then.
+  window.addEventListener('pointerdown', () => { if (!game.inWorld) setMusicContext(false); }, { once: true });
   loadKeybinds();
   loadGameSettings();
   applyViewSettings();
@@ -146,7 +146,9 @@ game.input.mouse.x = game.canvas.width / 2;
 
 game.input.mouse.y = game.canvas.height / 2;
 
-setupTouchControls({
+// Runs once the preferences are loaded, since App > UI Layout decides whether the touch UI is used.
+const startTouchControls = () => setupTouchControls({
+  uiMode: prefs.get('uiMode') || 'auto',
   canvas: game.canvas,
   input: game.input,
   keybinds,
@@ -190,7 +192,6 @@ game.renderer.backgroundBlocks = game.backgroundBlocks;
 
 game.renderer.multiplayer = multiplayer;
 
-game.renderer.preloadTextures();
 
 startMenuLoop();
 
@@ -368,23 +369,26 @@ game.canvas.addEventListener('mousedown', (e) => {
   const clickedId = game.world.getBlockId(tileX, tileY);
   // Using a block (opening it, swinging a trapdoor, lighting TNT) needs it in reach, and in
   // multiplayer the host's say-so to build.
-  const usable = clickedId === 'crafting_table' || isChest(clickedId) || clickedId === 'furnace' || clickedId === 'forging_table' || registry.get(clickedId)?.kind === 'trapdoor' || registry.get(clickedId)?.explosive;
+  const clickedDef = registry.get(clickedId);
+  // What a right-click opens: the block's `opens` (crafting, furnace, forge), or a chest.
+  const opens = clickedDef?.opens || (isChest(clickedId) ? 'chest' : null);
+  const usable = opens || clickedDef?.kind === 'trapdoor' || clickedDef?.explosive;
   if (usable && (!inReach(tileX, tileY) || !multiplayer.canBuild())) return;
-  if (clickedId === 'crafting_table') {
+  if (opens === 'crafting') {
     game.openContainer = { title: 'Crafting Table', slots: game.craftGrid, capacity: 9, tileX, tileY };
     game.inventoryOpen = true;
     recomputeCraft();
     return;
   }
-  if (isChest(clickedId)) {
+  if (opens === 'chest') {
     openChest(tileX, tileY);
     return;
   }
-  if (clickedId === 'furnace') {
+  if (opens === 'furnace') {
     openFurnace(tileX, tileY);
     return;
   }
-  if (clickedId === 'forging_table') {
+  if (opens === 'forge') {
     openForge(tileX, tileY);
     return;
   }
@@ -539,16 +543,3 @@ window.addEventListener('beforeunload', () => {
 
 startIconPolish();
 
-// Every block and item icon, made ready before the inventory is first opened.
-warmIcons([...registry.entries()].filter(([, d]) => !d.hidden).map(([id]) => `assets/textures/${id}.png`));
-
-// The Toggle Polish key works everywhere: menus, inventory and in game (not while typing
-// or while a key is being rebound).
-window.addEventListener('keydown', (e) => {
-  if (e.code !== keybinds.polish || e.repeat || isEditableTarget(e.target)) return;
-  if (document.querySelector('.keybind-button.binding')) return;
-  setPolish('enabled', !polishState().enabled);
-  prefs.set('underwild_polish', JSON.stringify(polishState()));
-  syncPolishOptions();
-  refreshIcons();
-});
