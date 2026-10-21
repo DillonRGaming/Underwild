@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     load: (name) => ipcRenderer.invoke('worlds:load', name),
     delete: (name) => ipcRenderer.invoke('worlds:delete', name)
   },
+  screenshots: {
+    save: (name, dataUrl) => ipcRenderer.invoke('screenshots:save', name, dataUrl),
+    open: (file) => ipcRenderer.invoke('screenshots:open', file)
+  },
   app: {
     ready: (info) => ipcRenderer.send('app:ready', info),
     diagOk: (test) => ipcRenderer.send('app:diagOk', test),

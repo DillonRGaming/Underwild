@@ -37,7 +37,7 @@ export function openSidesMask(world, x, y) {
   // A slab's or stair's own empty part always leaves that face in the open.
   const t = world.getBlockType(x, y);
   const meta = world.getCell(x, y)?.meta || {};
-  if (t?.shape === 'stairs') m |= 1;
+  if (t?.shape === 'stairs') m |= meta.upside ? 4 : 1;
   else if (t?.shape === 'slab') m |= (meta.slabPos || 'bottom') === 'top' ? 4 : 1;
   return m;
 }

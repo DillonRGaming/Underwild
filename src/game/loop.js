@@ -49,6 +49,8 @@ function menuRenderLoop() {
   requestAnimationFrame(menuRenderLoop);
 }
 
+const inThisWorld = (spot) => (spot && (spot.dim ?? 'earth') === (game.world?.dimensionId || 'earth') ? spot : null);
+
 export function getRendererUI() {
   return {
     selectedIndex: game.selectedIndex,
@@ -71,8 +73,9 @@ export function getRendererUI() {
     showOutline: game.showOutline && !document.body.classList.contains('touch-tap-mode'),
     canPlaceAt,
     reach: game.creativeMode ? 64 : SURVIVAL_REACH,
-    setPosition1: game.setPosition1,
-    setPosition2: game.setPosition2,
+    // Marked corners only show in the world they were set in.
+    setPosition1: inThisWorld(game.setPosition1),
+    setPosition2: inThisWorld(game.setPosition2),
     isLoading: game.isLoading,
     gamePaused: game.gamePaused,
     renderFallingLeaves: game.renderFallingLeaves,
@@ -144,7 +147,6 @@ export function initializeGameEngine() {
         perf.startPhase('updatePlayer');
         game.player.update(game.input, dt, time, game.noClipMode, game.creativeMode);
         perf.endPhase('updatePlayer');
-        if (game.noClipMode && !game.player.creativeFlying) game.noClipMode = false;
         game.breaker.cancel();
         perf.startPhase('updateTicks');
         runGameTicks(dt);
@@ -166,7 +168,6 @@ export function initializeGameEngine() {
       perf.startPhase('updatePlayer');
       game.player.update(game.input, dt, time, game.noClipMode, game.creativeMode);
       perf.endPhase('updatePlayer');
-      if (game.noClipMode && !game.player.creativeFlying) game.noClipMode = false;
 
       if (game.isDropKeyHeld && !game.inventoryOpen && !game.openContainer) {
         const now = performance.now();
@@ -247,7 +248,7 @@ export function initializeGameEngine() {
 
       perf.startPhase('updateCamera');
       const head = game.player.getHeadAnchor();
-      game.camera.followTo(head.x, head.y, game.canvas, game.world);
+      game.camera.update(dt, game.canvas, game.world, game.camera.followGetter?.() || head);
       perf.endPhase('updateCamera');
 
       perf.startPhase('updateUI');

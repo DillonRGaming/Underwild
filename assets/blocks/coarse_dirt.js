@@ -8,7 +8,7 @@ export default {
   tab: 'nature',
   recipes: [
     // how it's crafted
-    { shapeless: { dirt: 1, gravel: 1 }, count: 2 }
+    { shapeless: { dirt: 1, stone_gravel: 1 }, count: 2 }
   ],
   tool: 'shovel', // mined fastest with this
   growsGrass: 'grass', // grass creeping onto it turns it into this

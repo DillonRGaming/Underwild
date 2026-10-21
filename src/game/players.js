@@ -48,11 +48,30 @@ export function setPlayerName(name) {
   return clean;
 }
 
+// Imported skins: [{ id, name, data (PNG data URL) }]. The one skin imported before there
+// was a list (playerCustomSkin) becomes its first entry.
+export function savedSkins() {
+  let list = prefs.get('playerSkins');
+  if (!Array.isArray(list)) {
+    list = [];
+    const old = prefs.get('playerCustomSkin');
+    if (old) list.push({ id: 'custom', name: 'Custom', data: old });
+    prefs.set('playerSkins', list);
+  }
+  return list.filter((s) => s && s.id && s.data);
+}
+
+export function setSavedSkins(list) {
+  prefs.set('playerSkins', list);
+}
+
 // The skin to show and send to other players: a built-in name, or 'custom' with the
 // imported PNG as a data URL.
 export function playerSkin() {
   const skin = prefs.get('playerSelectedSkin') || 'steve';
-  return skin === 'custom' ? { skin, skinData: prefs.get('playerCustomSkin') || null } : { skin, skinData: null };
+  if (skin === 'steve') return { skin, skinData: null };
+  const saved = savedSkins().find((s) => s.id === skin);
+  return saved ? { skin: 'custom', skinData: saved.data } : { skin: 'steve', skinData: null };
 }
 
 export function localPlayerState() {
@@ -77,18 +96,65 @@ export function localPlayerState() {
   };
 }
 
-// Draws a skin's side view (head, body, arm, leg, as the game shows players) to a canvas.
-export function drawSkinPreview(canvas, img) {
-  if (!canvas || !img) return;
+// The four ways the skin viewer can face, and where each part's face is on a 64x64 skin
+// ([x, y] of the part's face; legacy 64x32 skins mirror the right limbs for the left ones).
+export const SKIN_VIEWS = ['Front', 'Right', 'Back', 'Left'];
+const FACES = {
+  Front: { head: [8, 8], hat: [40, 8], body: [20, 20], rArm: [44, 20], lArm: [36, 52], rLeg: [4, 20], lLeg: [20, 52] },
+  Back: { head: [24, 8], hat: [56, 8], body: [32, 20], rArm: [52, 20], lArm: [44, 52], rLeg: [12, 20], lLeg: [28, 52] },
+  Right: { head: [0, 8], hat: [32, 8], arm: [40, 20], leg: [0, 20] },
+  Left: { head: [16, 8], hat: [48, 8], arm: [40, 52], leg: [24, 52], legacyArm: [48, 20], legacyLeg: [8, 20] }
+};
+
+// Draws a whole skin (32 px tall figure) facing `view`, scaled to fit the canvas; `swing`
+// (-1..1) swings the arms and legs, for the walk preview.
+export function drawSkinView(canvas, img, view = 'Front', swing = 0) {
+  if (!canvas || !img?.width) return;
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const s = Math.min(canvas.width / 8, canvas.height / 32);
-  const cx = canvas.width / 2;
-  ctx.drawImage(img, 0, 8, 8, 8, cx - 4 * s, 0, 8 * s, 8 * s); // head
-  ctx.drawImage(img, 4, 20, 4, 12, cx - 2 * s, 20 * s, 4 * s, 12 * s); // leg
-  ctx.drawImage(img, 32, 20, 4, 12, cx - 2 * s, 8 * s, 4 * s, 12 * s); // body
-  ctx.drawImage(img, 44, 20, 4, 12, cx - 2 * s, 8 * s, 4 * s, 12 * s); // arm
+  const s = Math.floor(Math.min(canvas.width / 16, canvas.height / 34));
+  const legacy = img.height === 32;
+  const f = FACES[view] || FACES.Front;
+  const ox = Math.round(canvas.width / 2),
+    oy = Math.round((canvas.height - 32 * s) / 2) + s;
+  const part = (sx, sy, w, h, dx, dy, mirror = false, angle = 0, pivotY = 0) => {
+    ctx.save();
+    ctx.translate(ox + dx * s + (w * s) / 2, oy + (dy + pivotY) * s);
+    if (angle) ctx.rotate(angle);
+    if (mirror) ctx.scale(-1, 1);
+    ctx.drawImage(img, sx, sy, w, h, (-w * s) / 2, -pivotY * s, w * s, h * s);
+    ctx.restore();
+  };
+  const a = swing * 0.6;
+  if (view === 'Front' || view === 'Back') {
+    const back = view === 'Back';
+    // Seen from behind, the right limbs are on the left of the picture.
+    const [ra, la, rl, ll] = back ? [4, -8, 0, -4] : [-8, 4, -4, 0];
+    const lArm = legacy ? f.rArm : f.lArm,
+      lLeg = legacy ? f.rLeg : f.lLeg;
+    part(...f.rLeg, 4, 12, rl, 20, false, a * 0.6, 0);
+    part(...lLeg, 4, 12, ll, 20, legacy, -a * 0.6, 0);
+    part(...f.body, 8, 12, -4, 8);
+    part(...f.rArm, 4, 12, ra, 8, false, -a * 0.4, 1);
+    part(...lArm, 4, 12, la, 8, legacy, a * 0.4, 1);
+    part(...f.head, 8, 8, -4, 0);
+    part(...f.hat, 8, 8, -4, 0);
+  } else {
+    const arm = legacy && f.legacyArm ? f.legacyArm : f.arm;
+    const leg = legacy && f.legacyLeg ? f.legacyLeg : f.leg;
+    const dir = view === 'Right' ? 1 : -1;
+    // The far leg and arm swing the other way, a little darker.
+    ctx.filter = 'brightness(0.7)';
+    part(...leg, 4, 12, -2, 20, false, -a * dir, 0);
+    part(...arm, 4, 12, -2, 8, false, a * dir, 1);
+    ctx.filter = 'none';
+    part(...leg, 4, 12, -2, 20, false, a * dir, 0);
+    part(...(view === 'Right' ? [16, 20] : [28, 20]), 4, 12, -2, 8);
+    part(...arm, 4, 12, -2, 8, false, -a * dir, 1);
+    part(...f.head, 8, 8, -4, 0);
+    part(...f.hat, 8, 8, -4, 0);
+  }
 }
 
 // Points the local player at the chosen skin (a built-in texture or an imported PNG).

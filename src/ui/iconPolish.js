@@ -6,6 +6,7 @@ import { polishOn } from '../core/polishSettings.js';
 const OUT = [14, 12, 12];
 const made = new Set(); // URLs we produced, never reprocessed
 const cache = new Map(); // source URL -> Promise<polished URL | null>
+const ready = new Map(); // source URL -> polished URL, once made (put in straight away)
 
 function polish(src) {
   let p = cache.get(src);
@@ -70,6 +71,7 @@ function polish(src) {
         }
         const url = out.toDataURL();
         made.add(url);
+        ready.set(src, url);
         resolve(url);
       } catch {
         resolve(null);
@@ -78,7 +80,10 @@ function polish(src) {
     img.onerror = () => resolve(null);
     img.src = src;
   });
-  if (cache.size > 2000) cache.clear();
+  if (cache.size > 2000) {
+    cache.clear();
+    ready.clear();
+  }
   cache.set(src, p);
   return p;
 }
@@ -94,6 +99,13 @@ function apply(el) {
   if (!polishOn('icons')) return;
   const src = wanted(el);
   if (!src) return;
+  // Already made: swapped in now, before the plain one is ever shown.
+  const known = ready.get(src);
+  if (known) {
+    el.dataset.rawSrc = src;
+    el.setAttribute('src', known);
+    return;
+  }
   polish(src).then((url) => {
     if (url && el.getAttribute('src') === src) {
       el.dataset.rawSrc = src;
@@ -125,4 +137,16 @@ export function startIconPolish() {
       else r.addedNodes.forEach((n) => n.nodeType === 1 && scan(n));
     }
   }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] });
+}
+
+// Makes the polished icons for these textures ahead of time, a few at a time while the
+// game is idle, so menus show them at once instead of popping in.
+export function warmIcons(srcs) {
+  const queue = [...srcs];
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 16));
+  const step = () => {
+    for (let i = 0; i < 8 && queue.length; i++) polish(queue.shift());
+    if (queue.length) idle(step);
+  };
+  idle(step);
 }

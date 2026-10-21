@@ -92,7 +92,20 @@ export class Breaker {
       } else {
         world.setBlock(x, y, cell.id === 'air' ? 'air' : cell.id, { ...(cell.meta || {}), noWall: true });
       }
-      return { id: wall, drop: this.registry.get(wall)?.drop ?? wall, meta: null, x, y, extraDrops: [] };
+      // A torch or ladder hung on that wall comes down with it.
+      const extraDrops = [];
+      const front = world.getCell(x, y);
+      const frontType = this.registry.get(front.id);
+      const meta = front.meta || {};
+      const solidAt = (sx) => world.inBounds(sx, y) && world.isSolidAt(sx, y);
+      const hung =
+        (frontType?.shape === 'torch' && meta.wall === 'back') ||
+        (frontType?.climbable && !(meta.wall === 'left' ? solidAt(x - 1) : meta.wall === 'right' ? solidAt(x + 1) : false));
+      if (hung && meta.layer !== 'bg') {
+        extraDrops.push({ id: frontType.drop ?? front.id, x, y });
+        world.setBlock(x, y, 'air', { noWall: true });
+      }
+      return { id: wall, drop: this.registry.get(wall)?.drop ?? wall, meta: null, x, y, extraDrops };
     }
     if (this.state.progress >= 1) {
       const x = this.state.x;

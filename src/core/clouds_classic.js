@@ -63,21 +63,23 @@ const LAYERS = [
 export class ClassicClouds {
   // light: 0 (night) .. 1 (day)
   draw(ctx, camera, canvas, worldSeed, light) {
+    const k = camera.resolution / 0.7;
+    const zs = camera.renderZoom / 3; // scaled about the middle of the screen by the zoom
     // Clouds are far away: they keep their size whatever the camera's zoom.
-    const z = 3;
+    const z = 3 * k * zs;
     const secs = gameClock.seconds();
     const t = secs * MORPH;
     const l = Math.max(0, Math.min(1, light));
     const night = 0.3 + 0.7 * l; // fainter at night too, not just darker
     const c = Math.round(40 + 215 * l);
     const rgb = `rgba(${c}, ${c}, ${c}, `;
-    const focusX = camera.x + canvas.width / camera.zoom / 2;
-    const focusY = camera.y + canvas.height / camera.zoom / 2;
+    const focusX = camera.centerX;
+    const focusY = camera.centerY;
     const cx = canvas.width / 2;
     for (const L of LAYERS) {
       const B = L.block,
         size = B * z;
-      const top = canvas.height * L.y - (focusY - SURFACE_Y) * L.par * z;
+      const top = canvas.height / 2 + (canvas.height * (L.y - 0.5) - (focusY - SURFACE_Y) * L.par * 3 * k) * zs;
       if (top > canvas.height || top + L.rows * size < 0) continue;
       // Screen x of world-cloud x is (x - left) * z, centered on screen.
       // Drifts with the wind (see wind.js).

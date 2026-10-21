@@ -5,6 +5,7 @@ import { findMatchingRecipe, createRecipeOutput, consumeRecipeIngredients } from
 import { ensureFurnaceMeta, smeltingOf, fuelTime, CRUCIBLES, OUT as FURNACE_OUT, FUEL as FURNACE_FUEL } from '../../assets/blocks/furnace.js';
 import { gameClock } from '../core/gameClock.js';
 import { heatedIngotMaterial } from '../../assets/blocks/forging_table.js';
+import { CHEST_SLOTS } from '../../assets/blocks/chest.js';
 import { spawnItemEntity } from '../game/entities.js';
 import { registry } from '../game/content.js';
 import { multiplayer } from '../game/net.js';
@@ -169,7 +170,7 @@ export function stackId(stack) {
 
 function addStackToInventory(stack) {
   if (!stack || stack.count <= 0) return 0;
-  return stack.type === 'item' ? game.inventory.addItem(stack.itemId, stack.count) : game.inventory.addBlock(stack.blockId, stack.count);
+  return game.inventory.add(stack.type === 'item' ? 'item' : 'block', stackId(stack), stack.count, stack.heatedAt ?? null);
 }
 
 export function dropStackAtPlayer(stack, count = stack?.count ?? 0) {
@@ -210,8 +211,11 @@ export function openChest(tileX, tileY) {
     if (leftCell.meta && leftCell.meta.chestType === 'left') owner = leftCell;
   }
 
-  const isDouble = owner.meta.chestType === 'left';
-  const capacity = isDouble ? 36 : 18;
+  // Only a double chest if its right half is really still there.
+  const ownerX = owner === cell ? tileX : tileX - 1;
+  const isDouble = owner.meta.chestType === 'left' && game.world.getBlockId(ownerX + 1, tileY) === chestId;
+  if (owner.meta.chestType === 'left' && !isDouble) owner.meta.chestType = 'single';
+  const capacity = isDouble ? CHEST_SLOTS * 2 : CHEST_SLOTS;
   if (!Array.isArray(owner.meta.inv) || owner.meta.inv.length !== capacity) {
     // Resize, packing stacks to the front; any that don't fit (chests used to be bigger) drop out.
     const stacks = (owner.meta.inv || []).filter(Boolean);
@@ -227,7 +231,7 @@ export function openChest(tileX, tileY) {
     capacity,
     tileX,
     tileY,
-    ownerX: owner === cell ? tileX : tileX - 1
+    ownerX
   };
   game.inventoryOpen = true;
   recomputeCraft();

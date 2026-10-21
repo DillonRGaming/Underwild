@@ -28,6 +28,17 @@ export class Input {
       if (e.button === 2) this.mouse.rightDown = false;
     });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Switching away (alt-tab, another window) means the key and button releases never
+    // arrive here: let go of everything so nothing stays held.
+    const releaseAll = () => {
+      this.keys.clear();
+      this.mouse.leftDown = false;
+      this.mouse.rightDown = false;
+    };
+    window.addEventListener('blur', releaseAll);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) releaseAll();
+    });
   }
   pressTimes(code) {
     return this.presses.get(code) || [];

@@ -8,7 +8,7 @@ import { Renderer } from './core/renderer.js';
 import { ModManager } from '../mods/index.js';
 import { Placer } from './logic/placing.js';
 import { Breaker } from './logic/breaking.js';
-import { startIconPolish, refreshIcons } from './ui/iconPolish.js';
+import { startIconPolish, refreshIcons, warmIcons } from './ui/iconPolish.js';
 import { polishState, setPolish } from './core/polishSettings.js';
 import { GAME_VERSION } from './game/version.js';
 import { game, prefs, saveManager } from './game/state.js';
@@ -22,9 +22,10 @@ import {
   changeZoom,
   keybinds,
   renderScale,
+  effectiveRenderScale,
   perfOverlay,
   setPerfOverlay,
-  setRenderDistance,
+  stepRenderDistance,
   syncPolishOptions
 } from './game/settings.js';
 import { loadAudioSettings } from './ui/music.js';
@@ -119,7 +120,8 @@ game.canvas = document.getElementById('gameCanvas');
 game.ctx = game.canvas.getContext('2d');
 
 function resizeCanvas() {
-  const scale = window.devicePixelRatio * renderScale();
+  const scale = window.devicePixelRatio * effectiveRenderScale();
+  if (game.camera) game.camera.fixedResolution = effectiveRenderScale();
   game.canvas.width = Math.floor(scale * game.canvas.clientWidth);
   game.canvas.height = Math.floor(scale * game.canvas.clientHeight);
 }
@@ -171,6 +173,14 @@ setupTouchControls({
 });
 
 game.camera = new Camera();
+game.camera.onZoomSettled = () => resizeCanvas();
+// Zoomed out no further than the chunks kept loaded each side (the render distance) reach,
+// so the edges of the screen never show unloaded world; in no closer than 12.
+game.camera.zoomLimits = () => {
+  const reach = Math.max(1, game.chunkRenderDistance - 0.5) * (game.world?.chunkSize || 5) * TILE_SIZE; // world px each side
+  const halfView = (game.canvas.clientWidth || window.innerWidth) * (window.devicePixelRatio || 1) / 2; // world px at zoom 1
+  return [Math.min(12, halfView / reach), 12];
+};
 
 applyViewSettings();
 
@@ -310,8 +320,9 @@ window.addEventListener('mouseup', (e) => {
     const inCreativeUI =
       el && !!el.closest?.('#creativePanel, .creative-panel, .creative-tabs, #creativeTabs, #creativeTabsBottom, .creative-grid, .creative-header');
     if (game.creativeMode && (inCreativeUI || hit?.area === 'creative' || hit?.area === 'creativeTab')) {
-      // Let go anywhere over the creative menu: the stack is thrown away.
-      game.draggingStack = null;
+      // Dragged and let go over the creative menu: the stack is thrown away. A plain click
+      // there keeps it in hand, to be put down with the next click.
+      if (dragged) game.draggingStack = null;
     } else if (hit && `${hit.area}:${hit.index ?? hit.tabId}` !== game.dragStartSlot) {
       handleInventoryClick(hit, false);
     } else if (
@@ -355,6 +366,10 @@ game.canvas.addEventListener('mousedown', (e) => {
   const { tileX, tileY } = getMouseTileFromRaw(screenX, screenY);
 
   const clickedId = game.world.getBlockId(tileX, tileY);
+  // Using a block (opening it, swinging a trapdoor, lighting TNT) needs it in reach, and in
+  // multiplayer the host's say-so to build.
+  const usable = clickedId === 'crafting_table' || isChest(clickedId) || clickedId === 'furnace' || clickedId === 'forging_table' || registry.get(clickedId)?.kind === 'trapdoor' || registry.get(clickedId)?.explosive;
+  if (usable && (!inReach(tileX, tileY) || !multiplayer.canBuild())) return;
   if (clickedId === 'crafting_table') {
     game.openContainer = { title: 'Crafting Table', slots: game.craftGrid, capacity: 9, tileX, tileY };
     game.inventoryOpen = true;
@@ -427,8 +442,8 @@ window.addEventListener('keydown', (e) => {
   const uiOpen = game.inventoryOpen || !!game.openContainer;
 
   // - and + zoom the camera out and in.
-  if (!uiOpen && !game.gamePaused && (e.code === 'Minus' || e.code === 'NumpadSubtract' || e.code === 'Equal' || e.code === 'NumpadAdd')) {
-    changeZoom(e.code === 'Minus' || e.code === 'NumpadSubtract' ? -1 : 1);
+  if (!uiOpen && !game.gamePaused && (e.code === keybinds.zoomOut || e.code === 'NumpadSubtract' || e.code === keybinds.zoomIn || e.code === 'NumpadAdd')) {
+    changeZoom(e.code === keybinds.zoomOut || e.code === 'NumpadSubtract' ? -1 : 1);
     e.preventDefault();
     return;
   }
@@ -471,10 +486,10 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === keybinds.background) game.backgroundBuild = !game.backgroundBuild;
 
-  if (e.code === 'BracketLeft') setRenderDistance(game.chunkRenderDistance - 1);
-  if (e.code === 'BracketRight') setRenderDistance(game.chunkRenderDistance + 1);
-  if (e.code === 'KeyP') game.showOutline = !game.showOutline;
-  if (e.code === 'F3') {
+  if (e.code === keybinds.renderLess) stepRenderDistance(-1);
+  if (e.code === keybinds.renderMore) stepRenderDistance(1);
+  if (e.code === keybinds.outline) game.showOutline = !game.showOutline;
+  if (e.code === keybinds.perf) {
     setPerfOverlay(!perfOverlay.visible);
     e.preventDefault();
   }
@@ -489,6 +504,13 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
   if (e.code === keybinds.drop) game.isDropKeyHeld = false;
+});
+
+// Switched away with the drop key or a mouse button held: they're let go (see Input too).
+window.addEventListener('blur', () => {
+  game.isDropKeyHeld = false;
+  game.placeHeld = false;
+  game.wallPress = false;
 });
 
 bindCreativeSearch();
@@ -516,6 +538,9 @@ window.addEventListener('beforeunload', () => {
 });
 
 startIconPolish();
+
+// Every block and item icon, made ready before the inventory is first opened.
+warmIcons([...registry.entries()].filter(([, d]) => !d.hidden).map(([id]) => `assets/textures/${id}.png`));
 
 // The Toggle Polish key works everywhere: menus, inventory and in game (not while typing
 // or while a key is being rebound).

@@ -1,4 +1,4 @@
-import { treeChanceAt, biomeTreeKind, biomePlantAt, isTreeSlot, trailCandidateAt, BUSH_SIZES, rockMeta } from './biomes.js';
+import { isDesertAt, desertAmountAt, treeChanceAt, biomeTreeKind, biomePlantAt, isTreeSlot, trailCandidateAt, BUSH_SIZES, rockMeta } from './biomes.js';
 
 function fade(t) {
   return t * t * t * (t * (t * 6 - 15) + 10);
@@ -74,8 +74,6 @@ function rand01From(x, seed) {
 }
 
 const MAX_TREE_INFLUENCE = 12;
-// Ground lower than BASE + WATER_DEPTH (y grows downward) is flooded up to that level.
-const WATER_DEPTH = 10;
 const SAND_LAYERS = 4; // sand blocks under lakebeds and beaches
 
 const TREE_CHANCE = 0.45;
@@ -860,12 +858,15 @@ export function naturalHeightAt(x, seed, worldHeight, worldType = 'regular') {
   const natural = clamp(BASE + Math.round(noise1 + noise2 + noise3 + mountain), 6, worldHeight - 4);
   const lake = lakeAt(x, seed, worldHeight, worldType);
   if (!lake) return natural;
-  // A bowl of water with a flat beach either side, easing back into the land around it.
-  const waterLevel = BASE + WATER_DEPTH;
+  // A bowl of water with a flat beach either side, easing back into the land around it. The
+  // water sits a little below the land around the lake, so it reads as a natural hollow.
+  const waterLevel = lake.level;
   const d = Math.abs(x - lake.center);
   if (d <= lake.half) {
     const t = d / lake.half;
-    return waterLevel + 1 + Math.round(lake.depth * (1 - t * t));
+    // A rounded bed, a little uneven so it doesn't look stamped out.
+    const bump = Math.round(perlinNoise(x * 0.15, 0, seed + 3131) * 1.5 * (1 - t));
+    return waterLevel + 1 + Math.max(0, Math.round(lake.depth * Math.cos((t * Math.PI) / 2)) + bump);
   }
   if (d <= lake.half + LAKE_BEACH) return waterLevel;
   const k = (d - lake.half - LAKE_BEACH) / LAKE_BLEND;
@@ -875,9 +876,9 @@ export function naturalHeightAt(x, seed, worldHeight, worldType = 'regular') {
 
 // Top row of a lake's generated water at x, or null when x isn't under a lake.
 export function lakeWaterTopAt(x, seed, worldHeight, worldType = 'regular') {
-  if (worldType === 'superflat' || !lakeAt(x, seed, worldHeight, worldType)) return null;
-  const BASE = 50 + Math.floor(rand01From(seed, seed) * 10);
-  return BASE + WATER_DEPTH;
+  if (worldType === 'superflat') return null;
+  const lake = lakeAt(x, seed, worldHeight, worldType);
+  return lake && Math.abs(x - lake.center) <= lake.half ? lake.level : null;
 }
 
 // Big lakes: at most one per LAKE_CELL blocks. half = half-width of the water.
@@ -886,7 +887,7 @@ const LAKE_CHANCE = 0.85;
 const LAKE_BEACH = 18;
 const LAKE_BLEND = 36;
 
-const LAKE_MAX_RELIEF = 26; // lakes only form where the natural land varies this little
+const LAKE_MAX_RELIEF = 14; // lakes only form where the natural land varies this little
 const lakeCache = new Map();
 
 function lakeAt(x, seed, worldHeight = 256, worldType = 'regular') {
@@ -914,7 +915,19 @@ function lakeForCell(cell, seed, worldHeight = 256, worldType = 'regular') {
         lo = Math.min(lo, h);
         hi = Math.max(hi, h);
       }
-      if (hi - lo <= LAKE_MAX_RELIEF) lake = { center, half, reach, depth: 4 + Math.floor(rand01From(cell * 811 + 4, seed + 3030) * 6) };
+      // Not in deserts, and not where the lake would spill into a neighbouring zone's desert.
+      const dry = [-reach, -half, 0, half, reach].some((dx) => isDesertAt(center + dx, seed));
+      if (hi - lo <= LAKE_MAX_RELIEF && !dry && worldType !== 'mountains') {
+        // The water level: the land's average height here, a couple of blocks down.
+        let sum = 0,
+          n = 0;
+        for (let dx = -reach; dx <= reach; dx += 2) {
+          sum += rawHeightAt(center + dx, seed, worldHeight, worldType);
+          n++;
+        }
+        const level = Math.round(sum / n) + 2;
+        lake = { center, half, reach, level, depth: 4 + Math.floor(rand01From(cell * 811 + 4, seed + 3030) * 6) };
+      }
     }
     if (lakeCache.size > 5000) lakeCache.clear();
     lakeCache.set(key, lake);
@@ -1202,23 +1215,30 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
     }
   }
 
-  const waterLevel = BASE + WATER_DEPTH;
   // Only proper lakes hold water; ordinary valleys stay dry.
-  const underwater = false; // TEMP: lakes disabled for mobile host testing (was: h > waterLevel && !!lakeAt(...))
+  const lakeHere = worldType === 'superflat' ? null : lakeAt(x, seed, worldHeight, worldType);
+  const waterLevel = lakeHere ? lakeHere.level : Infinity;
+  const underwater = !!lakeHere && h > waterLevel;
   const sandy = underwater || onLakeShore(x, seed);
+  // Near a desert's edge the columns turn to sand patchily, more of them the further in.
+  const desertAmt = sandy ? 0 : desertAmountAt(x, seed);
+  const desert = desertAmt > 0 && desertAmt > 0.15 + 0.7 * rand01From(x * 1409, seed + 57);
   const onTrail = !sandy && (y === h || y === h - 1) && isTrailAt(x, seed, worldHeight, worldType);
   // Grass slabs smooth the ground out: one at the foot of a one-block step where the ground
   // carries on flat (the bottom of a slope included), and one half-filling a one-wide dip.
   // Partway down a steady slope (lower again on the other side) there's none.
   const hl = heightAtLocal(x - 1),
     hr = heightAtLocal(x + 1);
-  const isGrassStep = !sandy && !onTrail && !underwater && ((hl === h - 1 && (hr === h || hr === h - 1)) || (hr === h - 1 && hl === h));
+  const isGrassStep = !sandy && !desert && !onTrail && !underwater && ((hl === h - 1 && (hr === h || hr === h - 1)) || (hr === h - 1 && hl === h));
 
   if (isGrassStep && y === h - 1) {
     return { id: 'grass_slab', meta: { slabPos: 'bottom' } };
   }
 
-  const vegetation = onTrail || sandy || isGrassStep ? null : generateVegetationAt(x, y, h, seed);
+  // Desert cacti: background columns in the tree slots, 2-4 tall.
+  if (desert && desertAmt > 0.95 && y < h && cactusHeightAt(x, seed, h) > h - 1 - y) return { id: 'cactus', meta: { layer: 'bg' } };
+  // Sand columns poking into grassland don't take its grass and flowers.
+  const vegetation = onTrail || sandy || isGrassStep || (desert && !isDesertAt(x, seed)) ? null : generateVegetationAt(x, y, h, seed);
   if (vegetation) return vegetation;
   if (sandy && y === h - 1) {
     const deco = lakeDecorAt(x, seed, underwater);
@@ -1228,7 +1248,15 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
   if (y >= HEIGHT - 2) {
     return { id: 'bedrock', meta: null };
   } else if (y < h) {
-    return { id: 'air', meta: null }; // TEMP: water generation disabled for mobile host testing
+    return underwater && y >= waterLevel ? { id: 'water', meta: { still: true } } : { id: 'air', meta: null };
+  } else if (desert && y <= h + 1 + Math.round(2 * desertAmt)) {
+    // Desert: rippled sand on top here and there, sand under it (thinner toward the edge).
+    return { id: y === h && perlinNoise(x * 0.15, 0, seed + 910) > 0.2 ? 'rippled_sand' : 'sand', meta: null };
+  } else if (desert && y <= h + 1 + Math.round(6 * desertAmt) && desertAmt > 0.4) {
+    return { id: 'sandstone', meta: null };
+  } else if (desertAmt > 0 && y > h && y <= h + 5 && rand01From(x * 1423 + y * 7, seed + 59) < desertAmt * 0.8) {
+    // Grassy columns near a desert have sand mixed into their dirt.
+    return { id: 'sand', meta: null };
   } else if (y === h) {
     return { id: sandy ? (isWetSand(x, seed, underwater) ? 'wet_sand' : 'sand') : onTrail ? 'dirt_path' : isGrassStep ? 'dirt' : 'grass', meta: null };
   } else if (sandy && y <= h + sandLayersAt(x, seed)) {
@@ -1247,7 +1275,7 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
     } else if ((vein = coalVeinAt(x, y, h, HEIGHT, seed, heightAtLocal))) {
       return { id: vein, meta: null };
     } else if (generateGravelLocal(x, y, h, HEIGHT, BASE)) {
-      return { id: 'gravel', meta: null };
+      return { id: 'stone_gravel', meta: null };
     } else if (generateOre(x, y, h, 'gold', 3, 15, HEIGHT - 15, seed)) {
       return { id: 'gold_ore', meta: null };
     } else if (generateOre(x, y, h, 'steel', 5, 10, HEIGHT - 10, seed)) {
@@ -1260,6 +1288,13 @@ export function sampleBlockAt(x, y, seed, worldHeight, worldWidth, worldType = '
       return { id: 'stone', meta: null };
     }
   }
+}
+
+// How tall the cactus standing at x is (0 for none). Only on flat ground.
+function cactusHeightAt(x, seed, h) {
+  if (!isTreeSlot(x, seed, (n) => rand01From(n, seed))) return 0;
+  if (rand01From(x * 1301, seed + 31) > 0.6) return 0;
+  return 2 + Math.floor(rand01From(x * 1307, seed + 31) * 3);
 }
 
 // Seagrass on lakebeds; shells, rocks and pebbles on the dry beach.

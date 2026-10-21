@@ -187,6 +187,10 @@ export class Clouds {
 
   // light: 0 (night) .. 1 (day)
   draw(ctx, camera, canvas, worldSeed, light) {
+    // Sized for the normal resolution (0.7) and zoom (3), then scaled about the middle of the
+    // screen by the zoom level, so zooming grows and shrinks them in place.
+    const k = camera.resolution / 0.7;
+    const zs = camera.renderZoom / 3;
     const l = Math.max(0, Math.min(1, light));
     if (this._seed !== worldSeed) this.reset(worldSeed);
 
@@ -197,8 +201,8 @@ export class Clouds {
     this._z += dt * (MORPH_Z + MORPH_Z_WIND * wind.strengthAt(secs));
 
     const night = 0.3 + 0.7 * l; // fainter at night too, not just darker
-    const focusX = camera.x + canvas.width / camera.zoom / 2;
-    const focusY = camera.y + canvas.height / camera.zoom / 2;
+    const focusX = camera.centerX;
+    const focusY = camera.centerY;
     const now = performance.now();
     let budget = 1; // layers re-made this frame
     // The clouds loom larger as a storm comes in (the blocks just draw bigger: no rebuild).
@@ -207,8 +211,8 @@ export class Clouds {
     ctx.imageSmoothingEnabled = false;
     LAYERS.forEach((L, li) => {
       const S = this._layers[li];
-      const size = L.block * SCALE * grow; // one cloud block on screen
-      const top = Math.round(canvas.height * L.y - (focusY - SURFACE_Y) * L.par * SCALE);
+      const size = L.block * SCALE * k * grow * zs; // one cloud block on screen
+      const top = Math.round(canvas.height / 2 + (canvas.height * (L.y - 0.5) - (focusY - SURFACE_Y) * L.par * SCALE * k) * zs);
       if (top > canvas.height || top + L.rows * size < 0) return;
       // Which block of the strip is at the middle of the screen.
       const at = (focusX * L.par - wind.travelled * L.speed * CLOUD_WIND) / L.block;

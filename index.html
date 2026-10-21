@@ -575,9 +575,36 @@
              </div>
            </div>
          </div>
+         <div class="option-group">
+           <label>View Controls</label>
+           <div class="controls-list">             <div class="keybind-row">
+               <span>Block Outline</span>
+               <button class="keybind-button" data-action="bind-outline" data-key="KeyP">P</button>
+             </div>
+             <div class="keybind-row">
+               <span>Zoom Out</span>
+               <button class="keybind-button" data-action="bind-zoomOut" data-key="Minus">-</button>
+             </div>
+             <div class="keybind-row">
+               <span>Zoom In</span>
+               <button class="keybind-button" data-action="bind-zoomIn" data-key="Equal">=</button>
+             </div>
+             <div class="keybind-row">
+               <span>Less Render Distance</span>
+               <button class="keybind-button" data-action="bind-renderLess" data-key="BracketLeft">[</button>
+             </div>
+             <div class="keybind-row">
+               <span>More Render Distance</span>
+               <button class="keybind-button" data-action="bind-renderMore" data-key="BracketRight">]</button>
+             </div>
+             <div class="keybind-row">
+               <span>Performance Overlay</span>
+               <button class="keybind-button" data-action="bind-perf" data-key="F3">F3</button>
+             </div>
+           </div>
+         </div>
        </div>
        <div class="menu-buttons">
-         <button class="minecraft-button" data-action="apply-controls">Apply Changes</button>
          <button class="minecraft-button" data-action="reset-controls">Reset to Defaults</button>
          <button class="minecraft-button" data-action="back-to-options">Back</button>
        </div>
@@ -941,24 +968,39 @@
     </div>
   </div>
 
-  <!-- Player: name and skin -->
+  <!-- Player: name, colour and skins, with a viewer of how you look -->
   <div id="playerOptionsMenu" class="menu-container hidden">
     <div class="menu-background"></div>
     <div class="menu-content">
       <h1 class="menu-title">Player</h1>
-      <div class="form-section">
-        <label for="playerNameInput">Name:</label>
-        <input type="text" id="playerNameInput" class="minecraft-input" maxlength="20" placeholder="Player" spellcheck="false">
-        <label>Skin:</label>
-        <div class="player-skin-row">
-          <canvas id="playerSkinPreview" class="player-skin-preview" width="16" height="64"></canvas>
-          <div class="skins-grid player-skins" id="playerSkinsGrid"></div>
+      <div class="player-screen">
+        <div class="player-viewer">
+          <div class="player-nametag" id="playerNametag">Player</div>
+          <canvas id="playerSkinPreview" class="player-viewer-canvas" width="160" height="320"></canvas>
+          <div class="player-viewer-controls">
+            <button class="minecraft-button small" data-action="player-view-prev" title="Turn left">&lt;</button>
+            <span class="player-view-label" id="playerViewLabel">Front</span>
+            <button class="minecraft-button small" data-action="player-view-next" title="Turn right">&gt;</button>
+          </div>
+          <button class="minecraft-button small" data-action="player-view-walk" id="playerWalkButton">Walk: Off</button>
         </div>
-        <input type="file" id="playerSkinFile" accept="image/png" class="hidden">
-        <p class="mp-status" id="playerSkinStatus"></p>
+        <div class="player-settings">
+          <label for="playerNameInput">Name</label>
+          <input type="text" id="playerNameInput" class="minecraft-input" maxlength="20" placeholder="Player" spellcheck="false">
+          <label>Name colour</label>
+          <div class="player-colors" id="playerColors"></div>
+          <label>Skins</label>
+          <div class="skins-grid player-skins" id="playerSkinsGrid"></div>
+          <div class="player-skin-actions">
+            <button class="minecraft-button small" data-action="player-import-skin">Add Skin (PNG)</button>
+            <button class="minecraft-button small" data-action="player-rename-skin" id="playerRenameSkin">Rename</button>
+            <button class="minecraft-button small" data-action="player-delete-skin" id="playerDeleteSkin">Delete</button>
+          </div>
+          <input type="file" id="playerSkinFile" accept="image/png" class="hidden" multiple>
+          <p class="mp-status" id="playerSkinStatus"></p>
+        </div>
       </div>
       <div class="menu-buttons">
-        <button class="minecraft-button" data-action="player-import-skin">Import Skin (PNG)</button>
         <button class="minecraft-button" data-action="player-done">Done</button>
       </div>
     </div>

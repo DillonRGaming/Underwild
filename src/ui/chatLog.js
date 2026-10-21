@@ -62,21 +62,51 @@ export function addChatLine(text, name = null, kind = '', color = null) {
   while (log.childElementCount > CHAT_LINES_KEPT) log.firstChild.remove();
   if (atBottom || !document.getElementById('chatArea')?.classList.contains('chat-open')) log.scrollTop = log.scrollHeight;
   scheduleChatFade(line, CHAT_FADE_MS);
+  return line;
+}
+
+// A line with a picture under it (screenshots); clicking the picture runs onClick.
+export function addChatImage(text, src, onClick) {
+  const line = addChatLine(text);
+  if (!line) return;
+  const img = document.createElement('img');
+  img.className = 'chat-image';
+  img.src = src;
+  img.alt = text;
+  img.draggable = false;
+  if (onClick) img.addEventListener('click', onClick);
+  img.addEventListener('load', () => {
+    const log = document.getElementById('chatLog');
+    if (log) log.scrollTop = log.scrollHeight;
+  });
+  line.querySelector('.chat-text')?.appendChild(img);
 }
 
 export function showToast(text) {
   addChatLine(text);
 }
 
-// The zoom level isn't a chat message: it flashes in the old corner spot.
+// The zoom level isn't a chat message: it flashes in the old corner spot. A new note replaces
+// the one showing (zooming several steps shows just the latest level, not a pile of them).
+let hudNote = null;
+let hudNoteTimers = [];
 export function showHudNote(text) {
   const el = document.getElementById('mpToast');
   if (!el) return;
-  const line = document.createElement('div');
-  line.className = 'mp-toast-line';
+  hudNoteTimers.forEach(clearTimeout);
+  if (!hudNote || !hudNote.isConnected) {
+    hudNote = document.createElement('div');
+    hudNote.className = 'mp-toast-line';
+    el.appendChild(hudNote);
+  }
+  const line = hudNote;
+  line.classList.remove('fading');
   line.textContent = text;
-  el.appendChild(line);
-  while (el.childElementCount > 5) el.firstChild.remove();
-  setTimeout(() => line.classList.add('fading'), 4000);
-  setTimeout(() => line.remove(), 4600);
+  hudNoteTimers = [
+    setTimeout(() => line.classList.add('fading'), 2000),
+    setTimeout(() => {
+      line.remove();
+      if (hudNote === line) hudNote = null;
+    }, 2600)
+  ];
 }

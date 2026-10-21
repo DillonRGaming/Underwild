@@ -29,7 +29,7 @@ import {
 import { musicTracks, updateMusicVolume, switchMusicTrack, updateMusicTrackSelection, startBackgroundMusic } from './music.js';
 import { game, leafParticles, explosionFX, primedExplosives, tpVisited, saveManager, prefs } from '../game/state.js';
 import { multiplayer } from '../game/net.js';
-import { playerName, drawSkinPreview, applyLocalSkin } from '../game/players.js';
+import { playerName, applyLocalSkin, drawSkinView, SKIN_VIEWS, savedSkins, setSavedSkins, playerSkin, playerColor, setPlayerColor, setPlayerName, NAMED_COLORS } from '../game/players.js';
 import { showToast } from './chatLog.js';
 import { registry } from '../game/content.js';
 import { startMenuLoop, getRendererUI, initializeGameEngine } from '../game/loop.js';
@@ -46,6 +46,13 @@ import {
 import { dropStackAtPlayer, closeInventory, updateHTMLUI } from './inventoryUI.js';
 import { closeChat } from '../game/commands.js';
 
+// A text seed as a number (a 31-bit string hash).
+function textSeed(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 31) + text.charCodeAt(i)) | 0;
+  return Math.abs(h) % 2147483647;
+}
+
 export class MenuManager {
   constructor() {
     this.currentMenu = 'mainMenu';
@@ -57,6 +64,7 @@ export class MenuManager {
     document.querySelectorAll('.menu-container').forEach((menu) => {
       menu.classList.add('hidden');
     });
+    this.pinMenuButtons();
     document.getElementById('mainMenu').classList.remove('hidden');
 
     const healthDisplay = document.getElementById('healthDisplay');
@@ -74,6 +82,22 @@ export class MenuManager {
     document.body.classList.toggle('game-paused', !!(game.world && game.gamePaused));
     this.currentMenu = menuId;
     if (menu) menu.querySelectorAll('.minecraft-slider').forEach(syncSliderFill);
+  }
+
+  // Menus ending in a row of buttons (Back, Apply...): everything between the title and that
+  // row goes in a scroll area, so a tall menu scrolls its options and the buttons stay in view.
+  pinMenuButtons() {
+    document.querySelectorAll('.menu-content').forEach((content) => {
+      const last = content.lastElementChild;
+      if (!last?.classList.contains('menu-buttons') || content.querySelector(':scope > .menu-scroll')) return;
+      const body = [...content.children].filter((el) => el !== last && !el.classList.contains('menu-title'));
+      if (!body.length) return;
+      const scroll = document.createElement('div');
+      scroll.className = 'menu-scroll';
+      content.insertBefore(scroll, body[0]);
+      for (const el of body) scroll.appendChild(el);
+      content.classList.add('pinned-buttons');
+    });
   }
 
   updateVersionNumber() {
@@ -158,6 +182,22 @@ export class MenuManager {
         break;
       case 'player-import-skin':
         document.getElementById('playerSkinFile')?.click();
+        break;
+      case 'player-rename-skin':
+        this.renameSelectedSkin();
+        break;
+      case 'player-delete-skin':
+        this.deleteSelectedSkin();
+        break;
+      case 'player-view-prev':
+        this.turnSkinViewer(-1);
+        break;
+      case 'player-view-next':
+        this.turnSkinViewer(1);
+        break;
+      case 'player-view-walk':
+        this.playerWalk = !this.playerWalk;
+        this.startSkinViewer();
         break;
       case 'player-done':
         this.savePlayerName();
@@ -367,6 +407,12 @@ export class MenuManager {
       case 'bind-rotate':
       case 'bind-flip':
       case 'bind-polish':
+      case 'bind-outline':
+      case 'bind-zoomOut':
+      case 'bind-zoomIn':
+      case 'bind-renderLess':
+      case 'bind-renderMore':
+      case 'bind-perf':
         this.startKeybindRebinding(action.replace('bind-', ''));
         break;
 
@@ -751,7 +797,10 @@ export class MenuManager {
 
       const trimmedSeed = String(game.worldSeed || '').trim();
       const parsedSeed = parseInt(trimmedSeed, 10);
-      game.currentSeed = trimmedSeed && trimmedSeed !== 'Random' && !Number.isNaN(parsedSeed) ? parsedSeed : Math.floor(Math.random() * 1000000);
+      // A number is used as it is; any other text is turned into a number, so the same words
+      // always give the same world.
+      const isNumber = /^-?\d+$/.test(trimmedSeed);
+      game.currentSeed = !trimmedSeed || trimmedSeed === 'Random' ? Math.floor(Math.random() * 1000000) : isNumber ? parsedSeed : textSeed(trimmedSeed);
 
       const sizeMap = { tiny: 500, small: 1000, normal: 2000, large: 4000 };
       this.createSessionWorld(sizeMap[game.worldSize] || 2000, 200, game.currentSeed, game.worldType || 'regular');
@@ -785,6 +834,7 @@ export class MenuManager {
       placePlayerAtSurface(game.spawnTileX);
 
       game.currentWorldSaveName = await this.getUniqueWorldName(game.worldName.trim() || 'New World');
+      game.currentWorldDisplayName = game.currentWorldSaveName;
       this.beginSession();
       saveCurrentWorld();
     } catch (error) {
@@ -803,7 +853,8 @@ export class MenuManager {
       if (!savedData) throw new Error('Save file not found or unreadable.');
 
       this.resetSessionState();
-      const { worldWidth, worldHeight, worldMeta, chunkData, dimensionsData, activeDimension, playerData, inventoryData, itemEntities, mpPlayers } = savedData;
+      const { worldWidth, worldHeight, worldMeta, chunkData, dimensionsData, activeDimension, playerData, inventoryData, itemEntities, mpPlayers, displayName } = savedData;
+      game.currentWorldDisplayName = displayName;
 
       game.currentSeed = worldMeta.currentSeed ?? worldMeta.seed ?? 0;
       game.worldGameMode = worldMeta.gameMode || 'survival';
@@ -886,21 +937,57 @@ export class MenuManager {
       return;
     }
 
+    // Most recently played first.
+    worlds.sort((a, b) => (b.modifiedAt || 0) - (a.modifiedAt || 0));
     for (const w of worlds) {
+      const saveName = w.fileName.replace(/\.json$/, '');
       const item = document.createElement('div');
-      item.className = 'mod-grid-item';
+      item.className = 'mod-grid-item world-item';
       item.innerHTML = `
         <div class="mod-thumbnail world-thumb">W</div>
         <div class="mod-info">
           <div class="mod-name"></div>
           <div class="mod-version"></div>
+          <div class="mod-version world-date"></div>
+        </div>
+        <div class="world-actions">
+          <button class="minecraft-button small world-rename" title="Rename">Rename</button>
+          <button class="minecraft-button small world-delete" title="Delete">Delete</button>
         </div>
       `;
       item.querySelector('.mod-name').textContent = w.name || w.fileName;
       item.querySelector('.mod-version').textContent = `Seed: ${w.seed || 'Random'} | ${w.gameMode || 'survival'}`;
-      item.addEventListener('click', () => this.loadSavedWorld(w.fileName.replace(/\.json$/, '')));
+      item.querySelector('.world-date').textContent = w.modifiedAt ? `Played ${new Date(w.modifiedAt).toLocaleString()}` : '';
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.world-actions')) return;
+        this.loadSavedWorld(saveName);
+      });
+      item.querySelector('.world-rename').addEventListener('click', () => this.renameWorld(saveName, w.name || saveName));
+      item.querySelector('.world-delete').addEventListener('click', () => this.deleteWorld(saveName, w.name || saveName));
       modsGrid.appendChild(item);
     }
+  }
+
+  // Renames a world as shown in the list (its file keeps its name).
+  async renameWorld(saveName, current) {
+    const name = window.prompt('World name:', current);
+    if (name == null || !name.trim()) return;
+    try {
+      const json = await window.electronAPI.worlds.load(saveName);
+      if (!json) return;
+      const data = JSON.parse(json);
+      data.meta = { ...(data.meta || {}), displayName: name.trim().slice(0, 40) };
+      await window.electronAPI.worlds.save(saveName, JSON.stringify(data));
+    } catch (e) {
+      console.error('Rename world failed:', e);
+    }
+    this.showWorldList();
+  }
+
+  async deleteWorld(saveName, label) {
+    if (!window.confirm(`Delete "${label}"? This can't be undone.`)) return;
+    await saveManager.deleteWorld(saveName);
+    this.showWorldList();
   }
 
   // save = false leaves the world file as it was last saved (autosave runs every few seconds).
@@ -1179,36 +1266,106 @@ export class MenuManager {
     const fileInput = document.getElementById('playerSkinFile');
     if (!fileInput._bound) {
       fileInput._bound = true;
-      fileInput.addEventListener('change', () => this.importSkin(fileInput));
+      fileInput.addEventListener('change', () => this.importSkins(fileInput));
       nameInput.addEventListener('change', () => this.savePlayerName());
+      nameInput.addEventListener('input', () => this.updateNametag());
     }
+    this.playerView ??= 0;
+    this.drawPlayerColors();
     this.drawPlayerSkins();
+    this.updateNametag();
+    this.startSkinViewer();
   }
 
   savePlayerName() {
-    const name = document.getElementById('playerNameInput').value.trim().slice(0, 20);
-    prefs.set('playerUsername', name || 'Player');
-    if (game.player) game.player.username = name || 'Player';
+    setPlayerName(document.getElementById('playerNameInput').value);
+  }
+
+  updateNametag() {
+    const tag = document.getElementById('playerNametag');
+    if (!tag) return;
+    tag.textContent = document.getElementById('playerNameInput').value.trim() || 'Player';
+    tag.style.color = playerColor() || '';
+  }
+
+  drawPlayerColors() {
+    const box = document.getElementById('playerColors');
+    box.innerHTML = '';
+    const current = playerColor();
+    const swatch = (color, title) => {
+      const b = document.createElement('button');
+      b.className = 'player-color' + (color === current ? ' selected' : '') + (color ? '' : ' default');
+      b.title = title;
+      if (color) b.style.background = color;
+      b.addEventListener('click', () => {
+        setPlayerColor(color);
+        this.drawPlayerColors();
+        this.updateNametag();
+      });
+      box.appendChild(b);
+    };
+    swatch(null, 'Default');
+    for (const [name, color] of Object.entries(NAMED_COLORS)) swatch(color, name[0].toUpperCase() + name.slice(1));
+    // Any other colour, from the colour picker.
+    const custom = document.createElement('input');
+    custom.type = 'color';
+    custom.className = 'player-color custom' + (current && !Object.values(NAMED_COLORS).includes(current) ? ' selected' : '');
+    custom.title = 'Pick any colour';
+    custom.value = current || '#ffffff';
+    custom.addEventListener('change', () => {
+      setPlayerColor(custom.value.toLowerCase());
+      this.drawPlayerColors();
+      this.updateNametag();
+    });
+    box.appendChild(custom);
+  }
+
+  // The big viewer: the selected skin, turned with < > and walking if Walk is on.
+  startSkinViewer() {
+    const { skin, skinData } = playerSkin();
+    const src = skinData || `assets/textures/${skin}.png`;
+    if (this._viewerSrc !== src) {
+      this._viewerSrc = src;
+      const img = new Image();
+      img.src = src;
+      this._viewerImg = img;
+    }
+    document.getElementById('playerViewLabel').textContent = SKIN_VIEWS[this.playerView];
+    document.getElementById('playerWalkButton').textContent = `Walk: ${this.playerWalk ? 'On' : 'Off'}`;
+    if (this._viewerLoop) return;
+    const frame = (t) => {
+      const menu = document.getElementById('playerOptionsMenu');
+      if (!menu || menu.classList.contains('hidden')) {
+        this._viewerLoop = null;
+        return;
+      }
+      const swing = this.playerWalk ? Math.sin(t / 160) : 0;
+      if (this._viewerImg?.complete) drawSkinView(document.getElementById('playerSkinPreview'), this._viewerImg, SKIN_VIEWS[this.playerView], swing);
+      this._viewerLoop = requestAnimationFrame(frame);
+    };
+    this._viewerLoop = requestAnimationFrame(frame);
+  }
+
+  turnSkinViewer(step) {
+    this.playerView = (this.playerView + step + SKIN_VIEWS.length) % SKIN_VIEWS.length;
+    this.startSkinViewer();
   }
 
   drawPlayerSkins() {
     const grid = document.getElementById('playerSkinsGrid');
     grid.innerHTML = '';
     const current = prefs.get('playerSelectedSkin') || 'steve';
-    const custom = prefs.get('playerCustomSkin');
-    const options = [{ id: 'steve', name: 'Steve', src: 'assets/textures/steve.png' }];
-    if (custom) options.push({ id: 'custom', name: 'Custom', src: custom });
+    const options = [{ id: 'steve', name: 'Steve', src: 'assets/textures/steve.png' }, ...savedSkins().map((sk) => ({ id: sk.id, name: sk.name, src: sk.data }))];
+    const selected = options.some((o) => o.id === current) ? current : 'steve';
     for (const opt of options) {
       const item = document.createElement('div');
-      item.className = 'skin-item' + (opt.id === current ? ' selected' : '');
+      item.className = 'skin-item' + (opt.id === selected ? ' selected' : '');
       const preview = document.createElement('canvas');
       preview.className = 'skin-preview';
-      preview.width = 16;
+      preview.width = 32;
       preview.height = 64;
-      preview.style.width = '20px';
-      preview.style.height = '80px';
       const img = new Image();
-      img.onload = () => drawSkinPreview(preview, img);
+      img.onload = () => drawSkinView(preview, img, 'Front');
       img.src = opt.src;
       const label = document.createElement('div');
       label.className = 'skin-name';
@@ -1218,40 +1375,74 @@ export class MenuManager {
         prefs.set('playerSelectedSkin', opt.id);
         applyLocalSkin();
         this.drawPlayerSkins();
+        this.startSkinViewer();
       });
       grid.appendChild(item);
-      if (opt.id === current) img.addEventListener('load', () => drawSkinPreview(document.getElementById('playerSkinPreview'), img));
     }
+    // The built-in skin can't be renamed or deleted.
+    const own = selected !== 'steve';
+    document.getElementById('playerRenameSkin').disabled = !own;
+    document.getElementById('playerDeleteSkin').disabled = !own;
   }
 
-  importSkin(fileInput) {
-    const file = fileInput.files?.[0];
+  renameSelectedSkin() {
+    const id = prefs.get('playerSelectedSkin');
+    const list = savedSkins();
+    const sk = list.find((x) => x.id === id);
+    if (!sk) return;
+    const name = window.prompt('Skin name:', sk.name);
+    if (name == null) return;
+    sk.name = name.trim().slice(0, 20) || sk.name;
+    setSavedSkins(list);
+    this.drawPlayerSkins();
+  }
+
+  deleteSelectedSkin() {
+    const id = prefs.get('playerSelectedSkin');
+    const list = savedSkins();
+    if (!list.some((x) => x.id === id)) return;
+    if (!window.confirm('Delete this skin?')) return;
+    setSavedSkins(list.filter((x) => x.id !== id));
+    prefs.set('playerSelectedSkin', 'steve');
+    applyLocalSkin();
+    this.drawPlayerSkins();
+    this.startSkinViewer();
+  }
+
+  importSkins(fileInput) {
+    const files = [...(fileInput.files || [])];
     fileInput.value = '';
     const status = document.getElementById('playerSkinStatus');
     status.classList.remove('error');
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        if (img.width !== 64 || (img.height !== 64 && img.height !== 32)) {
-          status.textContent = 'Skins must be 64x64 (or 64x32) PNGs, like Minecraft skins.';
+    status.textContent = '';
+    for (const file of files) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          if (img.width !== 64 || (img.height !== 64 && img.height !== 32)) {
+            status.textContent = `${file.name}: skins must be 64x64 (or 64x32) PNGs, like Minecraft skins.`;
+            status.classList.add('error');
+            return;
+          }
+          const list = savedSkins();
+          const id = `skin_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+          list.push({ id, name: file.name.replace(/\.png$/i, '').slice(0, 20) || 'Skin', data: reader.result });
+          setSavedSkins(list);
+          prefs.set('playerSelectedSkin', id);
+          status.textContent = 'Skin added!';
+          applyLocalSkin();
+          this.drawPlayerSkins();
+          this.startSkinViewer();
+        };
+        img.onerror = () => {
+          status.textContent = `${file.name} isn't a PNG image.`;
           status.classList.add('error');
-          return;
-        }
-        prefs.set('playerCustomSkin', reader.result);
-        prefs.set('playerSelectedSkin', 'custom');
-        status.textContent = 'Skin imported!';
-        applyLocalSkin();
-        this.drawPlayerSkins();
+        };
+        img.src = reader.result;
       };
-      img.onerror = () => {
-        status.textContent = "That file isn't a PNG image.";
-        status.classList.add('error');
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    }
   }
 
   showPauseMenu() {
@@ -1408,6 +1599,9 @@ export class MenuManager {
   finishKeybindRebinding(action, keyCode) {
     if (game.rebindingKey !== action) return;
     game.tempKeybinds[action] = keyCode;
+    // Takes effect (and is saved) straight away; no Apply needed.
+    keybinds[action] = keyCode;
+    saveKeybinds();
     const button = document.querySelector(`[data-action="bind-${action}"]`);
     if (button) {
       button.classList.remove('binding');
@@ -1451,13 +1645,21 @@ export class MenuManager {
       ShiftRight: 'Shift',
       ControlLeft: 'Ctrl',
       ControlRight: 'Ctrl',
-      Escape: 'Esc'
+      Escape: 'Esc',
+      Minus: '-',
+      Equal: '=',
+      BracketLeft: '[',
+      BracketRight: ']',
+      NumpadSubtract: 'Num -',
+      NumpadAdd: 'Num +'
     };
-    return keyNames[keyCode] || keyCode.replace('Key', '');
+    return keyNames[keyCode] || keyCode.replace(/^Key/, '').replace(/^Digit/, '');
   }
 
   resetKeybindsToDefault() {
     game.tempKeybinds = { ...DEFAULT_KEYBINDS };
+    Object.assign(keybinds, DEFAULT_KEYBINDS);
+    saveKeybinds();
 
     Object.entries(game.tempKeybinds).forEach(([action, keyCode]) => {
       const button = document.querySelector(`[data-action="bind-${action}"]`);

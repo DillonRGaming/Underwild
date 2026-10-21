@@ -299,6 +299,27 @@ body.game-paused .menu-background,
   margin-bottom: 0;
 }
 
+/* A tall menu scrolls its contents (.menu-scroll, made by MenuManager.pinMenuButtons), but
+   the buttons at the bottom (Back, Apply...) stay below it, so they never need scrolling to. */
+.menu-content.pinned-buttons {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.menu-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.menu-scroll::-webkit-scrollbar {
+  display: none;
+}
+.menu-content.pinned-buttons > .menu-buttons:last-child {
+  flex: 0 0 auto;
+  margin-top: var(--button-gap);
+}
+
 .changelog-section {
   display: flex;
   align-items: center;
@@ -2336,24 +2357,149 @@ img {
   margin: 0;
 }
 
-.player-skin-row {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
+.player-screen {
+  display: grid;
+  grid-template-columns: minmax(150px, 200px) 1fr;
+  gap: 20px;
+  align-items: start;
+  text-align: left;
 }
 
-.player-skin-preview {
-  width: 40px;
-  height: 160px;
-  padding: 4px 16px;
-  flex-shrink: 0;
-  image-rendering: pixelated;
+.player-viewer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
   background: var(--slot-bg);
   border: var(--thumb-border);
+  border-radius: var(--radius);
+}
+
+.player-nametag {
+  max-width: 100%;
+  padding: 2px 8px;
+  overflow: hidden;
+  font-size: 15px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 3px;
+}
+
+.player-viewer-canvas {
+  width: 120px;
+  height: 240px;
+  image-rendering: pixelated;
+}
+
+.player-viewer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player-viewer-controls .minecraft-button {
+  width: 36px;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.player-skin-actions .minecraft-button {
+  width: auto;
+  min-width: 0;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.player-view-label {
+  min-width: 48px;
+  text-align: center;
+  text-shadow: var(--text-shadow);
+}
+
+.player-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.player-settings .minecraft-input {
+  margin: 0 0 6px;
+}
+
+.player-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.player-color {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  cursor: pointer;
+  border: 2px solid rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+
+.player-color.default {
+  background: linear-gradient(135deg, #fff 45%, #d33 45% 55%, #fff 55%);
+}
+
+.player-color.custom {
+  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.player-color.custom::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.player-color.custom::-webkit-color-swatch {
+  border: none;
+  opacity: 0;
+}
+
+.player-color.selected {
+  border-color: #fff;
+  outline: 2px solid #000;
 }
 
 .player-skins {
-  flex: 1;
+  max-height: 220px;
+}
+
+.player-skins .skin-item {
+  min-height: 0;
+}
+
+.player-skins .skin-preview {
+  width: 48px;
+  height: 96px;
+  border: none;
+}
+
+.player-skin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.player-skin-actions .minecraft-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 560px) {
+  .player-screen {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Join/leave messages in the corner during a game. */
@@ -2855,6 +3001,8 @@ body.touch-mode #inventory .inventory-header .recipe-panel {
 body.polish-ui-corners
   :is(
     .coordinates,
+    .cmd-menu,
+    .cmd-menu-btn,
     .chat-log,
     .name-tag,
     .minecraft-button,
@@ -3025,4 +3173,49 @@ body.touch-mode .chat-log {
 /* Phones: below the zoom, chat and pause buttons along the top. */
 body.touch-mode .perf-overlay {
   top: calc(clamp(8px, 3vh, 20px) * 2 + clamp(36px, 11vh, 52px) * var(--gui-scale, 1));
+}
+
+/* Load World: each world has Rename and Delete beside it. */
+.world-item .mod-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.world-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.world-actions .minecraft-button {
+  width: auto;
+  min-width: 0;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.world-date {
+  opacity: 0.7;
+}
+
+/* /menu: draggable, resizable command panel, styled like the chat box and its suggestions. */
+.cmd-menu { position: fixed; left: var(--chat-left); top: 120px; width: max-content; max-width: calc(100vw - 32px); min-width: 120px; z-index: 60; display: flex; flex-direction: column; box-sizing: border-box; padding: var(--hotbar-padding); color: var(--hud-text); background: var(--hotbar-bg); border: var(--hotbar-border); box-shadow: var(--hotbar-shadow); border-radius: var(--radius); overflow: hidden; }
+.cmd-menu-title { display: flex; justify-content: space-between; align-items: center; padding: 2px 6px 4px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--panel-text-muted); border-bottom: 2px solid var(--slot-bg); margin-bottom: 2px; cursor: move; user-select: none; touch-action: none; }
+.cmd-menu-close { background: none; border: 0; padding: 0; color: var(--panel-text-muted); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.cmd-menu-close:hover { color: var(--hud-text); }
+.cmd-menu-grid { flex: 1; overflow-y: auto; scrollbar-width: none; display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; }
+.cmd-menu-grid::-webkit-scrollbar { display: none; }
+.cmd-menu-btn { width: var(--slot-size); height: var(--slot-size); padding: 11px; box-sizing: border-box; color: var(--hud-text); font: inherit; cursor: pointer; border-radius: 0; background: var(--hotbar-slot-bg); border: var(--hotbar-slot-border); }
+.cmd-menu-btn:hover { background: var(--slot-bg-hover); }
+.cmd-menu-btn svg { display: block; }
+
+/* Screenshots shown in the chat (/camera pic). */
+.chat-line .chat-image {
+  display: block;
+  max-width: 100%;
+  max-height: 120px;
+  margin: 4px 0 2px;
+  border: var(--slot-border);
+  image-rendering: pixelated;
+  cursor: pointer;
 }

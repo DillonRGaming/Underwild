@@ -85,14 +85,18 @@ export class Placer {
       const localY = mouseWorldY - tileY * TILE_SIZE;
       const top = localY < TILE_SIZE / 2;
       meta = { slabPos: modifierFlip ? (top ? 'bottom' : 'top') : top ? 'top' : 'bottom' };
-      // Trapdoors hinge on the side behind you and always swing open that way.
-      if (type.kind === 'trapdoor') meta.hinge = facing < 0 ? 'right' : 'left';
+      // Trapdoors hinge on the side of the cell that was clicked.
+      if (type.kind === 'trapdoor') meta.hinge = mouseWorldX - tileX * TILE_SIZE < TILE_SIZE / 2 ? 'left' : 'right';
     } else if (type.shape === 'stairs') {
+      // The corner clicked is the stair's inner corner: the left or right half picks the tall
+      // side, the bottom half stands it up and the top half hangs it upside down.
       const localX = mouseWorldX - tileX * TILE_SIZE;
-      let orient = 'right';
-      if (localX < TILE_SIZE / 2) orient = 'left';
-      if (rotate !== modifierFlip) orient = orient === 'right' ? 'left' : 'right';
-      meta = { orient };
+      const localY = mouseWorldY - tileY * TILE_SIZE;
+      let orient = localX < TILE_SIZE / 2 ? 'left' : 'right';
+      if (rotate) orient = orient === 'right' ? 'left' : 'right';
+      let upside = localY < TILE_SIZE / 2;
+      if (modifierFlip) upside = !upside;
+      meta = upside ? { orient, upside: true } : { orient };
     } else if (type.shape === 'torch') {
       const solid = (x, y) => world.inBounds(x, y) && world.isSolidAt(x, y);
       if (solid(tileX, tileY + 1)) meta = null;
@@ -130,7 +134,9 @@ export class Placer {
     const belowY = tileY + 1;
     if (world.inBounds(belowX, belowY)) {
       // Only solid blocks smother grass; plants, rocks and other decorations don't.
-      if (world.getBlockType(belowX, belowY)?.grassy && type.solid) {
+      // A top slab leaves the grass under it in the open.
+      const coversTop = !(type.shape === 'slab' && meta?.slabPos === 'top');
+      if (world.getBlockType(belowX, belowY)?.grassy && type.solid && coversTop) {
         const belowCell = world.getCell(belowX, belowY);
         if (!belowCell.meta) belowCell.meta = {};
         belowCell.meta.turnToDirt = true;

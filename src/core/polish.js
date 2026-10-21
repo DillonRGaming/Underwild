@@ -15,7 +15,9 @@ const mix = (a, b, t) => Math.round(a + (b - a) * t);
 // texel, rounded up, so they never come out thin when the zoom isn't a whole number (as with a
 // lower render scale).
 export function outlineWidth(zoom) {
-  return Math.max(1, Math.ceil(zoom - 0.05));
+  // One texture pixel wide: rounded to the nearest whole screen pixel (rounding up made it
+  // jump to nearly two texels at in-between zooms).
+  return Math.max(1, Math.round(zoom));
 }
 
 // Sky: darker and bluer at the top, paler toward the horizon.
@@ -128,38 +130,49 @@ function farHeightAt(column, seed, worldHeight, worldType) {
   return h;
 }
 
-export function drawHills(ctx, camera, canvas, seed, sky, light, worldType = 'regular', worldHeight = 200, snow = 0) {
+// Drawn on `canvas` (the hills' own, fixed-resolution canvas) from the camera's centre and
+// zoom level, so zooming scales the far land about the middle of the screen.
+// Always laid out at the normal zoom (3); the caller stretches the result for other zooms, so
+// the far land (trees and all) grows and shrinks smoothly. baseH: the height (in this canvas's
+// pixels) of the screen it's for (the canvas can be bigger, to have enough to shrink).
+export function drawHills(ctx, camera, canvas, seed, sky, light, worldType = 'regular', worldHeight = 200, snow = 0, baseH = canvas.height) {
   const type = worldType === 'mars' ? 'mars' : 'regular';
   const l = 0.06 + 0.94 * Math.max(0, Math.min(1, light));
   // Snow lying on the land whitens the far land too.
   const land = FAR_COLOR[type].map((v, i) => mix(v, SNOWY_FAR[i], 0.55 * snow));
   // Where the camera is relative to standing on the surface, so the layers rise and sink a
   // little (less the further back) as you climb and dig.
-  const fromSurface = camera.y + canvas.height / camera.zoom / 2 - FAR_GROUND * TILE_SIZE;
+  const fromSurface = camera.centerY - FAR_GROUND * TILE_SIZE;
+  // Laid out at the normal zoom (3) relative to the middle of the screen, then scaled about the
+  // middle by the zoom level: zooming makes the far land bigger or smaller in place, and only
+  // the camera moving slides it.
+  const W = canvas.width,
+    H = canvas.height;
+  const base = baseH / 300; // canvas pixels per world pixel at the normal zoom
+  const s = 1;
   for (const L of FAR_LAYERS) {
-    const zoom = camera.zoom * L.scale;
-    // One far block on screen, in whole pixels, so every column (and every tree) lands on the same grid.
-    const block = Math.max(1, Math.round(TILE_SIZE * zoom));
+    const b0 = TILE_SIZE * base * L.scale; // one far block at the normal zoom
     const c = land.map((v, i) => mix(v * l, sky[i], L.haze));
-    const groundY = canvas.height * L.ground - fromSurface * zoom * FAR_RISE;
-    // Slides sideways at its own (slow) speed, whatever its size. Snapped to whole pixels too.
-    const shift = Math.round(camera.x * camera.zoom * L.speed);
-    const first = Math.floor(shift / block) - 1;
-    const toScreenX = (column) => column * block - shift;
+    const ground = baseH * (L.ground - 0.5) - fromSurface * base * L.scale * FAR_RISE; // from the middle
+    const off = camera.centerX * base * L.speed; // how far it has slid (at the normal zoom)
+    const toScreenX = (column) => Math.round(W / 2 + (column * b0 - off) * s);
+    const first = Math.floor((off - W / 2 / s) / b0) - 1;
+    const block = Math.max(1, Math.round(b0 * s));
     const trees = []; // column, middle x, ground y
     ctx.beginPath();
-    ctx.moveTo(toScreenX(first), canvas.height);
+    ctx.moveTo(toScreenX(first), H);
     for (let column = first; ; column++) {
       const x0 = toScreenX(column);
-      if (x0 > canvas.width) {
-        ctx.lineTo(x0, canvas.height);
+      if (x0 > W) {
+        ctx.lineTo(x0, H);
         break;
       }
       const h = (farHeightAt(column, seed + L.seed, worldHeight, type) - FAR_GROUND) * L.flat;
-      const top = Math.round(groundY + h * TILE_SIZE * zoom);
+      const top = Math.round(H / 2 + (ground + h * TILE_SIZE * base * L.scale) * s);
+      const x1 = toScreenX(column + 1);
       ctx.lineTo(x0, top);
-      ctx.lineTo(x0 + block, top);
-      if (type === 'regular') trees.push(column, x0 + block / 2, top);
+      ctx.lineTo(x1, top);
+      if (type === 'regular') trees.push(column, (x0 + x1) / 2, top);
     }
     ctx.closePath();
     // Trees on the far land, in the same colour (part of the same shape).
@@ -178,8 +191,8 @@ export function drawHills(ctx, camera, canvas, seed, sky, light, worldType = 're
 // Solid, full, foreground blocks get outlines; slabs get half-block outlines; leaves keep their own look.
 export function isOutlined(type, meta) {
   if (!type || !type.solid) return false;
-  if (type.shape && type.shape !== 'full' && type.shape !== 'slab') return false;
-  if (meta?.layer === 'bg') return false;
+  if (type.shape && type.shape !== 'full' && type.shape !== 'slab' && type.shape !== 'stairs') return false;
+  if (meta?.layer === 'bg' || type.seeThrough) return false;
   return type.outline !== false;
 }
 
@@ -212,10 +225,22 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
   // 2: slab bottom
   // 3: slab top
   // 4: leaves
+  // 5: not loaded (or outside the world)
+  // 6: stairs (which quarters they fill is in quarterGrid)
+  // 7: thin slabs (trapdoors): outlined round their own thin box; open space to neighbours
   if (!edgePass._shapeGrid || edgePass._shapeGrid.length < totalCells) {
     edgePass._shapeGrid = new Uint8Array(totalCells);
   }
   const shapeGrid = edgePass._shapeGrid;
+  // Which quarters of each cell are filled (bits 1 top-left, 2 top-right, 4 bottom-left,
+  // 8 bottom-right), for outlining stairs and what touches them quarter by quarter.
+  if (!edgePass._quarterGrid || edgePass._quarterGrid.length < totalCells) edgePass._quarterGrid = new Uint8Array(totalCells);
+  const quarterGrid = edgePass._quarterGrid;
+  // Natural tree trunks stand in front of the ground like a separate layer: they and the
+  // blocks around them are outlined against each other, as if the other were open space.
+  if (!edgePass._groupGrid || edgePass._groupGrid.length < totalCells) edgePass._groupGrid = new Uint8Array(totalCells);
+  const groupGrid = edgePass._groupGrid;
+  const sameGroup = (i, j) => groupGrid[i] === groupGrid[j];
 
   // Pre-pass: populate shapeGrid once for the visible viewport window
   for (let x = minX; x <= maxX; x++) {
@@ -224,19 +249,32 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     for (let y = minY; y <= maxY; y++) {
       const idx = (y - minY) * gridW + colOff;
       if (!chunkLoaded || !world.inBounds(x, y)) {
-        shapeGrid[idx] = 1; // full boundary
+        groupGrid[idx] = 0;
+        shapeGrid[idx] = 5; // edge of what's loaded: counts as solid next door, never drawn itself
+        quarterGrid[idx] = 15;
         continue;
       }
       const cell = world.getCell(x, y);
       const type = registry.get(cell.id);
+      groupGrid[idx] = cell.meta?.noCollision && type?.trunk ? 1 : 0;
       if (!isOutlined(type, cell.meta) || cell.meta?.fellAt) {
         shapeGrid[idx] = 0;
+        quarterGrid[idx] = 0;
       } else if (type?.leaves) {
         shapeGrid[idx] = 4;
+        quarterGrid[idx] = 15;
+      } else if (type?.shape === 'slab' && ((type.thickness ?? 8) < 8 || cell.meta?.open)) {
+        shapeGrid[idx] = 7;
+        quarterGrid[idx] = 0;
       } else if (type?.shape === 'slab') {
         shapeGrid[idx] = cell.meta?.slabPos === 'top' ? 3 : 2;
+        quarterGrid[idx] = cell.meta?.slabPos === 'top' ? 3 : 12;
+      } else if (type?.shape === 'stairs') {
+        shapeGrid[idx] = 6;
+        quarterGrid[idx] = r.blockQuarters(x, y);
       } else {
         shapeGrid[idx] = 1;
+        quarterGrid[idx] = 15;
       }
     }
   }
@@ -278,7 +316,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         const colIdx = x - minX;
         const selfShape = shapeGrid[rowIdx * gridW + colIdx];
         const downShape = shapeGrid[(rowIdx + 1) * gridW + colIdx];
-        if (selfShape === 1 && downShape === 1 && own(x, y)) {
+        if (selfShape === 1 && downShape === 1 && sameGroup(rowIdx * gridW + colIdx, (rowIdx + 1) * gridW + colIdx) && own(x, y)) {
           if (!inSpan) {
             inSpan = true;
             spanStart = x;
@@ -306,7 +344,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     const sy0 = rowSy[0];
     for (let x = startX; x <= endX; x++) {
       const colIdx = x - minX;
-      if (shapeGrid[topRowIdx * gridW + colIdx] === 1 && shapeGrid[(topRowIdx - 1) * gridW + colIdx] === 1 && own(x, startY)) {
+      if (shapeGrid[topRowIdx * gridW + colIdx] === 1 && shapeGrid[(topRowIdx - 1) * gridW + colIdx] === 1 && sameGroup(topRowIdx * gridW + colIdx, (topRowIdx - 1) * gridW + colIdx) && own(x, startY)) {
         if (!inTopSpan) {
           inTopSpan = true;
           topSpanStart = x;
@@ -336,7 +374,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         const rowIdx = y - minY;
         const selfShape = shapeGrid[rowIdx * gridW + colIdx];
         const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
-        if (selfShape === 1 && rightShape === 1 && own(x, y)) {
+        if (selfShape === 1 && rightShape === 1 && sameGroup(rowIdx * gridW + colIdx, rowIdx * gridW + colIdx + 1) && own(x, y)) {
           if (!inSpan) {
             inSpan = true;
             spanStart = y;
@@ -364,7 +402,7 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     const sx0 = colSx[0];
     for (let y = startY; y <= endY; y++) {
       const rowIdx = y - minY;
-      if (shapeGrid[rowIdx * gridW + leftColIdx] === 1 && shapeGrid[rowIdx * gridW + leftColIdx - 1] === 1 && own(startX, y)) {
+      if (shapeGrid[rowIdx * gridW + leftColIdx] === 1 && shapeGrid[rowIdx * gridW + leftColIdx - 1] === 1 && sameGroup(rowIdx * gridW + leftColIdx, rowIdx * gridW + leftColIdx - 1) && own(startX, y)) {
         if (!inLeftSpan) {
           inLeftSpan = true;
           leftSpanStart = y;
@@ -391,11 +429,15 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
       const ex = colEx[x - startX];
       for (let y = startY; y <= endY; y++) {
         const rowIdx = y - minY;
-        const self = shapeGrid[rowIdx * gridW + colIdx];
-        const right = shapeGrid[rowIdx * gridW + (colIdx + 1)];
-        const down = shapeGrid[(rowIdx + 1) * gridW + colIdx];
-        const diag = shapeGrid[(rowIdx + 1) * gridW + (colIdx + 1)];
-        if ((self === 1 ? 1 : 0) + (right === 1 ? 1 : 0) + (down === 1 ? 1 : 0) + (diag === 1 ? 1 : 0) >= 2 && own(x, y)) {
+        const si = rowIdx * gridW + colIdx;
+        const grid1 = (i) => (sameGroup(si, i) ? shapeGrid[i] : 0);
+        const self = shapeGrid[si];
+        const right = grid1(si + 1);
+        const down = grid1(si + gridW);
+        const diag = grid1(si + gridW + 1);
+        // The dot sits in this cell's own corner pixel, so only on a solid block (otherwise it
+        // pokes up out of the ground into the air above).
+        if (self === 1 && 1 + (right === 1 ? 1 : 0) + (down === 1 ? 1 : 0) + (diag === 1 ? 1 : 0) >= 2 && own(x, y)) {
           layerCtx.fillRect(ex - u, rowEy[y - startY] - u, u, u);
         }
       }
@@ -403,6 +445,13 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
   }
 
   // 2. Outlines, open corner rounding, and soft wall shadows
+  const placedBg = (x, y) => {
+    if (!world.inBounds(x, y)) return false;
+    const c = world.getCell(x, y);
+    const m = c.meta;
+    // A natural tree trunk stands in front like a background block does.
+    return m?.layer === 'bg' || !!m?.bgId || (!!m?.noCollision && !!registry.get(c.id)?.trunk);
+  };
   const outlinePath = outlines ? new Path2D() : null;
   const shadowPath = wallShadows ? new Path2D() : null;
   let hasOutlines = false,
@@ -423,17 +472,137 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
     for (let y = startY; y <= endY; y++) {
       const rowIdx = y - minY;
       const selfShape = shapeGrid[rowIdx * gridW + colIdx];
-      if (selfShape === 0 || !own(x, y)) continue;
+      if (selfShape === 0 || selfShape === 5 || !own(x, y)) continue;
+
+      // A trapdoor: a thin board (lying across the top or bottom, or stood on end against its
+      // hinge when open), outlined all round with rounded corners.
+      if (selfShape === 7) {
+        const yi7 = y - startY;
+        const sy7 = rowSy[yi7],
+          ey7 = rowEy[yi7];
+        const cell = world.getCell(x, y);
+        const t = Math.max(u * 2, Math.round(((ey7 - sy7) * (registry.get(cell.id)?.thickness ?? 8)) / 16));
+        const m = cell.meta || {};
+        let bx = sx,
+          by = sy7,
+          bw = w,
+          bh = t;
+        if (m.open) {
+          bw = t;
+          bh = ey7 - sy7;
+          if (m.hinge !== 'left') bx = ex - t;
+        } else if ((m.slabPos || 'bottom') !== 'top') by = ey7 - t;
+        if (outlinePath) {
+          outlinePath.rect(bx, by, bw, u);
+          outlinePath.rect(bx, by + bh - u, bw, u);
+          outlinePath.rect(bx, by, u, bh);
+          outlinePath.rect(bx + bw - u, by, u, bh);
+          hasOutlines = true;
+        }
+        if (rounding) {
+          for (const [cx, cy, dx, dy] of [
+            [bx, by, 1, 1],
+            [bx + bw - u, by, -1, 1],
+            [bx, by + bh - u, 1, -1],
+            [bx + bw - u, by + bh - u, -1, -1]
+          ]) {
+            if (cornerCount + 4 > edgePass._cornerBuf.length) {
+              const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+              newBuf.set(edgePass._cornerBuf);
+              edgePass._cornerBuf = newBuf;
+            }
+            edgePass._cornerBuf[cornerCount++] = cx;
+            edgePass._cornerBuf[cornerCount++] = cy;
+            edgePass._cornerBuf[cornerCount++] = dx;
+            edgePass._cornerBuf[cornerCount++] = dy;
+          }
+        }
+        continue;
+      }
 
       const yi = y - startY;
       const sy = rowSy[yi],
         ey = rowEy[yi];
       const h = ey - sy;
 
-      const leftShape = shapeGrid[rowIdx * gridW + (colIdx - 1)];
-      const rightShape = shapeGrid[rowIdx * gridW + (colIdx + 1)];
-      const upShape = shapeGrid[(rowIdx - 1) * gridW + colIdx];
-      const downShape = shapeGrid[(rowIdx + 1) * gridW + colIdx];
+      // A trapdoor next door is thin: to its neighbours it's open space.
+      const selfIdx = rowIdx * gridW + colIdx;
+      // Where a trunk meets the ground only the ground draws the line between them (one line,
+      // not two side by side): the ground sees the trunk as open, the trunk sees the ground as solid.
+      const near = (i) => (shapeGrid[i] === 7 || (groupGrid[i] > groupGrid[selfIdx]) ? 0 : shapeGrid[i]);
+      const leftShape = near(rowIdx * gridW + (colIdx - 1));
+      const rightShape = near(rowIdx * gridW + (colIdx + 1));
+      const upShape = near((rowIdx - 1) * gridW + colIdx);
+      const downShape = near((rowIdx + 1) * gridW + colIdx);
+
+      // Stairs, and blocks touching stairs: outlined quarter by quarter, wherever a filled
+      // quarter meets an empty one.
+      if (selfShape === 6 || leftShape === 6 || rightShape === 6 || upShape === 6 || downShape === 6) {
+        if (selfShape === 4 || !outlinePath) continue;
+        const mask = quarterGrid[rowIdx * gridW + colIdx];
+        const filled = (qx, qy) => {
+          const cx = colIdx + Math.floor(qx / 2),
+            cy = rowIdx + Math.floor(qy / 2);
+          if (cx < 0 || cy < 0 || cx >= gridW || cy >= gridH) return true;
+          return (quarterGrid[cy * gridW + cx] >> (((qy + 2) % 2) * 2 + ((qx + 2) % 2))) & 1;
+        };
+        const hx = sx + Math.floor(w / 2),
+          hy = sy + Math.floor(h / 2);
+        for (let q = 0; q < 4; q++) {
+          if (!((mask >> q) & 1)) continue;
+          const qx = q & 1,
+            qy = q >> 1;
+          const x0 = qx ? hx : sx,
+            x1 = qx ? ex : hx;
+          const y0 = qy ? hy : sy,
+            y1 = qy ? ey : hy;
+          const upOpen = !filled(qx, qy - 1),
+            downOpen = !filled(qx, qy + 1);
+          const leftOpen = !filled(qx - 1, qy),
+            rightOpen = !filled(qx + 1, qy);
+          if (upOpen) outlinePath.rect(x0, y0, x1 - x0, u);
+          if (downOpen) outlinePath.rect(x0, y1 - u, x1 - x0, u);
+          if (leftOpen) outlinePath.rect(x0, y0, u, y1 - y0);
+          if (rightOpen) outlinePath.rect(x1 - u, y0, u, y1 - y0);
+          // Outside corners (open on both sides and across), rounded like a full block's,
+          // including the step's own corner in the middle of a stair.
+          if (rounding) {
+            const corners = [
+              [upOpen && leftOpen && !filled(qx - 1, qy - 1), x0, y0, 1, 1, qx === 0 && qy === 0],
+              [upOpen && rightOpen && !filled(qx + 1, qy - 1), x1 - u, y0, -1, 1, qx === 1 && qy === 0],
+              [downOpen && leftOpen && !filled(qx - 1, qy + 1), x0, y1 - u, 1, -1, qx === 0 && qy === 1],
+              [downOpen && rightOpen && !filled(qx + 1, qy + 1), x1 - u, y1 - u, -1, -1, qx === 1 && qy === 1]
+            ];
+            for (const [open, cx, cy, dx, dy, cellCorner] of corners) {
+              if (!open) continue;
+              if (cornerCount + 4 > edgePass._cornerBuf.length) {
+                const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
+                newBuf.set(edgePass._cornerBuf);
+                edgePass._cornerBuf = newBuf;
+              }
+              edgePass._cornerBuf[cornerCount++] = cx;
+              edgePass._cornerBuf[cornerCount++] = cy;
+              edgePass._cornerBuf[cornerCount++] = dx;
+              edgePass._cornerBuf[cornerCount++] = dy;
+              // A cut at the cell's own corner shows what's behind: the wall, as for full blocks.
+              if (cellCorner) r.drawWallBehindCorner(mainCtx, x, y, cx, cy, dx, dy, u);
+            }
+          }
+          // Soft shadows on the wall below and to the right, as full blocks cast.
+          if (shadowPath) {
+            if (qy === 1 && downOpen && !r.isOpenSky(x, y + 1) && r.hasBackdrop(x, y + 1)) {
+              shadowPath.rect(x0, ey, x1 - x0, sh);
+              hasShadows = true;
+            }
+            if (qx === 1 && rightOpen && !r.isOpenSky(x + 1, y) && r.hasBackdrop(x + 1, y)) {
+              shadowPath.rect(ex, y0, sh, y1 - y0);
+              hasShadows = true;
+            }
+          }
+        }
+        hasOutlines = true;
+        continue;
+      }
 
       if (selfShape === 2 || selfShape === 3) {
         // Slab
@@ -443,8 +612,9 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
 
         const leftOpen = leftShape === 0 || ((leftShape === 2 || leftShape === 3) && (leftShape === 3) !== isTopSlab);
         const rightOpen = rightShape === 0 || ((rightShape === 2 || rightShape === 3) && (rightShape === 3) !== isTopSlab);
-        const topOpen = isTopSlab ? upShape === 0 : true;
-        const bottomOpen = isTopSlab ? true : downShape === 0;
+        // A top slab above / bottom slab below sits on the far side of its cell: a gap.
+        const topOpen = isTopSlab ? upShape === 0 || upShape === 3 : true;
+        const bottomOpen = isTopSlab ? true : downShape === 0 || downShape === 2;
 
         if (seams) {
           layerCtx.fillStyle = SEAM;
@@ -492,12 +662,13 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
       }
 
       // Check if this block is exposed to open air or non-solid on any side
-      const up = upShape === 0;
-      const down = downShape === 0;
+      // A top slab above (or a bottom slab below) only fills the far half of its cell, so
+      // this side is still in the open.
+      const up = upShape === 0 || upShape === 3;
+      const down = downShape === 0 || downShape === 2;
       const left = leftShape === 0;
       const right = rightShape === 0;
-      const isExposed =
-        up || down || left || right || leftShape === 2 || leftShape === 3 || rightShape === 2 || rightShape === 3 || upShape === 2 || downShape === 3;
+      const isExposed = up || down || left || right || leftShape === 2 || leftShape === 3 || rightShape === 2 || rightShape === 3;
 
       if (!isExposed) continue;
       if (selfShape === 4) continue; // leaves keep their own ragged edge
@@ -560,6 +731,12 @@ export function edgePass(r, layerCtx, mainCtx, startX, endX, startY, endY) {
         for (let i = 0; i < 4; i++) {
           const [open, cx, cy, dx, dy] = corners[i];
           if (!open) continue;
+          // Against a placed background block the corner stays square: cutting it would show
+          // the sky through the gap between the two.
+          if (placedBg(x - dx, y) || placedBg(x, y - dy)) continue;
+          // A trunk's corner against the ground (or the ground's against a trunk) stays square too.
+          const other = (i) => shapeGrid[i] !== 0 && !sameGroup(selfIdx, i);
+          if (other(selfIdx - dx) || other(selfIdx - dy * gridW)) continue;
           if (cornerCount + 4 > edgePass._cornerBuf.length) {
             const newBuf = new Int32Array(edgePass._cornerBuf.length * 2);
             newBuf.set(edgePass._cornerBuf);

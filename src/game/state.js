@@ -46,6 +46,7 @@ export const game = {
   isLoading: false,
   creativeMode: false,
   currentWorldSaveName: null,
+  currentWorldDisplayName: null,
   player: null,
   inventory: null,
   camera: null,

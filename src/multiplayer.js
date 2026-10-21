@@ -121,7 +121,7 @@ class RemotePlayer {
     // Sideways: slide with the knockback, stopped by blocks, slowing down on the ground.
     if (this.vx) {
       const nx = this.x + this.vx * dt;
-      const edge = Math.floor((this.vx > 0 ? nx + this.width : nx) / TILE_SIZE);
+      const edge = Math.floor((this.vx > 0 ? nx + this.width - 0.01 : nx) / TILE_SIZE);
       let blocked = false;
       for (let ty = Math.floor(this.y / TILE_SIZE); ty <= Math.floor((this.y + this.height - 1) / TILE_SIZE); ty++) {
         if (world.isSolidAt(edge, ty)) blocked = true;
@@ -131,12 +131,19 @@ class RemotePlayer {
       this.vx *= Math.exp(-(this.onGround ? 8 : 1) * dt);
       if (Math.abs(this.vx) < 4) this.vx = 0;
     }
+    // Flying (/fly on it): it just hangs there.
+    if (this.creativeFlying) {
+      this.vy = 0;
+      this.onGround = false;
+      return;
+    }
     this.onGround = false;
     this.vy = Math.min(500, this.vy + 800 * dt);
     this.y += this.vy * dt;
     const bottomRow = Math.floor((this.y + this.height) / TILE_SIZE);
     const left = Math.floor(this.x / TILE_SIZE);
-    const right = Math.floor((this.x + this.width) / TILE_SIZE);
+    // The last pixel column it covers (a block it only touches at the edge doesn't hold it up).
+    const right = Math.floor((this.x + this.width - 0.01) / TILE_SIZE);
     if (this.vy >= 0 && (world.isSolidAt(left, bottomRow) || world.isSolidAt(right, bottomRow))) {
       this.y = bottomRow * TILE_SIZE - this.height;
       this.vy = 0;
@@ -692,6 +699,8 @@ export class Multiplayer {
         dummy.home = { x: a.x, y: a.y };
       } else if (a.k === 'hit') dummy.dummyHit(a.dmg, a.vx, a.vy, this.game);
       else if (a.k === 'color') dummy.color = validColor(a.c);
+      else if (a.k === 'kill') dummy.dummyHit(dummy.health, 0, 0, this.game);
+      else if (a.k === 'fly' || a.k === 'noclip') dummy.creativeFlying = a.on == null ? !dummy.creativeFlying : !!a.on;
       return;
     }
     if (this.isHost) this.send({ t: 'act', a }, to);

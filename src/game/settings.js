@@ -74,6 +74,15 @@ export function renderScale() {
   return RENDER_SCALES.includes(s) ? s : DEFAULT_RENDER_SCALE;
 }
 
+// The render scale actually used: nudged so a texture pixel is a whole number of canvas
+// pixels at the current zoom. Otherwise texels come out uneven and outlines (always whole
+// pixels) look thicker or thinner than the texture's pixels as you zoom.
+export function effectiveRenderScale() {
+  // The camera's actual zoom (cutscenes zoom too), or the chosen one before there's a camera.
+  const z = game.camera?.renderZoom || viewZoom();
+  return Math.max(1, Math.round(z * renderScale())) / z;
+}
+
 export function setRenderScale(scale) {
   prefs.set('renderScale', scale);
   window.dispatchEvent(new Event('resize')); // resizes the canvas (script.js)
@@ -86,7 +95,7 @@ function viewZoom() {
 }
 
 export function applyViewSettings() {
-  if (game.camera) game.camera.zoom = viewZoom() * renderScale();
+  if (game.camera) game.camera.userZoom = viewZoom();
   document.documentElement.style.setProperty('--gui-scale', String(prefs.getNumber('guiScale', 1)));
 }
 
@@ -94,7 +103,7 @@ export function changeZoom(direction) {
   if (!game.camera) return;
   const zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, viewZoom() + direction * ZOOM_STEP));
   prefs.set('cameraZoom', zoom);
-  game.camera.zoom = zoom * renderScale();
+  game.camera.userZoom = zoom; // the camera eases there (and fits the canvas resolution once it arrives)
   game.lastPreloadChunk = null; // load more chunks if the wider view needs them
   showHudNote(`Zoom: ${Math.round((zoom / 3) * 100)}%`);
 }
@@ -145,7 +154,13 @@ export const DEFAULT_KEYBINDS = Object.freeze({
   background: 'KeyZ',
   rotate: 'KeyR',
   flip: 'KeyF',
-  polish: 'KeyO'
+  polish: 'KeyO',
+  outline: 'KeyP',
+  zoomOut: 'Minus',
+  zoomIn: 'Equal',
+  renderLess: 'BracketLeft',
+  renderMore: 'BracketRight',
+  perf: 'F3'
 });
 
 export const keybinds = { ...DEFAULT_KEYBINDS };
@@ -199,6 +214,7 @@ export function saveGameSettings() {
     'underwild_gameSettings',
     JSON.stringify({
       renderDistance: game.renderDistance,
+      renderChunks: game.chunkRenderDistance,
       textureQuality: game.textureQuality,
       renderFallingLeaves: game.renderFallingLeaves,
       autoJump: game.autoJump,
@@ -265,7 +281,12 @@ export function loadGameSettings() {
     if (THEMES[saved.theme]) game.currentTheme = saved.theme;
   } catch (e) {}
   applyTheme(game.currentTheme);
-  setRenderDistance(RENDER_DISTANCE_CHUNKS[game.renderDistance]);
+  let savedChunks = null;
+  try {
+    savedChunks = JSON.parse(prefs.get('underwild_gameSettings') || '{}').renderChunks;
+  } catch (e) {}
+  // The exact distance set with the keys, if there is one; otherwise the menu's choice.
+  setRenderDistance(Number.isFinite(savedChunks) ? savedChunks : RENDER_DISTANCE_CHUNKS[game.renderDistance]);
   selectSettingButton('renderDistance', `render-${game.renderDistance}`);
   selectSettingButton('textureQuality', `texture-${game.textureQuality}`);
   selectSettingButton('fallingLeaves', game.renderFallingLeaves ? 'leaves-on' : 'leaves-off');
@@ -303,10 +324,20 @@ export function syncSliderFill(slider) {
 
 export const RENDER_DISTANCE_CHUNKS = { tiny: 2, short: 4, normal: 6, far: 8, extreme: 12 };
 
+// The render distance keys: one chunk further or nearer, shown and saved.
+export function stepRenderDistance(step) {
+  setRenderDistance(game.chunkRenderDistance + step);
+  const preset = Object.keys(RENDER_DISTANCE_CHUNKS).find((k) => RENDER_DISTANCE_CHUNKS[k] === game.chunkRenderDistance);
+  if (preset) {
+    game.renderDistance = preset;
+    selectSettingButton('renderDistance', `render-${preset}`);
+  } else selectSettingButton('renderDistance', null);
+  saveGameSettings();
+  showHudNote(`Render distance: ${game.chunkRenderDistance} chunks`);
+}
+
 export function setRenderDistance(distance) {
   game.chunkRenderDistance = Math.max(1, Math.min(32, distance));
-  if (game.world) {
-    game.world.maxLoadedChunks = Math.max(30, (game.chunkRenderDistance + 2) * 2 + 1);
-    game.lastPreloadChunk = null;
-  }
+  // The next preload works out how many chunks to keep (it counts the zoom too).
+  if (game.world) game.lastPreloadChunk = null;
 }

@@ -147,5 +147,5 @@ export const explosive3 = {
 };
 export default {
   ...makeExplosive('explosive', 'Explosive (Instant)', { fuse: 0, radius: 4 }),
-  recipes: [{ shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'gravel' }, count: 1 }]
+  recipes: [{ shape: ['cgc', 'gcg', 'cgc'], ingredients: { c: 'coal', g: 'sand' }, count: 1 }]
 };

@@ -72,7 +72,6 @@ import marsSand from './mars_sand.js';
 import marsRippledSand from './mars_rippled_sand.js';
 import marsRockDecor from './mars_rock_decor.js';
 import marsPebble from './mars_pebble.js';
-import gravel from './gravel.js';
 import oakChest from './oak_chest.js';
 import birchChest from './birch_chest.js';
 import spruceChest from './spruce_chest.js';
@@ -82,6 +81,8 @@ import furnace from './furnace.js';
 import forgingTable from './forging_table.js';
 import stonePebbles from './stone_pebbles.js';
 import polishedStone from './polished_stone.js';
+import glass from './glass.js';
+import cactus from './cactus.js';
 import stoneGravel from './stone_gravel.js';
 import stoneBricks from './stone_bricks.js';
 import stoneSlab from './stone_slab.js';
@@ -165,7 +166,6 @@ export function registerAllBlocks(registry) {
     goldBlock,
     craftingTable,
     bedrock,
-    gravel,
     oakChest,
     birchChest,
     spruceChest,
@@ -175,6 +175,8 @@ export function registerAllBlocks(registry) {
     forgingTable,
     stonePebbles,
     polishedStone,
+    glass,
+    cactus,
     stoneGravel,
     stoneBricks,
     stoneSlab,
@@ -203,14 +205,15 @@ export function registerAllBlocks(registry) {
     purpleTorch,
     cyanTorch,
     lunarRock,
-    { ...lunarRock, id: 'lunarstone' },
+    // Old names for the Moon's blocks, kept so older worlds still load (hidden from menus).
+    { ...lunarRock, id: 'lunarstone', hidden: true, drop: 'lunar_rock', recipes: [] },
     lunarRockDecor,
     lunarPebble,
-    { ...lunarPebble, id: 'lunarstone_pebble' },
+    { ...lunarPebble, id: 'lunarstone_pebble', hidden: true, drop: 'lunar_pebble', recipes: [] },
     lunarRockSlab,
-    { ...lunarRockSlab, id: 'lunarstone_slab' },
+    { ...lunarRockSlab, id: 'lunarstone_slab', hidden: true, drop: 'lunar_rock_slab', recipes: [] },
     lunarRockStairs,
-    { ...lunarRockStairs, id: 'lunarstone_stairs' },
+    { ...lunarRockStairs, id: 'lunarstone_stairs', hidden: true, drop: 'lunar_rock_stairs', recipes: [] },
     marsSandstone,
     marsSmoothSandstone,
     marsCutSandstone,

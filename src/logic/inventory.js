@@ -47,14 +47,18 @@ export class Inventory {
     };
   }
 
-  add(type, id, count) {
+  // heatedAt: when heated metal was heated (it cools from then); stacks joined keep the
+  // earliest, so nothing stays hot longer than it should.
+  add(type, id, count, heatedAt = null) {
     const template = this.createStack(type, id, 0);
+    if (heatedAt != null) template.heatedAt = heatedAt;
     for (let i = 0; i < this.TOTAL_SLOTS && count > 0; i++) {
       const s = this.slots[i];
       if (s && this.canMerge(s, template) && s.count < (s.maxStack ?? 24)) {
         const take = Math.min((s.maxStack ?? 24) - s.count, count);
         s.count += take;
         count -= take;
+        if (heatedAt != null) s.heatedAt = s.heatedAt == null ? heatedAt : Math.min(s.heatedAt, heatedAt);
       }
     }
     for (let i = 0; i < this.TOTAL_SLOTS && count > 0; i++) {
@@ -104,7 +108,7 @@ export class Inventory {
   serialize() {
     return this.slots.map((s) => {
       if (!s) return null;
-      return { type: s.type, blockId: s.blockId, itemId: s.itemId, count: s.count };
+      return { type: s.type, blockId: s.blockId, itemId: s.itemId, count: s.count, ...(s.heatedAt != null ? { heatedAt: s.heatedAt } : {}) };
     });
   }
 
@@ -118,6 +122,7 @@ export class Inventory {
       const id = migrateLegacyId(type === 'item' ? d.itemId : d.blockId);
       if (!id) return;
       const stack = this.createStack(type, id, Math.max(1, d.count || 1));
+      if (d.heatedAt != null) stack.heatedAt = d.heatedAt;
       // Stacks bigger than the stack limit (it used to be 64) spill the rest.
       if (stack.count > stack.maxStack) {
         overflow.push({ ...stack, count: stack.count - stack.maxStack });
@@ -129,7 +134,7 @@ export class Inventory {
     // Stacks that no longer fit (the inventory used to be bigger) are returned so they can be dropped.
     const leftover = [];
     for (const stack of overflow) {
-      const left = this.add(stack.type, stack.blockId || stack.itemId, stack.count);
+      const left = this.add(stack.type, stack.blockId || stack.itemId, stack.count, stack.heatedAt ?? null);
       if (left > 0) leftover.push({ ...stack, count: left });
     }
     return leftover;

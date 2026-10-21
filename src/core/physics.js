@@ -153,6 +153,8 @@ function topSurfaceY(world, tileX, tileY, localX) {
       return pos === 'bottom' ? tileTop + (TILE_SIZE * (16 - (type.thickness ?? 8))) / 16 : tileTop;
     }
     case 'stairs': {
+      // Upside-down stairs are flat on top.
+      if (meta.upside) return tileTop;
       const orient = meta.orient || 'right';
       if (orient === 'right') return tileTop + (1 - localX) * TILE_SIZE;
       return tileTop + localX * TILE_SIZE;
@@ -176,7 +178,9 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
       return pos === 'top' ? tileTop + (TILE_SIZE * (type.thickness ?? 8)) / 16 : tileTop + TILE_SIZE;
     }
     case 'stairs': {
-      return tileTop + TILE_SIZE;
+      // Upside-down stairs slope underneath, rising to their tall side.
+      if (!meta.upside) return tileTop + TILE_SIZE;
+      return (meta.orient || 'right') === 'right' ? tileTop + localX * TILE_SIZE : tileTop + (1 - localX) * TILE_SIZE;
     }
     default:
       return tileTop + TILE_SIZE;
@@ -192,7 +196,9 @@ function ceilingSurfaceY(world, tileX, tileY, localX) {
 // air there's none.
 const WIND_SLIDE = 90; // px/s you're blown along at, at the top of the scale with nothing holding you
 const WIND_WALK = 0.25; // share of your walking speed a full-force wind adds or takes away
-const WIND_AIR = 80; // px/s you drift at in the air, at full force
+// How quickly flying (and noclip) eases toward the speed you're steering at (per second).
+const FLY_EASE = 9;
+const WIND_AIR = 20; // px/s you drift at in the air, at full force (just a nudge)
 const CROUCH_CATCH = 0.4;
 const DEFAULT_GRIP = 0.7;
 const MATERIAL_GRIP = {
@@ -241,6 +247,8 @@ function windPush(player, world, tileX, inWater, onLadder, crouching, moving, wa
 const CROUCH_SHRINK = 6;
 
 export function resolvePlayerPhysics(player, world, input, dt, noClipMode = false, creativeMode = false, keybinds) {
+  // Noclip stays switched on while you're not flying, but only works in flight.
+  noClipMode = noClipMode && !!player.creativeFlying;
   const wantCrouch = !player.creativeFlying && input.isKeyDown(keybinds.crouch || 'ControlLeft');
   // Something closing in on the head (a trapdoor shut above you) ducks you down too.
   const stuck =
@@ -295,7 +303,8 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   let walkSpeed = 60;
   let sprintSpeed = 90;
   const jumpVelocity = player.jumpVelocity * (gravityMult < 1 ? Math.sqrt(gravityMult * 1.8) : 1);
-  let accel = player.onGround ? (isSprinting ? 1100 : 900) : 600;
+  // A little momentum: speeding up and slowing down take a moment.
+  let accel = player.onGround ? (isSprinting ? 760 : 620) : 420;
 
   // Swimming, Minecraft-style: slower sideways, slowly sink, hold jump to swim up.
   if (inWater && !noClipMode) {
@@ -313,16 +322,18 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   // not frame polling), and a toggle uses up both taps so a third tap starts a new pair.
   if (input.pressTimes) {
     const now = performance.now();
-    const taps = [...input.pressTimes(keybinds.jump), ...input.pressTimes(keybinds.forward)]
-      .filter((t) => t > (player.lastJumpSeen || 0) && t > now - 1000)
-      .sort((a, b) => a - b);
-    for (const t of taps) {
-      if (creativeMode && player.lastJumpPress && t - player.lastJumpPress < 350) {
+    // Only two taps of the same key count: W then Space (or Space then W) is just a jump.
+    const taps = [...input.pressTimes(keybinds.jump).map((t) => [t, 'jump']), ...(keybinds.forward === keybinds.jump ? [] : input.pressTimes(keybinds.forward)).map((t) => [t, 'forward'])]
+      .filter(([t]) => t > (player.lastJumpSeen || 0) && t > now - 1000)
+      .sort((a, b) => a[0] - b[0]);
+    for (const [t, key] of taps) {
+      if (creativeMode && player.lastJumpPress && player.lastJumpKey === key && t - player.lastJumpPress < 350) {
         player.creativeFlying = !player.creativeFlying;
         player.isFlying = player.creativeFlying;
         player.lastJumpPress = 0;
       } else {
         player.lastJumpPress = t;
+        player.lastJumpKey = key;
       }
       player.lastJumpSeen = t;
     }
@@ -333,14 +344,17 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   if (noClipMode) {
     player.cancelFall?.();
     const moveSpeed = maxSpeed * 2.5;
-    player.vx = 0;
-    player.vy = 0;
-
-    if (input.isKeyDown(keybinds.right)) player.vx += moveSpeed;
-    if (input.isKeyDown(keybinds.left)) player.vx -= moveSpeed;
-
-    if (input.isKeyDown(keybinds.forward)) player.vy -= moveSpeed;
-    if (input.isKeyDown(keybinds.backward)) player.vy += moveSpeed;
+    let tx = 0,
+      ty = 0;
+    if (input.isKeyDown(keybinds.right)) tx += moveSpeed;
+    if (input.isKeyDown(keybinds.left)) tx -= moveSpeed;
+    if (input.isKeyDown(keybinds.forward)) ty -= moveSpeed;
+    if (input.isKeyDown(keybinds.backward)) ty += moveSpeed;
+    const ease = 1 - Math.exp(-FLY_EASE * dt);
+    player.vx += (tx - player.vx) * ease;
+    player.vy += (ty - player.vy) * ease;
+    if (!tx && Math.abs(player.vx) < 1) player.vx = 0;
+    if (!ty && Math.abs(player.vy) < 1) player.vy = 0;
 
     player.x += player.vx * dt;
     player.y += player.vy * dt;
@@ -366,7 +380,7 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
   }
 
   if (target === 0 && !flung) {
-    const friction = inWater ? 6 : player.onGround ? 12 : 1;
+    const friction = inWater ? 6 : player.onGround ? 7.5 : 1;
     player.vx = push + (player.vx - push) * Math.max(0, 1 - friction * dt);
     if (Math.abs(player.vx) < 1) player.vx = 0;
   }
@@ -378,14 +392,18 @@ function stepPlayerPhysics(player, world, input, dt, noClipMode, creativeMode, k
     player.cancelFall?.();
     const baseFlySpeed = maxSpeed * 1.5;
     const flySpeed = isSprinting ? baseFlySpeed * 1.5 : baseFlySpeed;
-    player.vx = 0;
-    player.vy = 0;
-
-    if (input.isKeyDown(keybinds.right)) player.vx += flySpeed;
-    if (input.isKeyDown(keybinds.left)) player.vx -= flySpeed;
-
-    if (jumpKeyPressed) player.vy -= flySpeed;
-    if (input.isKeyDown(keybinds.crouch || 'ControlLeft') || input.isKeyDown('ControlRight') || input.isKeyDown(keybinds.backward)) player.vy += flySpeed;
+    let tx = 0,
+      ty = 0;
+    if (input.isKeyDown(keybinds.right)) tx += flySpeed;
+    if (input.isKeyDown(keybinds.left)) tx -= flySpeed;
+    if (jumpKeyPressed) ty -= flySpeed;
+    if (input.isKeyDown(keybinds.crouch || 'ControlLeft') || input.isKeyDown('ControlRight') || input.isKeyDown(keybinds.backward)) ty += flySpeed;
+    // A little momentum: eases up to speed and glides to a stop.
+    const ease = 1 - Math.exp(-FLY_EASE * dt);
+    player.vx += (tx - player.vx) * ease;
+    player.vy += (ty - player.vy) * ease;
+    if (!tx && Math.abs(player.vx) < 1) player.vx = 0;
+    if (!ty && Math.abs(player.vy) < 1) player.vy = 0;
 
     const wantX = player.x + player.vx * dt;
     let nextX = sweepX(world, player, wantX, false);

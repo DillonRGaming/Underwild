@@ -249,8 +249,34 @@ export class Renderer {
       const polish = ui?.textureQuality !== 'fast';
       this._polish = polish;
       const showHills = !isMoon && (this.world?.hasHills ?? this.world?.dimension?.hasHills ?? true);
-      if (polish && polishOn('hills') && showHills)
-        drawHills(ctx, this.camera, canvas, world.seed ?? 0, this._skyRGB, this.daylight?.base ?? 1, world.worldType ?? 'regular', world.height, this.hasWeather(isMoon) ? weather.snowCover : 0);
+      if (polish && polishOn('hills') && showHills) {
+        // Drawn on their own canvas at a fixed resolution, then stretched over the screen: the
+        // game canvas changes resolution as you zoom (see effectiveRenderScale), and drawn
+        // straight onto it the hills' blocky edges would shift about with every zoom step.
+        // Laid out at the normal zoom, then stretched about the middle for the camera's zoom: the
+        // far land grows and shrinks smoothly (its pixel-art trees too) instead of in steps.
+        const hills = (this._hillCanvas ||= document.createElement('canvas'));
+        const hw = Math.max(1, Math.round(canvas.clientWidth * (window.devicePixelRatio || 1) * 0.7));
+        const hh = Math.max(1, Math.round(canvas.clientHeight * (window.devicePixelRatio || 1) * 0.7));
+        const zs = Math.max(0.05, this.camera.renderZoom / 3);
+        const grow = Math.max(1, 1 / zs); // zoomed out: lay out more than a screen, to shrink
+        const cw = Math.ceil(hw * grow),
+          ch = Math.ceil(hh * grow);
+        if (hills.width !== cw || hills.height !== ch) {
+          hills.width = cw;
+          hills.height = ch;
+        }
+        const hctx = hills.getContext('2d');
+        hctx.clearRect(0, 0, cw, ch);
+        drawHills(hctx, this.camera, hills, world.seed ?? 0, this._skyRGB, this.daylight?.base ?? 1, world.worldType ?? 'regular', world.height, this.hasWeather(isMoon) ? weather.snowCover : 0, hh);
+        const sw = hw / zs,
+          sh = hh / zs;
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(hills, (cw - sw) / 2, (ch - sh) / 2, sw, sh, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      }
       this.drawWeatherSky(isMoon);
       perf.endPhase('renderSkyHills');
 
@@ -485,7 +511,7 @@ export class Renderer {
         if (!t) continue;
         const mine = blocks(x, y, cell, t);
         // Anything that doesn't fill its cell (plants, slabs, stairs, trapdoors) shows the wall behind it.
-        if (!t.solid || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
+        if (!t.solid || t.seeThrough || cell.id === 'air' || (t.shape && t.shape !== 'full')) {
           // A background block placed behind this one (a torch on a planks wall...).
           const bgType = cell.meta?.bgId ? this.registry.get(cell.meta.bgId) : null;
           if (bgType) {
@@ -699,16 +725,20 @@ export class Renderer {
       Object.assign(this, saved);
     }
     const tile = reuse || { canvas: document.createElement('canvas'), moving: new Uint8Array(CACHE_TILE * CACHE_TILE) };
-    if (tile.canvas.width !== size || tile.canvas.height !== size) {
-      tile.canvas.width = size;
-      tile.canvas.height = size;
+    // One pixel more than the tile, holding the start of the next one: at zooms where a tile
+    // isn't a whole number of pixels, rounding would otherwise leave a hairline gap between
+    // tiles. Each tile overlaps the next by that pixel instead.
+    if (tile.canvas.width !== size + 1 || tile.canvas.height !== size + 1) {
+      tile.canvas.width = size + 1;
+      tile.canvas.height = size + 1;
       part = null;
     }
     // Copy what was redrawn (without its surround) into the tile.
     const dx = px(r.x0 - tileX),
       dy = px(r.y0 - tileY);
-    const dw = px(r.x1 + 1 - tileX) - dx,
-      dh = px(r.y1 + 1 - tileY) - dy;
+    // Reaching the tile's right / bottom edge: the overlap pixel too.
+    const dw = px(r.x1 + 1 - tileX) - dx + (r.x1 === tileX + CACHE_TILE - 1 ? 1 : 0),
+      dh = px(r.y1 + 1 - tileY) - dy + (r.y1 === tileY + CACHE_TILE - 1 ? 1 : 0);
     const tctx = tile.canvas.getContext('2d');
     tctx.imageSmoothingEnabled = false;
     tctx.clearRect(dx, dy, dw, dh);
@@ -795,7 +825,7 @@ export class Renderer {
       const type = world.getBlockType(x, y);
       return !!type && !!type.solid && world.getCell(x, y).meta?.layer !== 'bg';
     };
-    const from = Math.max(0, startY - 24); // a roof a little above the screen still counts
+    const from = 0; // any roof above, however high, keeps the rain off
     for (let x = startX; x <= endX; x++) {
       let top = Infinity;
       for (let y = from; y <= endY; y++) {
@@ -865,8 +895,12 @@ export class Renderer {
           if (y - stop < 18 * zoom && stop > -Infinity) splashes.push(x, stop);
           continue;
         }
+        // The streak's tail reaches back up-wind: clip it where that column is covered.
+        const tailX = x - slant * streak;
+        const tailCol = Math.floor((camera.x + tailX / zoom) / TILE_SIZE) - startX;
+        if (tailCol !== col && y - streak >= (cover[tailCol] ?? Infinity)) continue;
         ctx.moveTo(x, y);
-        ctx.lineTo(x - slant * streak, y - streak);
+        ctx.lineTo(tailX, y - streak);
       }
       ctx.stroke();
       // Little splashes where the drops land.
@@ -960,7 +994,7 @@ export class Renderer {
     const { ctx, camera } = this;
     const columns = this.snowSurfaces(startX, endX);
     const u = Math.max(1, Math.round(camera.zoom));
-    const size = Math.round(TILE_SIZE * camera.zoom);
+    const size = Math.ceil(TILE_SIZE * camera.zoom); // rounded up: blocks overlap rather than gap at in-between zooms
     const body = new Path2D();
     const tops = new Path2D();
     // How much of the snow lies at height `top` in half-column h: its share there, the same
@@ -1195,7 +1229,11 @@ export class Renderer {
       if ((t.thickness ?? 8) < 8 || meta.open) return 0;
       return (meta.slabPos || 'bottom') === 'top' ? 3 : 12;
     }
-    if (t.shape === 'stairs') return (meta.orient || 'right') === 'right' ? 14 : 13;
+    // Upright: empty top corner on the short side; upside down: empty bottom corner.
+    if (t.shape === 'stairs') {
+      const right = (meta.orient || 'right') === 'right';
+      return meta.upside ? (right ? 11 : 7) : right ? 14 : 13;
+    }
     return 0;
   }
 
@@ -1809,7 +1847,9 @@ export class Renderer {
     if (!world.inBounds(tileX, tileY) || !world.isChunkLoaded(world.chunkXFor(tileX))) return true;
     const t = world.getBlockType(tileX, tileY);
     const cell = world.getCell(tileX, tileY);
-    if (t && t.solid && (!t.shape || t.shape === 'full') && cell.meta?.layer !== 'bg') return true;
+    // A natural tree trunk stands in front of whatever's behind it (sky or wall), so it doesn't
+    // count as a wall itself.
+    if (t && t.solid && (!t.shape || t.shape === 'full') && cell.meta?.layer !== 'bg' && !(t.trunk && cell.meta?.noCollision)) return true;
     if (cell.meta?.bgId || cell.meta?.layer === 'bg') return true;
     return this.naturalWallId(tileX, tileY) !== null;
   }
@@ -2340,7 +2380,7 @@ export class Renderer {
   // Leaf blocks grow a ragged edge of leaf pixels into any air beside them.
   drawLeafFringes(startX, endX, startY, endY) {
     const { world, camera } = this;
-    const size = Math.round(TILE_SIZE * camera.zoom);
+    const size = Math.ceil(TILE_SIZE * camera.zoom); // rounded up: blocks overlap rather than gap at in-between zooms
     for (let x = startX; x <= endX; x++) {
       if (!world.isChunkLoaded(world.chunkXFor(x))) continue;
       for (let y = startY; y <= endY; y++) {
@@ -2990,7 +3030,7 @@ export class Renderer {
   // The tree a leaf belongs to: the nearest trunk standing on the ground within a few columns
   // (its column and where it meets the ground), so every leaf of a tree follows the same
   // trunk. Cached for the frame: leaves are many.
-  treeAt(tileX) {
+  treeAt(tileX, tileY) {
     const stamp = Math.floor(performance.now() / 50);
     if (this._treeStamp !== stamp) {
       this._treeStamp = stamp;
@@ -3000,11 +3040,21 @@ export class Renderer {
     if (tree !== undefined) return tree;
     const { world } = this;
     tree = null;
+    const standing = (c, y) => world.inBounds(c, y) && world.getBlockType(c, y)?.trunk && world.getCell(c, y).meta?.axis !== 'x';
     for (let d = 0; d <= 6 && !tree; d++) {
       for (const c of d ? [tileX - d, tileX + d] : [tileX]) {
         if (!world.isChunkLoaded(world.chunkXFor(c))) continue;
+        // The trunk below these leaves (wherever its foot is: the ground may have changed
+        // since it grew), down to its lowest block.
+        for (let y = tileY; y <= tileY + 24; y++) {
+          if (!standing(c, y)) continue;
+          while (standing(c, y + 1)) y++;
+          tree = { x: c, y };
+          break;
+        }
+        if (tree) break;
         const y = this.naturalSurfaceAt(c) - 1;
-        if (world.inBounds(c, y) && world.getBlockType(c, y)?.trunk && world.getCell(c, y).meta?.axis !== 'x') {
+        if (standing(c, y)) {
           tree = { x: c, y };
           break;
         }
@@ -3022,7 +3072,7 @@ export class Renderer {
   // with the wind. The ripple depends only on the row, so every leaf in a row moves together
   // (nothing squeezes or opens gaps sideways), and it only shows up as the wind gets strong.
   leafSwayOffset(tileX, tileY, size) {
-    const tree = this.treeAt(tileX);
+    const tree = this.treeAt(tileX, tileY);
     if (!tree) return 0;
     const sway = this.trunkSwayAt(tree.x, tree.y);
     if (!sway) return 0;
@@ -3434,12 +3484,70 @@ export class Renderer {
     ctx.restore();
   }
 
+  // Solid blocks are drawn a hair big (see drawBlockShape) and clipped to their exact cell
+  // on screen: at in-between zooms a cell is 67 pixels one time and 68 the next, and this
+  // way neighbours meet with no gap and nothing spills past a block's outline.
   drawBlock(tileX, tileY, type, meta) {
+    const clip = type.solid && (!type.shape || type.shape === 'full' || type.shape === 'slab' || type.shape === 'stairs') && !meta?.fellAt;
+    if (!clip) return this.drawBlockShape(tileX, tileY, type, meta);
+    const { ctx, camera } = this;
+    const x0 = Math.round(camera.worldToScreenX(tileX * TILE_SIZE)),
+      y0 = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
+    const x1 = Math.round(camera.worldToScreenX((tileX + 1) * TILE_SIZE)),
+      y1 = Math.round(camera.worldToScreenY((tileY + 1) * TILE_SIZE));
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, y0, x1 - x0, y1 - y0);
+    ctx.clip();
+    try {
+      this.drawBlockShape(tileX, tileY, type, meta);
+    } finally {
+      ctx.restore();
+    }
+  }
+
+  // Connected glass: a faint tint over the cell, with a frame only on the sides (and inner
+  // corners) where the next cell isn't the same glass, so a run of it reads as one pane.
+  drawConnectedBlock(tileX, tileY, type, meta, sx, sy, size) {
+    const { ctx, world } = this;
+    const bg = meta?.layer === 'bg';
+    const same = (dx, dy) => {
+      if (!world.inBounds(tileX + dx, tileY + dy)) return false;
+      const c = world.getCell(tileX + dx, tileY + dy);
+      return c.id === type.id && (c.meta?.layer === 'bg') === bg;
+    };
+    const p = Math.max(1, Math.round(size / 16));
+    const l = !same(-1, 0),
+      r = !same(1, 0),
+      u = !same(0, -1),
+      d = !same(0, 1);
+    ctx.save();
+    if (bg) ctx.globalAlpha = 0.6;
+    ctx.fillStyle = 'rgba(200, 232, 250, 0.16)';
+    ctx.fillRect(sx, sy, size, size);
+    ctx.fillStyle = 'rgba(228, 246, 255, 0.85)';
+    if (u) ctx.fillRect(sx, sy, size, p);
+    if (d) ctx.fillRect(sx, sy + size - p, size, p);
+    if (l) ctx.fillRect(sx, sy, p, size);
+    if (r) ctx.fillRect(sx + size - p, sy, p, size);
+    if (!u && !l && !same(-1, -1)) ctx.fillRect(sx, sy, p, p);
+    if (!u && !r && !same(1, -1)) ctx.fillRect(sx + size - p, sy, p, p);
+    if (!d && !l && !same(-1, 1)) ctx.fillRect(sx, sy + size - p, p, p);
+    if (!d && !r && !same(1, 1)) ctx.fillRect(sx + size - p, sy + size - p, p, p);
+    // A glint in the cells along the pane's top-left edge.
+    if (u || l) {
+      ctx.fillStyle = 'rgba(240, 250, 255, 0.55)';
+      for (const [gx, gy] of [[3, 5], [4, 4], [5, 3]]) ctx.fillRect(sx + gx * p, sy + gy * p, p, p);
+    }
+    ctx.restore();
+  }
+
+  drawBlockShape(tileX, tileY, type, meta) {
     const { ctx, camera, world } = this;
     ctx.imageSmoothingEnabled = false;
     const sx = Math.round(camera.worldToScreenX(tileX * TILE_SIZE));
     let sy = Math.round(camera.worldToScreenY(tileY * TILE_SIZE));
-    const size = Math.round(TILE_SIZE * camera.zoom);
+    const size = Math.ceil(TILE_SIZE * camera.zoom); // rounded up: blocks overlap rather than gap at in-between zooms
     // Falling blocks slide down from the cell above rather than jumping a whole block.
     if (meta?.fellAt) {
       const t = Math.max(0, (gameClock.now() - meta.fellAt) / (meta.slideMs || FALL_SLIDE_MS));
@@ -3448,6 +3556,8 @@ export class Renderer {
 
     // Drawn at full brightness: the light is laid over the whole world layer afterwards.
     const isLightSource = type.lightLevel > 0;
+
+    if (type.connected) return this.drawConnectedBlock(tileX, tileY, type, meta, sx, sy, size);
 
     // Blocks with several looks (bush sizes, shells...) pick a texture from their meta.
     const textureId = type.variants ? `${type.id}_${meta?.[type.variants.key] ?? type.variants.count}` : type.id;
@@ -3483,10 +3593,11 @@ export class Renderer {
       const soil = this.textures[soilId];
       if (isTextureReady(soil)) {
         const flip = type.shape === 'stairs' && meta?.orient === 'left';
+        const vflip = type.shape === 'stairs' && !!meta?.upside;
         const shiftUp = type.shape === 'slab' && meta?.slabPos === 'top' ? Math.floor(size / 2) : 0;
         ctx.save();
-        ctx.translate(flip ? sx + size : sx, sy - shiftUp);
-        if (flip) ctx.scale(-1, 1);
+        ctx.translate(flip ? sx + size : sx, (vflip ? sy + size : sy) - shiftUp);
+        ctx.scale(flip ? -1 : 1, vflip ? -1 : 1);
         this.drawBlockTexture(soil, 0, 0, size);
         ctx.restore();
         const overlayId = this.grassOverlay(tileX, tileY, meta);
@@ -3611,13 +3722,14 @@ export class Renderer {
     if (texture || chestTexture) {
       const drawTexture = chestTexture || texture;
       const flip = type.shape === 'stairs' && meta?.orient === 'left';
+      const vflip = type.shape === 'stairs' && !!meta?.upside;
       const shiftUp = type.shape === 'slab' && meta?.slabPos === 'top' ? Math.floor((size * (16 - (type.thickness ?? 8))) / 16) : 0;
       const isBg = meta?.layer === 'bg';
 
-      if (flip || shiftUp !== 0) {
+      if (flip || vflip || shiftUp !== 0) {
         ctx.save();
-        ctx.translate(flip ? sx + size : sx, sy - shiftUp);
-        if (flip) ctx.scale(-1, 1);
+        ctx.translate(flip ? sx + size : sx, (vflip ? sy + size : sy) - shiftUp);
+        ctx.scale(flip ? -1 : 1, vflip ? -1 : 1);
         this.drawBlockTexture(drawTexture, 0, 0, size, isBg ? BACKGROUND_WALL_SHADE : 1);
         ctx.restore();
       } else {
@@ -3676,14 +3788,15 @@ export class Renderer {
       const orient = meta?.orient ?? 'right';
       ctx.fillStyle = c;
       ctx.beginPath();
+      const base = meta?.upside ? 0 : size;
       if (orient === 'right') {
-        ctx.moveTo(0, size);
-        ctx.lineTo(size, size);
-        ctx.lineTo(size, 0);
+        ctx.moveTo(0, base);
+        ctx.lineTo(size, base);
+        ctx.lineTo(size, size - base);
       } else {
-        ctx.moveTo(0, 0);
-        ctx.lineTo(0, size);
-        ctx.lineTo(size, size);
+        ctx.moveTo(0, size - base);
+        ctx.lineTo(0, base);
+        ctx.lineTo(size, base);
       }
       ctx.closePath();
       ctx.fill();
@@ -4201,31 +4314,16 @@ export class Renderer {
     const setPosition1 = ui?.setPosition1;
     const setPosition2 = ui?.setPosition2;
 
-    const outlineColor1 = '#00ff00';
-    const outlineColor2 = '#ff0000';
-    const outlineWidth = 2;
-
-    if (setPosition1) {
-      const sx = Math.round(camera.worldToScreenX(setPosition1.x * TILE_SIZE));
-      const sy = Math.round(camera.worldToScreenY(setPosition1.y * TILE_SIZE));
-      const size = Math.round(TILE_SIZE * camera.zoom);
-
+    const size = Math.round(TILE_SIZE * camera.zoom);
+    for (const pos of [setPosition1, setPosition2]) {
+      if (!pos) continue;
+      const sx = Math.round(camera.worldToScreenX(pos.x * TILE_SIZE));
+      const sy = Math.round(camera.worldToScreenY(pos.y * TILE_SIZE));
       ctx.save();
-      ctx.strokeStyle = outlineColor1;
-      ctx.lineWidth = outlineWidth;
-      ctx.strokeRect(sx, sy, size, size);
-      ctx.restore();
-    }
-
-    if (setPosition2) {
-      const sx = Math.round(camera.worldToScreenX(setPosition2.x * TILE_SIZE));
-      const sy = Math.round(camera.worldToScreenY(setPosition2.y * TILE_SIZE));
-      const size = Math.round(TILE_SIZE * camera.zoom);
-
-      ctx.save();
-      ctx.strokeStyle = outlineColor2;
-      ctx.lineWidth = outlineWidth;
-      ctx.strokeRect(sx, sy, size, size);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      if (polishOn('rounding')) cornerRect(ctx, sx, sy, size, '#ffffff', 2);
+      else ctx.strokeRect(sx, sy, size, size);
       ctx.restore();
     }
   }

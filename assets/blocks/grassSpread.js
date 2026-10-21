@@ -60,6 +60,7 @@ function shapeMeta(meta) {
   const out = {};
   if (meta?.slabPos) out.slabPos = meta.slabPos;
   if (meta?.orient) out.orient = meta.orient;
+  if (meta?.upside) out.upside = true;
   return out;
 }
 
@@ -92,18 +93,45 @@ export function grassTick(world, x, y, meta, id) {
     world.setBlock(x, y, next.id, next.meta);
     world.updateLighting(x, y);
   };
+  // Meta changed in place: the cell must be redrawn, saved and sent to the other players
+  // like a setBlock would.
+  const touched = () => {
+    world.noteRedraw?.(x, y);
+    const chunk = world.chunks?.get(world.chunkKey(world.chunkXFor(x)));
+    if (chunk) chunk.dirty = true;
+    world.onBlockChanged?.(x, y);
+  };
+  const open = openSidesMask(world, x, y);
   if (meta && (meta.turnToDirt || meta.turnToMud)) {
-    meta.dirtTimer = (meta.dirtTimer || 0) + 1;
-    if (meta.dirtTimer >= 5) return bare();
+    // Only smothered while something still covers the top; a block taken away again in time
+    // (or a top slab, which leaves the grass in the open) lets it live.
+    if (open & 1) {
+      delete meta.turnToDirt;
+      delete meta.turnToMud;
+      delete meta.dirtTimer;
+    } else {
+      meta.dirtTimer = (meta.dirtTimer || 0) + 1;
+      if (meta.dirtTimer >= 5) return bare();
+    }
   }
-  if (!hasOpenSide(world, x, y)) {
+  if (!open) {
     if (Math.random() < 0.1) bare();
     return;
   }
-  // Bits: 1 up, 2 right, 4 down, 8 left.
-  if (!meta || meta.sides == null) return;
-  const open = openSidesMask(world, x, y);
+  // Bits: 1 up, 2 right, 4 down, 8 left. Grass without a record of its sides (grown at world
+  // generation) counts as grown on every open side.
+  if (!meta) {
+    world.setBlock(x, y, id, { sides: open });
+    return;
+  }
+  if (meta.sides == null) {
+    meta.sides = open;
+    touched();
+    return;
+  }
+  const before = meta.sides;
   meta.sides &= open;
+  if (meta.sides !== before) touched();
   const missing = open & ~meta.sides;
   if (!missing || Math.random() >= 0.25) return;
   const canGrow = (bit) => {
@@ -120,6 +148,7 @@ export function grassTick(world, x, y, meta, id) {
   for (const bit of [1, 8, 2, 4]) {
     if (canGrow(bit)) {
       meta.sides |= bit;
+      touched();
       return;
     }
   }

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, nativeImage, screen, dialog, crashReporter, session } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage, screen, dialog, crashReporter, session, shell } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -426,6 +426,26 @@ function writeWorldFile(worldName, json) {
   fs.writeFileSync(tmpPath, json, 'utf8');
   fs.renameSync(tmpPath, filePath);
 }
+
+// Screenshots (/camera pic): PNGs in a screenshots folder next to the worlds.
+const screenshotsDir = () => path.join(dataDir, 'screenshots');
+
+ipcMain.handle('screenshots:save', async (event, name, dataUrl) => {
+  const dir = screenshotsDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, path.basename(String(name)).replace(/[^\w.-]/g, '_'));
+  fs.writeFileSync(file, Buffer.from(String(dataUrl).replace(/^data:image\/png;base64,/, ''), 'base64'));
+  return file;
+});
+
+ipcMain.handle('screenshots:open', async (event, file) => {
+  if (file && fs.existsSync(file)) shell.showItemInFolder(file);
+  else {
+    fs.mkdirSync(screenshotsDir(), { recursive: true });
+    await shell.openPath(screenshotsDir());
+  }
+  return true;
+});
 
 ipcMain.handle('worlds:exists', async (event, worldName) => {
   ensureWorldsDir();

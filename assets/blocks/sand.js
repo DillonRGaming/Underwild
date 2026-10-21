@@ -6,6 +6,17 @@ const FALL_WAIT_MIN = 2; // fastest pace in air: one block every 2 ticks
 const FALL_WAIT_WATER = 5; // sinking through water
 export const FALL_TICK_MS = 60; // matches world.js FALL_TICK_INTERVAL
 
+// Once a fallen block has finished sliding into place it's an ordinary block again (gets its
+// outlines, rounded corners and seams back, and stops being redrawn every frame).
+function settle(world, x, y, meta) {
+  if (!meta.fellAt || gameClock.now() - meta.fellAt < (meta.slideMs || FALL_TICK_MS * FALL_WAIT_START)) return;
+  delete meta.fellAt;
+  delete meta.slideMs;
+  delete meta.fallStreak;
+  delete meta.fallWait;
+  world.noteRedraw(x, y);
+}
+
 export function fallTick(world, x, y, id, meta) {
   if (y >= world.height - 1) return;
   const isBg = meta?.layer === 'bg';
@@ -20,6 +31,7 @@ export function fallTick(world, x, y, id, meta) {
         meta.fallStreak = 0;
         meta.fallWait = 0;
       }
+      settle(world, x, y, meta);
       return;
     }
     const streak = meta.fallStreak || 0;
@@ -62,6 +74,7 @@ export function fallTick(world, x, y, id, meta) {
       meta.fallStreak = 0;
       meta.fallWait = 0;
     }
+    settle(world, x, y, meta);
     return;
   }
   const streak = meta.fallStreak || 0;
@@ -110,6 +123,7 @@ export function createFallingSand(id, displayName, color) {
 
 export default {
   ...createFallingSand('sand', 'Sand', '#f4dc81'),
+  smelt: { into: 'glass', time: 4 },
   recipes: [
     { shapeless: { rippled_sand: 1 }, count: 1 },
     { shapeless: { cracked_sand: 1 }, count: 1 }

@@ -14,13 +14,17 @@ import { perf } from '../core/perf.js';
 import { registry } from './content.js';
 import { multiplayer } from './net.js';
 import { playerName, setPlayerName, NAMED_COLORS, parseColor } from './players.js';
-import { applyPlayerAction, placePlayerAtSurface, loadInitialChunks, teleportToDimension } from './session.js';
-import { addChatLine, collapseChatHistory } from '../ui/chatLog.js';
+import { applyPlayerAction, placePlayerAtSurface, loadAroundWithScreen, teleportToDimension } from './session.js';
+import { addChatLine, addChatImage, collapseChatHistory } from '../ui/chatLog.js';
 import { wind } from '../core/wind.js';
 import { weather, WEATHER_TYPES } from '../core/weather.js';
 import { game, tpVisited } from './state.js';
+import { toggleCommandMenu } from '../ui/commandMenu.js';
+import { FILTERS } from '../core/camera.js';
+import { takePicture, openScreenshots, canOpenScreenshots, startRecording, stopRecording, isRecording } from '../ui/cameraCapture.js';
 
 const chatHistory = [];
+let chatDraft = '';
 const MAX_SUGGESTIONS = 10;
 
 const TIME_NAMES = { dawn: 0.25, day: 0.5, noon: 0.5, sunset: 0.75, night: 0, midnight: 0 };
@@ -52,10 +56,10 @@ const itemCategoryIds = (name) => {
 };
 
 // --- Players a command can be aimed at --------------------------------------------------
-// A player's name, or self (you), nearest (the nearest other player), all, random.
+// A player's name, or self/me (you), nearest (the nearest other player), all, random.
 // How long /time takes to get to its new time, in seconds of play.
 const TIME_GLIDE_SECONDS = 3;
-const SELECTORS = ['self', 'nearest', 'all', 'random'];
+const SELECTORS = ['self', 'me', 'nearest', 'all', 'random'];
 
 // Little pixel icons (16x16, filled) shown beside player suggestions, so a player's name can't
 // be mistaken for a plain word.
@@ -81,7 +85,7 @@ function isPlayerRef(sel) {
 function resolvePlayers(sel) {
   const all = commandPlayers();
   const s = (sel || 'self').toLowerCase();
-  if (s === 'self') return [all[0]];
+  if (s === 'self' || s === 'me') return [all[0]];
   if (s === 'all') return all;
   if (s === 'random') return [all[Math.floor(Math.random() * all.length)]];
   if (s === 'nearest') {
@@ -142,11 +146,12 @@ const TYPES = {
   },
   block: {
     invalid: (w) => `There's no block called "${w}".`,
-    accepts: (w) => registry.isBlock(lower(w)) && lower(w) !== 'air',
-    suggest: () =>
-      [...registry.blocks()]
-        .filter(([id, d]) => id !== 'air' && id !== 'water' && !d.hidden)
-        .map(([id, d]) => ({ id, displayName: d.displayName || id, icon: true })),
+    // Air too: filling with air clears an area.
+    accepts: (w) => registry.isBlock(lower(w)),
+    suggest: () => [
+      { id: 'air', displayName: 'Air (clear)' },
+      ...[...registry.blocks()].filter(([id, d]) => id !== 'air' && id !== 'water' && !d.hidden).map(([id, d]) => ({ id, displayName: d.displayName || id, icon: true }))
+    ],
     parse: lower
   },
   group: {
@@ -268,8 +273,9 @@ function parseHours(w) {
 const arg = (type, key, label = key, extra = {}) => ({ type, key, label, ...extra });
 const opt = (type, key, label = key, extra = {}) => arg(type, key, label, { ...extra, optional: true });
 const lit = (word, section) => arg('word', '_' + word, word, { options: [word], ...(section && { section }) });
-const ON_OFF = { options: ['on', 'off'], aliases: { true: 'on', false: 'off' } };
+const TRUE_FALSE = { options: ['true', 'false'], aliases: { on: 'true', off: 'false' } };
 const FILL_SHAPE = { options: ['solid', 'hollow'] };
+const CAM_SECONDS = { min: 0, max: 60, examples: ['0', '1', '2', '5'] };
 // Each command: its name, a short description, its forms (lists of arguments), and optionally
 // `aliases` (other names), `chat` (works even with commands off) or `host` (multiplayer host only).
 const availableCommands = [
@@ -291,6 +297,7 @@ const availableCommands = [
     forms: [[arg('player', 'who', 'who'), opt('number', 'count', 'count', { min: 1, max: 100, integer: true })]]
   },
   { cmd: 'clear', desc: "Empty a player's inventory", forms: [[arg('player', 'who', 'who')]] },
+  { cmd: 'kill', desc: 'Kill a player (they respawn)', forms: [[arg('player', 'who', 'who')]] },
   {
     cmd: 'mode',
     aliases: ['gamemode'],
@@ -341,29 +348,40 @@ const availableCommands = [
   {
     cmd: 'fly',
     desc: 'Fly around (turns on Creative)',
-    forms: [[arg('player', 'who', 'who'), opt('word', 'state', 'on/off', ON_OFF)]]
+    forms: [[arg('player', 'who', 'who'), opt('word', 'state', 'true/false', TRUE_FALSE)]]
   },
   {
     cmd: 'noclip',
     desc: 'Fly through blocks',
-    forms: [[arg('player', 'who', 'who'), opt('word', 'state', 'on/off', ON_OFF)]]
+    forms: [[arg('player', 'who', 'who'), opt('word', 'state', 'true/false', TRUE_FALSE)]]
   },
+  { cmd: 'menu', desc: 'Open a movable panel of command buttons', forms: [[]] },
   { cmd: 'setpos1', desc: 'Mark the first corner for /fill', forms: [[]] },
   { cmd: 'setpos2', desc: 'Mark the second corner for /fill', forms: [[]] },
   { cmd: 'setposclear', desc: 'Forget both /fill corners', forms: [[]] },
   {
     cmd: 'fill',
-    desc: 'Fill the marked area (or between two corners) with a block',
+    desc: 'Fill the marked area (or between two corners) with a block; true at the end fills the background',
     forms: [
-      [arg('block', 'block', 'block', { section: 'Fill the marked area' }), opt('word', 'shape', 'solid/hollow', FILL_SHAPE)],
-      [arg('block', 'block', 'block', { section: 'Fill the marked area' }), lit('replace', 'Replace a block'), arg('block', 'replace', 'block to replace')],
+      [arg('block', 'block', 'block', { section: 'Fill the marked area' }), opt('word', 'bg', 'background', TRUE_FALSE)],
+      [arg('block', 'block', 'block', { section: 'Fill the marked area' }), opt('word', 'shape', 'solid/hollow', FILL_SHAPE), opt('word', 'bg', 'background', TRUE_FALSE)],
+      [arg('block', 'block', 'block', { section: 'Fill the marked area' }), lit('replace', 'Replace a block'), arg('block', 'replace', 'block to replace'), opt('word', 'bg', 'background', TRUE_FALSE)],
       [
         arg('coord', 'x1', 'x1', { section: 'Fill between corners' }),
         arg('coord', 'y1', 'y1'),
         arg('coord', 'x2', 'x2'),
         arg('coord', 'y2', 'y2'),
         arg('block', 'block'),
-        opt('word', 'shape', 'solid/hollow', FILL_SHAPE)
+        opt('word', 'bg', 'background', TRUE_FALSE)
+      ],
+      [
+        arg('coord', 'x1', 'x1', { section: 'Fill between corners' }),
+        arg('coord', 'y1', 'y1'),
+        arg('coord', 'x2', 'x2'),
+        arg('coord', 'y2', 'y2'),
+        arg('block', 'block'),
+        opt('word', 'shape', 'solid/hollow', FILL_SHAPE),
+        opt('word', 'bg', 'background', TRUE_FALSE)
       ],
       [
         arg('coord', 'x1', 'x1', { section: 'Fill between corners' }),
@@ -372,8 +390,36 @@ const availableCommands = [
         arg('coord', 'y2', 'y2'),
         arg('block', 'block'),
         lit('replace', 'Replace a block'),
-        arg('block', 'replace', 'block to replace')
+        arg('block', 'replace', 'block to replace'),
+        opt('word', 'bg', 'background', TRUE_FALSE)
       ]
+    ]
+  },
+  {
+    cmd: 'place',
+    desc: 'Place a block anywhere: at coordinates, a player, or a /setpos corner; true at the end places it in the background',
+    forms: [
+      [arg('block', 'block', 'block', { section: 'At a marked corner' }), lit('pos1', 'At /setpos1'), opt('word', 'bg', 'background', TRUE_FALSE)],
+      [arg('block', 'block', 'block', { section: 'At a marked corner' }), lit('pos2', 'At /setpos2'), opt('word', 'bg', 'background', TRUE_FALSE)],
+      [arg('block', 'block', 'block', { section: 'At coordinates' }), arg('coord', 'x', 'x'), arg('coord', 'y', 'y'), opt('word', 'bg', 'background', TRUE_FALSE)],
+      [arg('block', 'block', 'block', { section: "At a player's feet" }), opt('word', 'bg', 'background', TRUE_FALSE)],
+      [arg('block', 'block', 'block', { section: "At a player's feet" }), arg('player', 'at', 'player'), opt('word', 'bg', 'background', TRUE_FALSE)]
+    ]
+  },
+  {
+    cmd: 'camera',
+    desc: 'Move, zoom and turn the camera, watch another player, add a filter, take pictures or record',
+    forms: [
+      [lit('position'), arg('coord', 'x', 'x'), arg('coord', 'y', 'y'), opt('number', 'seconds', 'seconds', CAM_SECONDS)],
+      [lit('follow'), opt('player', 'at', 'player')],
+      [lit('zoom'), arg('number', 'zoom', 'level', { min: 0.5, max: 20, examples: ['1', '2', '3', '5', '8'] }), opt('number', 'seconds', 'seconds', CAM_SECONDS)],
+      [lit('rotate'), arg('number', 'deg', 'degrees', { min: -360, max: 360, examples: ['0', '15', '-15', '90', '180'] }), opt('number', 'seconds', 'seconds', CAM_SECONDS)],
+      [lit('smooth'), arg('number', 'smooth', '0-20', { min: 0, max: 20, examples: ['0', '4', '8', '15'] })],
+      [lit('filter'), arg('word', 'filter', 'filter', { options: Object.keys(FILTERS) })],
+      [lit('pic')],
+      [lit('pics')],
+      [lit('record'), opt('word', 'state', 'start/stop', { options: ['start', 'stop'] })],
+      [lit('reset')]
     ]
   },
   { cmd: 'seed', desc: 'Regenerate the world from a seed', forms: [[opt('number', 'seed', 'seed', { integer: true })]] },
@@ -415,7 +461,7 @@ const availableCommands = [
     cmd: 'perm',
     host: true,
     desc: 'Let a player build or use commands (or stop them)',
-    forms: [[arg('guest', 'who', 'who'), arg('word', 'perm', 'build/commands', { options: ['build', 'commands'] }), arg('word', 'state', 'on/off', ON_OFF)]]
+    forms: [[arg('guest', 'who', 'who'), arg('word', 'perm', 'build/commands', { options: ['build', 'commands'] }), arg('word', 'state', 'true/false', TRUE_FALSE)]]
   },
   { cmd: 'help', chat: true, desc: 'Show the commands', forms: [[], [arg('command', 'command', 'command', { section: 'Commands' })]] },
   { cmd: 'log', desc: 'Save a performance report', forms: [[], [arg('word', 'reset', 'reset', { options: ['reset'], aliases: { clear: 'reset' } })]] }
@@ -634,20 +680,35 @@ function parseCoord(coord, defaultValue) {
   return Number.isNaN(parsed) ? defaultValue : Math.floor(parsed);
 }
 
-function fillArea(x1, y1, x2, y2, blockId, shape = 'solid', replaceBlock = null) {
-  const clampX = (x) => Math.max(0, Math.min(game.world.width - 1, x));
-  const clampY = (y) => Math.max(0, Math.min(game.world.height - 1, y));
+// Fills (or, with air, clears) a rectangle. Chunks not loaded there are loaded first, so the
+// whole area is filled however far away it is.
+async function fillArea(x1, y1, x2, y2, blockId, shape = 'solid', replaceBlock = null, background = false) {
+  const world = game.world;
+  const clampX = (x) => Math.max(0, Math.min(world.width - 1, x));
+  const clampY = (y) => Math.max(0, Math.min(world.height - 1, y));
   const minX = Math.min(clampX(x1), clampX(x2));
   const maxX = Math.max(clampX(x1), clampX(x2));
   const minY = Math.min(clampY(y1), clampY(y2));
   const maxY = Math.max(clampY(y1), clampY(y2));
-  for (let x = minX; x <= maxX; x++) {
-    for (let y = minY; y <= maxY; y++) {
-      if (shape === 'hollow' && x !== minX && x !== maxX && y !== minY && y !== maxY) continue;
-      if (replaceBlock && game.world.getBlockId(x, y) !== replaceBlock) continue;
-      game.world.setBlock(x, y, blockId, null);
+  let meta = registry.get(blockId)?.placeMeta?.() ?? null;
+  if (background && blockId !== 'air') meta = { ...(meta || {}), layer: 'bg' };
+  let count = 0;
+  // A chunk at a time, so a fill wider than the chunks kept loaded still reaches every column.
+  for (let cx = world.chunkXFor(minX); cx <= world.chunkXFor(maxX); cx++) {
+    if (!world.isChunkLoaded(cx)) await world.loadChunkAsync(cx).catch(() => {});
+    if (world !== game.world) return count;
+    const from = Math.max(minX, cx * world.chunkSize);
+    const to = Math.min(maxX, (cx + 1) * world.chunkSize - 1);
+    for (let x = from; x <= to; x++) {
+      for (let y = minY; y <= maxY; y++) {
+        if (shape === 'hollow' && x !== minX && x !== maxX && y !== minY && y !== maxY) continue;
+        if (replaceBlock && world.getBlockId(x, y) !== replaceBlock) continue;
+        world.setBlock(x, y, blockId, meta ? structuredClone(meta) : null);
+        count++;
+      }
     }
   }
+  return count;
 }
 
 export function commandsAllowed() {
@@ -677,7 +738,7 @@ const clockText = (fraction) => {
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 };
 
-function processTextInputCommand(text) {
+export function processTextInputCommand(text) {
   const trimmed = text.trim();
   if (!trimmed || !game.world || !game.player) return;
 
@@ -789,6 +850,13 @@ const HANDLERS = {
     commandOk(word ? `Set ${playerLabel(targets)} to ${word} mode.` : `Switched ${playerLabel(targets)} between Survival and Creative.`);
   },
 
+  kill(a) {
+    const targets = targetsOf(a);
+    if (!targets) return;
+    for (const t of targets) actOnPlayer(t, { k: 'kill' });
+    commandOk(`Killed ${playerLabel(targets)}.`);
+  },
+
   color(a) {
     const targets = targetsOf(a);
     if (!targets) return;
@@ -815,7 +883,7 @@ const HANDLERS = {
   fly(a, command) {
     const targets = targetsOf(a);
     if (!targets) return;
-    const on = a.state === undefined ? null : a.state === 'on';
+    const on = a.state === undefined ? null : a.state === 'true';
     for (const t of targets) actOnPlayer(t, { k: command.cmd, on });
     const label = command.cmd === 'fly' ? 'Flying' : 'No-clip';
     commandOk(on === null ? `Toggled ${label.toLowerCase()} for ${playerLabel(targets)}.` : `${label} is ${on ? 'on' : 'off'} for ${playerLabel(targets)}.`);
@@ -956,10 +1024,14 @@ const HANDLERS = {
   },
 
   setpos1(a, command) {
-    const spot = { x: tileX(), y: Math.floor((game.player.y + game.player.height) / TILE_SIZE) };
+    const spot = { x: Math.floor((game.player.x + game.player.width / 2) / TILE_SIZE), y: Math.floor((game.player.y + game.player.height - 1) / TILE_SIZE), dim: game.world.dimensionId || 'earth' };
     if (command.cmd === 'setpos1') game.setPosition1 = spot;
     else game.setPosition2 = spot;
     commandOk(`Position ${command.cmd === 'setpos1' ? 1 : 2} set to ${spot.x}, ${spot.y}.`);
+  },
+
+  menu() {
+    toggleCommandMenu(processTextInputCommand);
   },
 
   setpos2(a, command) {
@@ -972,18 +1044,130 @@ const HANDLERS = {
     commandOk('Both positions cleared.');
   },
 
+  place(a) {
+    let x, y;
+    if (a._pos1 || a._pos2) {
+      const spot = a._pos1 ? game.setPosition1 : game.setPosition2;
+      if (!spot || (spot.dim ?? 'earth') !== (game.world.dimensionId || 'earth')) return commandFail(`Set that corner first with /setpos${a._pos1 ? 1 : 2}.`);
+      [x, y] = [spot.x, spot.y];
+    } else if (a.x !== undefined) {
+      const feetY = Math.floor((game.player.y + game.player.height - 1) / TILE_SIZE);
+      [x, y] = [parseCoord(a.x, Math.floor((game.player.x + game.player.width / 2) / TILE_SIZE)), parseCoord(a.y, feetY)];
+    } else {
+      const p = resolvePlayers(a.at)[0];
+      if (!p) return commandFail(`No player called "${a.at}" is here.`);
+      const body = p.self ? game.player : { width: game.player.width, height: game.player.height };
+      [x, y] = [Math.floor((p.x + body.width / 2) / TILE_SIZE), Math.floor((p.y + body.height - 1) / TILE_SIZE)];
+    }
+    if (!game.world.inBounds(x, y)) return commandFail(`${x}, ${y} is outside the world.`);
+    fillArea(x, y, x, y, a.block, 'solid', null, a.bg === 'true').then(() => commandOk(`Placed ${itemLabel(a.block)} at ${x}, ${y}.`));
+  },
+
+  camera(a) {
+    const cam = game.camera;
+    // Without a time given, moves glide over 0.6s (quadratic ease in and out); 0 jumps there.
+    const secs = a.seconds ?? 0.6;
+    const over = a.seconds ? ` over ${secs}s` : '';
+    if (a._position) {
+      const tx = parseCoord(a.x, tileX()),
+        ty = parseCoord(a.y, tileY());
+      cam.animate({ x: tx * TILE_SIZE + TILE_SIZE / 2, y: ty * TILE_SIZE + TILE_SIZE / 2 }, secs);
+      return commandOk(`Camera moved to ${tx}, ${ty}${over}.`);
+    }
+    if (a._follow) {
+      const p = resolvePlayers(a.at)[0];
+      if (!p) return commandFail(`No player called "${a.at}" is here.`);
+      if (p.self) cam.followGetter = null;
+      else {
+        const id = p.id;
+        // Their middle; if they leave, back to you.
+        cam.followGetter = () => {
+          const rp = multiplayer.remotePlayers.get(id);
+          if (!rp) {
+            cam.followGetter = null;
+            return null;
+          }
+          return { x: rp.x + game.player.width / 2, y: rp.y + game.player.height / 2 };
+        };
+      }
+      cam.release(0.6);
+      return commandOk(p.self ? 'Camera following you.' : `Watching ${p.name}. /camera reset to come back.`);
+    }
+    if (a._zoom) {
+      const z = cam.clampZoom(a.zoom);
+      cam.look({ zoom: z }, secs);
+      if (z > a.zoom) return commandOk(`Camera zoom ${+z.toFixed(2)}${over} (any further out would show unloaded land).`);
+      if (z < a.zoom) return commandOk(`Camera zoom ${+z.toFixed(2)}${over} (the closest it goes).`);
+      return commandOk(`Camera zoom ${z}${over}.`);
+    }
+    if (a._rotate) {
+      cam.look({ rotation: (a.deg * Math.PI) / 180 }, secs);
+      return commandOk(`Camera turned to ${a.deg}°${over}.`);
+    }
+    if (a._smooth) {
+      cam.smoothing = a.smooth;
+      return commandOk(a.smooth === 0 ? 'Camera follows instantly.' : `Camera smoothness ${a.smooth}.`);
+    }
+    if (a._filter) {
+      cam.filter = a.filter === 'none' ? '' : a.filter;
+      return commandOk(a.filter === 'none' ? 'Camera filter off.' : `Camera filter: ${a.filter}.`);
+    }
+    if (a._pic) {
+      takePicture(game.canvas, cam.filter)
+        .then(({ name, url, file }) => {
+          const where = file ? 'Saved to screenshots' : 'Downloaded';
+          addChatImage(`${where}: ${name}${file ? ' (click it to open the folder)' : ''}`, url, () => (file ? openScreenshots(file) : window.open(url, '_blank')));
+        })
+        .catch((e) => commandFail(`Couldn't save the picture: ${e?.message || e}`));
+      return;
+    }
+    if (a._pics) {
+      if (!canOpenScreenshots()) return commandFail('Pictures are downloaded in the browser (see your downloads folder).');
+      openScreenshots();
+      return commandOk('Opened the screenshots folder.');
+    }
+    if (a._record) {
+      const start = a.state ? a.state === 'start' : !isRecording();
+      if (start) {
+        if (isRecording()) return commandFail('Already recording.');
+        return startRecording(game.canvas) ? commandOk('Recording. /camera record stop to save it.') : commandFail("This browser can't record video.");
+      }
+      return stopRecording() ? commandOk('Recording saved.') : commandFail("You aren't recording.");
+    }
+    // /camera reset: following you, normal zoom, upright, no filter, normal smoothness.
+    cam.followGetter = null;
+    cam.filter = '';
+    cam.smoothing = 8;
+    if (cam.controlled) {
+      cam.lookZoom = null;
+      cam.lookRotation = null;
+      cam.release(0.6); // eases back to following, at your own zoom, upright
+    } else cam.look({ zoom: null, rotation: null }, 0.6);
+    commandOk('Camera reset.');
+  },
+
   fill(a) {
     // Between two corners given, or /setpos1 and /setpos2 (or where you are).
     let x1, y1, x2, y2;
     if (a.x1 !== undefined) {
       [x1, y1, x2, y2] = [parseCoord(a.x1, tileX()), parseCoord(a.y1, tileY()), parseCoord(a.x2, tileX()), parseCoord(a.y2, tileY())];
     } else {
-      if (!game.setPosition1) return commandFail('Set a corner first with /setpos1 (and /setpos2), or give coordinates.');
-      const end = game.setPosition2 || { x: tileX(), y: tileY() };
+      const here = game.world.dimensionId || 'earth';
+      const inWorld = (spot) => (spot && (spot.dim ?? 'earth') === here ? spot : null);
+      if (!inWorld(game.setPosition1)) return commandFail('Set a corner first with /setpos1 (and /setpos2), or give coordinates.');
+      const end = inWorld(game.setPosition2) || { x: tileX(), y: tileY() };
       [x1, y1, x2, y2] = [game.setPosition1.x, game.setPosition1.y, end.x, end.y];
     }
-    fillArea(x1, y1, x2, y2, a.block, a.shape || 'solid', a.replace || null);
-    commandOk(a.replace ? `Replaced ${itemLabel(a.replace)} with ${itemLabel(a.block)}.` : `Filled the area with ${itemLabel(a.block)}.`);
+    fillArea(x1, y1, x2, y2, a.block, a.shape || 'solid', a.replace || null, a.bg === 'true').then((n) => {
+      const what = a.block === 'air' ? 'Cleared' : 'Filled';
+      commandOk(
+        a.replace
+          ? `Replaced ${n} ${itemLabel(a.replace)} with ${itemLabel(a.block)}.`
+          : a.block === 'air'
+            ? `${what} ${n} blocks.`
+            : `${what} ${n} blocks with ${itemLabel(a.block)}.`
+      );
+    });
   },
 
   seed(a) {
@@ -995,7 +1179,7 @@ const HANDLERS = {
     game.items.length = 0;
     game.lastPreloadChunk = null;
     const centerX = Math.floor(game.world.width / 2);
-    loadInitialChunks(centerX).then(() => placePlayerAtSurface(centerX));
+    loadAroundWithScreen(centerX, () => placePlayerAtSurface(centerX));
     commandOk(`New world from seed ${newSeed}.`);
   },
 
@@ -1050,8 +1234,8 @@ const HANDLERS = {
 
   perm(a) {
     const guest = multiplayer.findGuest(a.who);
-    multiplayer.setPermission(guest.id, a.perm, a.state === 'on');
-    commandOk(`${guest.name} ${a.state === 'on' ? 'can' : "can't"} ${a.perm === 'build' ? 'build' : 'use commands'} now.`);
+    multiplayer.setPermission(guest.id, a.perm, a.state === 'true');
+    commandOk(`${guest.name} ${a.state === 'true' ? 'can' : "can't"} ${a.perm === 'build' ? 'build' : 'use commands'} now.`);
   }
 };
 
@@ -1103,7 +1287,7 @@ function teleportToPlace(place) {
   game.player.vy = 0;
   game.player.cancelFall();
   game.lastPreloadChunk = null;
-  loadInitialChunks(edgeX).then(() => placePlayerAtSurface(edgeX));
+  loadAroundWithScreen(edgeX, () => placePlayerAtSurface(edgeX));
   commandOk(`Teleported you to the nearest ${label}.`);
 }
 
@@ -1163,12 +1347,10 @@ export function handleChatKey(e) {
   // still be in the keyboard's suggestion bar, so read the box itself.
   const isEnter = e.code === 'Enter' || e.code === 'NumpadEnter' || e.key === 'Enter' || e.keyCode === 13;
   const chatBox = document.getElementById('chatInput');
-  let stale = false;
   if (isEnter && chatBox && chatBox.value !== game.textInputValue) {
     // The suggestions were for older text: redo them for what's really typed.
     game.textInputValue = chatBox.value;
     updateCommandSuggestions();
-    stale = true;
   }
 
   if (e.code === 'Escape' || e.key === 'Escape') {
@@ -1177,15 +1359,14 @@ export function handleChatKey(e) {
     return;
   }
 
+  // Space on a suggestion picked with Tab (or the arrows) fills it in; Enter always sends.
+  if ((e.code === 'Space' || e.key === ' ') && game.textInputValue.startsWith('/') && currentIndex >= 0 && suggestionItems[currentIndex]) {
+    applySuggestion(suggestionItems[currentIndex]);
+    e.preventDefault();
+    return;
+  }
+
   if (isEnter) {
-    // Enter on a suggestion picked with Tab (or the arrows) fills it in; with none picked it sends.
-    const fresh = stale ? Array.from(dropdown?.querySelectorAll('.suggestion-item') || []) : suggestionItems;
-    const picked = stale ? -1 : currentIndex;
-    if (game.textInputValue.startsWith('/') && picked >= 0 && fresh[picked]) {
-      applySuggestion(fresh[picked]);
-      e.preventDefault();
-      return;
-    }
     const command = game.textInputValue;
     if (command.trim()) {
       chatHistory.push(command);
@@ -1200,12 +1381,9 @@ export function handleChatKey(e) {
 
   if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
     const up = e.code === 'ArrowUp';
-    if (suggestionItems.length > 0) {
-      suggestionItems.forEach((item) => item.classList.remove('selected'));
-      const len = suggestionItems.length;
-      const next = up ? (currentIndex <= 0 ? len - 1 : currentIndex - 1) : (currentIndex + 1) % len;
-      suggestionItems[next].classList.add('selected');
-    } else if (up && game.chatHistoryIndex < chatHistory.length - 1) {
+    // Always the message history, whatever's typed (the draft comes back at the bottom).
+    if (up && game.chatHistoryIndex < chatHistory.length - 1) {
+      if (game.chatHistoryIndex === -1) chatDraft = game.textInputValue || '';
       game.chatHistoryIndex++;
       setChatValue(chatHistory[chatHistory.length - 1 - game.chatHistoryIndex]);
     } else if (!up && game.chatHistoryIndex > 0) {
@@ -1213,14 +1391,14 @@ export function handleChatKey(e) {
       setChatValue(chatHistory[chatHistory.length - 1 - game.chatHistoryIndex]);
     } else if (!up && game.chatHistoryIndex === 0) {
       game.chatHistoryIndex = -1;
-      setChatValue('');
+      setChatValue(chatDraft);
     }
     e.preventDefault();
     return;
   }
 
   if (e.code === 'Tab') {
-    // Tab steps through the suggestions (Shift+Tab backwards); Enter then fills the one picked in.
+    // Tab steps through the suggestions (Shift+Tab backwards); Space then fills the one picked in.
     if (suggestionItems.length > 0) {
       const len = suggestionItems.length;
       const next = e.shiftKey ? (currentIndex <= 0 ? len - 1 : currentIndex - 1) : (currentIndex + 1) % len;

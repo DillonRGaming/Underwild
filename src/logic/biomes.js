@@ -108,6 +108,21 @@ export const BIOMES = {
     ],
     treeLayout: { cell: 14, spacing: 12 },
     trees: [['big_oak', 1]]
+  },
+  desert: {
+    // Bare dunes: sand over sandstone, no trees, the odd rock.
+    name: 'Desert',
+    grass: [196, 176, 104],
+    sandy: true,
+    // Cacti stand in the tree slots.
+    treeLayout: { cell: 10, spacing: 6 },
+    treeChance: 0,
+    plantChance: 0.08,
+    plants: [
+      ['rock', 1],
+      ['pebble', 2]
+    ],
+    trees: [['oak', 1]]
   }
 };
 
@@ -265,6 +280,7 @@ const STRAY_LEAVES = {
   taiga: { ids: ['spruce_leaves', 'pine_leaves'], rate: 0.7 },
   autumn_woods: { ids: ['maple_orange_leaves', 'maple_red_leaves', 'maple_green_leaves'], rate: 2 },
   meadow: { ids: ['oak_leaves'], rate: 0.3 },
+  desert: { ids: ['oak_leaves'], rate: 0 },
   plain: { ids: ['oak_leaves'], rate: 0.12 }
 };
 
@@ -292,6 +308,30 @@ export function trailCandidateAt(x, seed) {
   if (x < start || x >= start + len) return null;
   if (!TRAIL_BIOMES.has(biomeAt(start, seed)) || !TRAIL_BIOMES.has(biomeAt(start + len - 1, seed))) return null;
   return { start, len };
+}
+
+// Whether x is in a sandy biome (sand and sandstone instead of grass and dirt).
+export function isDesertAt(x, seed) {
+  const id = biomeAt(x, seed);
+  return !!(id && BIOMES[id].sandy);
+}
+
+// How much of the desert there is at x (0..1): 1 inside one, fading to 0 across
+// DESERT_BLEND blocks either side of its edge, so sand and grass mix where they meet.
+const DESERT_BLEND = 14;
+export function desertAmountAt(x, seed) {
+  const zone = Math.floor(x / BIOME_ZONE);
+  const p = x - zone * BIOME_ZONE;
+  const sandy = (id) => !!(id && BIOMES[id].sandy);
+  const own = sandy(zoneBiome(zone, seed)) ? 1 : 0;
+  // Distance into this zone from its nearer edge, and the zone across that edge.
+  const left = p < BIOME_ZONE / 2;
+  const d = left ? p + 0.5 : BIOME_ZONE - p - 0.5;
+  const other = sandy(zoneBiome(zone + (left ? -1 : 1), seed)) ? 1 : 0;
+  if (own === other || d >= DESERT_BLEND) return own;
+  const t = 0.5 + (0.5 * d) / DESERT_BLEND; // own's share: 0.5 at the edge, 1 at DESERT_BLEND in
+  const s = t * t * (3 - 2 * t);
+  return other + (own - other) * s;
 }
 
 export function treeChanceAt(x, seed) {

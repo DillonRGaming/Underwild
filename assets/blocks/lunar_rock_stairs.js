@@ -6,7 +6,7 @@ export default {
   tab: 'building',
   recipes: [
     { shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'lunar_rock' }, count: 4 },
-    { shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'lunarstone' }, count: 4 }
+    { shape: ['p  ', 'pp ', 'ppp'], ingredients: { p: 'lunar_rock' }, count: 4 }
   ],
   tool: 'pickaxe',
   shape: 'stairs',

@@ -236,7 +236,8 @@ export class WorldSerializer {
       playerData: data.player || {},
       inventoryData: data.inventory || null,
       itemEntities: legacy ? oldEarth.itemEntities || [] : data.itemEntities || [],
-      mpPlayers: data.mpPlayers || {}
+      mpPlayers: data.mpPlayers || {},
+      displayName: data.meta?.displayName || null
     };
   }
 }

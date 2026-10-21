@@ -82,6 +82,34 @@ export async function loadInitialChunks(originX) {
   await Promise.all(loads);
 }
 
+// Loads the chunks around tileX like loadInitialChunks, showing the loading screen while
+// any of them still has to be made (rather than the world being built up on screen); then
+// `place` puts the player there and the camera jumps to them.
+function chunksMissingAround(tileX) {
+  const world = game.world;
+  const dist = loadDistance() + 1;
+  const center = Math.floor(tileX / world.chunkSize);
+  const last = Math.floor((world.width - 1) / world.chunkSize);
+  for (let cx = Math.max(0, center - dist); cx <= Math.min(last, center + dist); cx++) if (!world.isChunkLoaded(cx)) return true;
+  return false;
+}
+
+export async function loadAroundWithScreen(tileX, place) {
+  const missing = chunksMissingAround(tileX);
+  if (missing) {
+    game.isLoading = true;
+    game.renderer.render();
+  }
+  try {
+    await loadInitialChunks(tileX);
+    place?.();
+    const head = game.player.getHeadAnchor();
+    game.camera.followTo(head.x, head.y, game.canvas, game.world);
+  } finally {
+    if (missing) game.isLoading = false;
+  }
+}
+
 export function ensurePlayerNotInSolid() {
   if (!game.player) return;
   for (let i = 0; i < 40; i++) {
@@ -136,6 +164,9 @@ export function applyPlayerAction(a) {
     case 'color':
       setPlayerColor(a.c);
       break;
+    case 'kill':
+      game.player?.die();
+      break;
     case 'hit':
       hurtPlayer(a.dmg, a.vx, a.vy);
       break;
@@ -152,7 +183,9 @@ function setFlying(on) {
 }
 
 function setNoClip(on) {
-  game.noClipMode = on == null ? !game.noClipMode : !!on;
+  // Flipping it while it's still on from before but you've stopped flying: back into noclip.
+  if (on == null) on = !(game.noClipMode && game.player.creativeFlying);
+  game.noClipMode = !!on;
   if (game.noClipMode && !game.creativeMode) setCreativeMode(true);
   if (game.noClipMode) {
     game.player.creativeFlying = true;
@@ -173,7 +206,7 @@ export function teleportPlayerTo(px, py) {
   game.player.onGround = false;
   game.player.cancelFall();
   game.lastPreloadChunk = null;
-  loadInitialChunks(Math.floor(game.player.x / TILE_SIZE)).then(ensurePlayerNotInSolid);
+  return loadAroundWithScreen(Math.floor(game.player.x / TILE_SIZE), ensurePlayerNotInSolid);
 }
 
 export async function teleportToDimension(targetDimId, customX = null, customY = null) {
@@ -195,7 +228,7 @@ export async function teleportToDimension(targetDimId, customX = null, customY =
     commandFail("You can't travel to other worlds in a multiplayer game.");
     return false;
   }
-  if (switchingDim) {
+  if (switchingDim || chunksMissingAround(targetTileX)) {
     game.isLoading = true;
     game.renderer.render();
     // Allow the browser to paint the loading frame before heavy chunk generation
@@ -234,10 +267,8 @@ export async function teleportToDimension(targetDimId, customX = null, customY =
     commandOk(`Teleported you to ${dimDef.displayName} at ${safeSpot.x}, ${safeSpot.y}.`);
     return true;
   } finally {
-    if (switchingDim) {
-      game.isLoading = false;
-      game.renderer.render();
-    }
+    game.isLoading = false;
+    game.renderer.render();
   }
 }
 
@@ -299,7 +330,7 @@ export function getSessionMeta() {
     creativeMode: game.creativeMode,
     selectedIndex: game.selectedIndex,
     currentSeed: game.currentSeed,
-    displayName: game.currentWorldSaveName
+    displayName: game.currentWorldDisplayName || game.currentWorldSaveName
   };
 }
 
@@ -330,7 +361,10 @@ export function preloadChunksAroundPlayer() {
   const centerChunk = Math.floor((game.player.x + game.player.width / 2) / TILE_SIZE / game.world.chunkSize);
   // A multiplayer host also keeps the chunks around each guest loaded and running.
   const guestCenters = multiplayer.keepChunkCenters();
-  const signature = centerChunk + '|' + guestCenters.join(',');
+  // Where the camera is looking, when that's somewhere else (/camera position, watching a player).
+  const camChunk = game.camera ? Math.floor(game.camera.centerX / TILE_SIZE / game.world.chunkSize) : centerChunk;
+  const camAway = Math.abs(camChunk - centerChunk) > loadDistance();
+  const signature = centerChunk + '|' + guestCenters.join(',') + '|' + (camAway ? camChunk : '');
   if (game.lastPreloadChunk === signature) return;
   game.lastPreloadChunk = signature;
 
@@ -342,8 +376,9 @@ export function preloadChunksAroundPlayer() {
   for (const gc of guestCenters) {
     ranges.push([Math.max(0, gc - multiplayer.keepRadius()), Math.min(lastChunk, gc + multiplayer.keepRadius())]);
   }
+  if (camAway) ranges.push([Math.max(0, camChunk - dist - 1), Math.min(lastChunk, camChunk + dist + 1)]);
   const keep = (cx) => ranges.some(([a, b]) => cx >= a && cx <= b);
-  game.world.maxLoadedChunks = Math.max(30, (loadDistance() + 2) * 2 + 1) + guestCenters.length * (multiplayer.keepRadius() * 2 + 1);
+  game.world.maxLoadedChunks = Math.max(30, (loadDistance() + 2) * 2 + 1) * (camAway ? 2 : 1) + guestCenters.length * (multiplayer.keepRadius() * 2 + 1);
 
   for (const key of Array.from(game.world.chunks.keys())) {
     const cx = parseInt(key, 10);

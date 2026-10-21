@@ -84,9 +84,16 @@ export function setupTouchControls({ canvas, input, keybinds, inGame, onInventor
   const aim = { x: canvas.width / 2, y: canvas.height / 2 };
   const crosshair = root.querySelector('.touch-crosshair');
   const setAim = (clientX, clientY) => {
+    // Undo the camera's rotation (a CSS transform about the canvas's middle), if any.
     const rect = canvas.getBoundingClientRect();
-    aim.x = (clientX - rect.left) * (canvas.width / rect.width);
-    aim.y = (clientY - rect.top) * (canvas.height / rect.height);
+    let dx = clientX - (rect.left + rect.width / 2),
+      dy = clientY - (rect.top + rect.height / 2);
+    const t = canvas.style.transform ? new DOMMatrix(getComputedStyle(canvas).transform).inverse() : null;
+    if (t) [dx, dy] = [t.a * dx + t.c * dy, t.b * dx + t.d * dy];
+    const w = canvas.clientWidth || rect.width,
+      h = canvas.clientHeight || rect.height;
+    aim.x = (dx + w / 2) * (canvas.width / w);
+    aim.y = (dy + h / 2) * (canvas.height / h);
     input.mouse.x = aim.x;
     input.mouse.y = aim.y;
     // Keep it where it was touched, relative to the player, from now on.

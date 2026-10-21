@@ -27,9 +27,10 @@ export class Player {
     this.vx = 0;
     this.vy = 0;
     this.maxSpeed = 120;
-    this.jumpVelocity = 300;
-    this.gravity = 800;
-    this.maxFallSpeed = 500;
+    // Same jump height as before (about 3.5 blocks), but a slower, floatier arc.
+    this.jumpVelocity = 276;
+    this.gravity = 680;
+    this.maxFallSpeed = 450;
     this.onGround = false;
 
     this.swingAnimation = {
