@@ -51,7 +51,8 @@ export function setPlayerName(name) {
 // Imported skins: [{ id, name, data (PNG data URL) }]. The one skin imported before there
 // was a list (playerCustomSkin) becomes its first entry.
 export function savedSkins() {
-  let list = prefs.get('playerSkins');
+  // Preferences are stored as text: read it back as a list (getJSON).
+  let list = prefs.getJSON('playerSkins', null);
   if (!Array.isArray(list)) {
     list = [];
     const old = prefs.get('playerCustomSkin');

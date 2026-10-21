@@ -1184,25 +1184,21 @@
     <div class="menu-content">
       <h1 class="menu-title">Player</h1>
       <div class="player-screen">
-        <div class="player-viewer">
-          <div class="player-nametag" id="playerNametag">Player</div>
-          <canvas id="playerSkinPreview" class="player-viewer-canvas" width="160" height="320"></canvas>
-          <button class="minecraft-button small" data-action="player-view-walk" id="playerWalkButton">Walk: Off</button>
-        </div>
-        <div class="player-settings">
-          <label for="playerNameInput">Name</label>
-          <input type="text" id="playerNameInput" class="minecraft-input" maxlength="20" placeholder="Player" spellcheck="false">
-          <label>Name Colour</label>
-          <div class="player-colors" id="playerColors"></div>
-          <label>Skins</label>
-          <div class="skins-grid player-skins" id="playerSkinsGrid"></div>
-          <div class="player-skin-actions">
-            <button class="minecraft-button small" data-action="player-import-skin">Add Skin</button>
-            <button class="minecraft-button small" data-action="player-rename-skin" id="playerRenameSkin">Rename</button>
-            <button class="minecraft-button small" data-action="player-delete-skin" id="playerDeleteSkin">Delete</button>
-          </div>
-          <input type="file" id="playerSkinFile" accept="image/png" class="hidden" multiple>
+        <div class="player-skins-panel">
+          <div class="player-skin-list" id="playerSkinsGrid"></div>
           <p class="mp-status" id="playerSkinStatus"></p>
+          <input type="file" id="playerSkinFile" accept="image/png" class="hidden" multiple>
+          <button class="minecraft-button" data-action="player-import-skin">Add Skin</button>
+        </div>
+        <div class="player-stage">
+          <div class="player-preview">
+            <div class="player-nametag" id="playerNametag">Player</div>
+            <canvas id="playerSkinPreview" class="player-viewer-canvas" width="160" height="320"></canvas>
+          </div>
+          <div class="option-group">
+            <label for="playerNameInput">Name</label>
+            <input type="text" id="playerNameInput" class="minecraft-input" maxlength="20" placeholder="Player" spellcheck="false">
+          </div>
         </div>
       </div>
       <div class="menu-buttons">

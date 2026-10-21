@@ -779,7 +779,7 @@ body.game-paused .menu-background,
   box-shadow: var(--slot-shadow);
 }
 
-/* A colour swatch: the standard look for any colour choice (/color suggestions, Name Colour).
+/* A colour swatch: the standard look for any colour choice (the /color suggestions).
    Set --swatch to the colour. .selected marks the chosen one. */
 .swatch {
   width: 24px;
@@ -803,27 +803,6 @@ input.swatch:hover {
 }
 .swatch.selected {
   border: var(--input-border-focus);
-}
-/* No colour (the default name colour): a slash through an empty swatch. */
-.swatch-none {
-  background-image: linear-gradient(135deg, transparent 45%, var(--line) 45% 55%, transparent 55%);
-}
-/* Any colour, from the colour picker. */
-.swatch-any {
-  background-image: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
-  -webkit-appearance: none;
-  appearance: none;
-}
-.swatch-any::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-.swatch-any::-webkit-color-swatch {
-  border: none;
-  opacity: 0;
-}
-.swatch-any::-moz-color-swatch {
-  border: none;
-  opacity: 0;
 }
 
 .suggestion-text {
@@ -2316,20 +2295,115 @@ img {
   margin: 0;
 }
 
+/* Player: your skins listed on the left; on the right the player, big, with the name under it. */
 .player-screen {
   display: grid;
-  grid-template-columns: minmax(150px, 200px) 1fr;
-  gap: 20px;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--option-group-margin);
   align-items: start;
   text-align: left;
 }
 
-.player-viewer {
+.player-screen .option-group {
+  margin: 0;
+}
+
+.player-skins-panel,
+.player-stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--button-gap);
+  min-width: 0;
+}
+
+.player-stage {
+  gap: var(--option-group-margin);
+}
+
+/* One row per skin: face, name, then Rename and Delete. */
+.player-skin-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--slot-gap);
+  max-height: 340px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.player-skin-list::-webkit-scrollbar {
+  display: none;
+}
+
+.skin-row {
+  flex: 0 0 auto; /* full height; the list scrolls instead of squashing them */
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: var(--button-gap);
+  min-height: 0;
+  padding: 6px var(--button-gap);
+}
+
+.skin-face {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+}
+
+.skin-row .skin-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+  font-size: var(--label-font-size);
+}
+
+.player-skin-list .minecraft-button.skin-row-button {
+  width: 32px;
+  min-width: 0;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 7px;
+}
+
+/* The list fills the column so Add Skin sits level with the Name box. */
+.player-screen {
+  align-items: stretch;
+}
+.player-skins-panel .player-skin-list {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+}
+.player-skins-panel > .minecraft-button {
+  width: 100%;
+  height: var(--field-height);
+  flex-shrink: 0;
+  margin: 0;
+}
+.player-skins-panel > .mp-status {
+  margin: 0;
+}
+.player-skins-panel > .mp-status:empty {
+  display: none;
+}
+
+/* Empty slots fill the list out to 10; clicking one adds a skin. */
+.skin-row.skin-empty {
+  min-height: 44px;
+  opacity: 0.45;
+}
+.skin-row.skin-empty:hover {
+  opacity: 0.7;
+}
+
+.player-preview {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 12px;
+  gap: var(--button-gap);
+  padding: var(--button-gap);
   background: var(--input-bg);
   border: var(--input-border);
   border-radius: var(--radius);
@@ -2352,34 +2426,24 @@ img {
   image-rendering: pixelated;
 }
 
-.player-viewer > .minecraft-button {
-  width: 100%;
-}
-
-.player-skin-actions .minecraft-button {
-  width: auto;
-  min-width: 0;
-  padding-left: 12px;
-  padding-right: 12px;
-}
-
-/* < value > pickers (Starting Health and Hunger): arrows either side of a value box. */
+/* < value > pickers (Starting Health and Hunger, the player viewer's turn): arrows either side of a value box. */
 .stepper {
   display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  gap: 6px;
+  grid-template-columns: var(--field-height) 1fr var(--field-height);
+  gap: var(--slot-gap);
   align-items: stretch;
 }
 .stepper .minecraft-button {
   width: 100%;
   min-width: 0;
+  height: var(--field-height);
   padding: 0;
 }
 .stepper-value {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 36px;
+  height: var(--field-height);
   font-size: 16px;
   color: var(--input-text);
   background: var(--input-bg);
@@ -2392,42 +2456,8 @@ img {
   cursor: default;
 }
 
-.player-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-
-.player-settings .minecraft-input {
-  margin: 0 0 6px;
-}
-
-.player-colors {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-
-.player-skins {
-  max-height: 220px;
-}
-
-.player-skins .skin-item {
-  min-height: 0;
-}
-
-.player-skins .skin-preview {
-  width: 48px;
-  height: 96px;
-  border: none;
-}
-
-.player-skin-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+#playerOptionsMenu .menu-content {
+  width: min(860px, 92vw);
 }
 
 @media (max-width: 560px) {
@@ -2922,70 +2952,191 @@ body.touch-mode #inventory .inventory-header .recipe-panel {
   width: auto;
 }
 
-/* Every bordered box gets pixel-cut corners, like the blocks in game. A new kind of box
-   gets them by being added here (or by using one of these classes). */
+/* Pixel corners, like the blocks in the world: every bordered box loses its outermost corner
+   pixel and gets one just inside it in the border's colour, so the outline steps round the
+   corner. A pixel is the border's width (--px). A new kind of box gets them by being added
+   to the first list (or by using one of these classes). */
 :is(
-    .coordinates,
-    .cmd-menu,
-    .cmd-menu-btn,
-    .chat-log,
-    .name-tag,
-    .minecraft-button,
-    .win-btn,
-    .keybind-button,
-    .minecraft-input,
-    .chat-input,
-    .suggestions-dropdown,
-    .suggestion-icon,
-    .swatch,
-    .stepper-value,
-    .player-viewer,
-    .background-blocks,
-    .bg-block-remove,
-    .info-panel,
-    .chat-container,
-    .inventory-content,
-    .inventory-slot,
-    .crafting-slot,
-    .crafting-output-slot,
-    .hotbar-slot,
-    #hotbar,
-    .recipe-row,
-    .forge-panel,
-    .forge-choice,
-    .music-thumb,
-    .skin-preview,
-    .mod-thumbnail,
-    .menu-content,
-    .creative-tab,
-    .music-track-item,
-    .skin-item,
-    .mod-card,
-    .mod-grid-item,
-    .mp-list-item,
-    .keybind-row,
-    .creative-search,
-    .creative-sort,
-    .app-icon-grid img,
-    .app-update-bar,
-    .chat-send,
-    .touch-btn,
-    .touch-pad,
-    .touch-pad-stick,
-    .touch-magnifier,
-    .perf-overlay
-  ) {
-  --notch: 3px;
+  .coordinates,
+  .cmd-menu,
+  .cmd-menu-btn,
+  .chat-log,
+  .name-tag,
+  .minecraft-button,
+  .win-btn,
+  .keybind-button,
+  .minecraft-input,
+  .chat-input,
+  .suggestions-dropdown,
+  .suggestion-icon,
+  .swatch,
+  .stepper-value,
+  .background-blocks,
+  .bg-block-remove,
+  .info-panel,
+  .chat-container,
+  .inventory-content,
+  .inventory-slot,
+  .crafting-slot,
+  .crafting-output-slot,
+  .hotbar-slot,
+  #hotbar,
+  .recipe-row,
+  .forge-panel,
+  .forge-choice,
+  .music-thumb,
+  .skin-preview,
+  .mod-thumbnail,
+  .creative-tab,
+  .music-track-item,
+  .skin-item,
+  .mod-card,
+  .mod-grid-item,
+  .mp-list-item,
+  .keybind-row,
+  .creative-search,
+  .creative-sort,
+  .app-icon-grid img,
+  .app-update-bar,
+  .chat-send,
+  .touch-btn,
+  .touch-pad,
+  .touch-pad-stick,
+  .touch-magnifier,
+  .perf-overlay,
+  .skin-face,
+  .player-preview
+) {
+  --px: 2px;
   clip-path: polygon(
-    var(--notch) 0,
-    calc(100% - var(--notch)) 0,
-    100% var(--notch),
-    100% calc(100% - var(--notch)),
-    calc(100% - var(--notch)) 100%,
-    var(--notch) 100%,
-    0 calc(100% - var(--notch)),
-    0 var(--notch)
+    var(--px) 0, calc(100% - var(--px)) 0, calc(100% - var(--px)) var(--px), 100% var(--px),
+    100% calc(100% - var(--px)), calc(100% - var(--px)) calc(100% - var(--px)), calc(100% - var(--px)) 100%,
+    var(--px) 100%, var(--px) calc(100% - var(--px)), 0 calc(100% - var(--px)), 0 var(--px), var(--px) var(--px)
   );
+}
+
+/* The inner pixels: a layer over the box carrying a copy of its border (so they follow its
+   colour on hover and when selected), showing only at the four corners. Boxes that already
+   set a position keep theirs (this has no specificity). */
+:where(
+  .coordinates,
+  .cmd-menu,
+  .cmd-menu-btn,
+  .name-tag,
+  .minecraft-button,
+  .win-btn,
+  .keybind-button,
+  .suggestion-icon,
+  .swatch,
+  .stepper-value,
+  .bg-block-remove,
+  .info-panel,
+  .chat-container,
+  .inventory-slot,
+  .crafting-slot,
+  .crafting-output-slot,
+  .hotbar-slot,
+  #hotbar,
+  .recipe-row,
+  .forge-panel,
+  .forge-choice,
+  .creative-tab,
+  .music-track-item,
+  .skin-item,
+  .mod-card,
+  .mod-grid-item,
+  .mp-list-item,
+  .keybind-row,
+  .creative-sort,
+  .app-update-bar,
+  .chat-send,
+  .touch-btn,
+  .touch-pad,
+  .touch-pad-stick,
+  .perf-overlay,
+  .skin-face,
+  .player-preview
+) {
+  position: relative;
+}
+:is(
+  .coordinates,
+  .cmd-menu,
+  .cmd-menu-btn,
+  .name-tag,
+  .minecraft-button,
+  .win-btn,
+  .keybind-button,
+  .suggestion-icon,
+  .swatch,
+  .stepper-value,
+  .bg-block-remove,
+  .info-panel,
+  .chat-container,
+  .inventory-slot,
+  .crafting-slot,
+  .crafting-output-slot,
+  .hotbar-slot,
+  #hotbar,
+  .recipe-row,
+  .forge-panel,
+  .forge-choice,
+  .creative-tab,
+  .music-track-item,
+  .skin-item,
+  .mod-card,
+  .mod-grid-item,
+  .mp-list-item,
+  .keybind-row,
+  .creative-sort,
+  .app-update-bar,
+  .chat-send,
+  .touch-btn,
+  .touch-pad,
+  .touch-pad-stick,
+  .perf-overlay,
+  .player-preview
+)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: inherit;
+  border-radius: 0;
+  pointer-events: none;
+  -webkit-mask: var(--px-corners);
+  mask: var(--px-corners);
+}
+:root {
+  --px-corners:
+    linear-gradient(#000, #000) top left / 2px 2px no-repeat, linear-gradient(#000, #000) top right / 2px 2px no-repeat,
+    linear-gradient(#000, #000) bottom left / 2px 2px no-repeat, linear-gradient(#000, #000) bottom right / 2px 2px no-repeat;
+}
+
+/* Text boxes can't hold that layer, and in scrolling boxes it would scroll away: these draw the
+   inner pixels in their background instead, in --px-color. */
+:is(
+  .background-blocks,
+  .chat-input,
+  .chat-log,
+  .creative-search,
+  .inventory-content,
+  .minecraft-input,
+  .suggestions-dropdown
+) {
+  --px-color: var(--line-soft);
+  background-image:
+    linear-gradient(var(--px-color), var(--px-color)), linear-gradient(var(--px-color), var(--px-color)),
+    linear-gradient(var(--px-color), var(--px-color)), linear-gradient(var(--px-color), var(--px-color));
+  background-size: 2px 2px;
+  background-repeat: no-repeat;
+  background-position: top left, top right, bottom left, bottom right;
+  background-origin: padding-box;
+}
+:is(.minecraft-input, .chat-input, .creative-search):focus {
+  --px-color: var(--line);
+}
+:is(.chat-log, .inventory-content) {
+  --px-color: var(--line);
 }
 
 /* Names above other players: the same container as the hotbar and chat. */
@@ -3396,13 +3547,6 @@ body.touch-mode .menu-container .form-section,
 body.touch-mode #advancedOptionsMenu .advanced-options-grid {
   grid-auto-flow: row dense;
 }
-body.touch-mode .menu-container .stepper {
-  grid-template-columns: 44px 1fr 44px;
-}
-body.touch-mode .menu-container .stepper .minecraft-button,
-body.touch-mode .menu-container .stepper-value {
-  height: 44px;
-}
 
 /* Small buttons keep their whole label (Normal, Extreme...) instead of cutting it off. */
 body.touch-mode .menu-container .button-group .minecraft-button.small {
@@ -3413,17 +3557,8 @@ body.touch-mode .menu-container .button-group .minecraft-button.small {
   text-overflow: clip;
 }
 
-/* Player: the screen scrolls inside the panel, with a shorter preview so the controls show. */
-body.touch-mode #playerOptionsMenu .player-screen {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  grid-template-columns: 180px 1fr;
-}
+/* Player: a shorter preview so the turn and walk buttons fit on screen. */
 body.touch-mode #playerOptionsMenu .player-viewer-canvas {
   width: 80px;
   height: 160px;
-}
-body.touch-mode #playerOptionsMenu .player-viewer .minecraft-button {
-  height: 40px;
 }

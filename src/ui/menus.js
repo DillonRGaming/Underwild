@@ -31,7 +31,7 @@ import { stopRecording } from './cameraCapture.js';
 import { musicTracks, updateMusicVolume, switchMusicTrack, updateMusicTrackSelection, setMusicContext, setMenuMusic, syncMusic } from './music.js';
 import { game, leafParticles, explosionFX, primedExplosives, tpVisited, saveManager, prefs } from '../game/state.js';
 import { multiplayer } from '../game/net.js';
-import { playerName, applyLocalSkin, drawSkinView, savedSkins, setSavedSkins, playerSkin, playerColor, setPlayerColor, setPlayerName, NAMED_COLORS } from '../game/players.js';
+import { playerName, applyLocalSkin, drawSkinView, savedSkins, setSavedSkins, playerSkin, playerColor, setPlayerName } from '../game/players.js';
 import { showToast } from './chatLog.js';
 import { registry } from '../game/content.js';
 import { warmIcons } from './iconPolish.js';
@@ -58,7 +58,7 @@ function textSeed(text) {
 
 // Shows each < value > picker's setting, and greys out an arrow at its limit.
 function syncSteppers() {
-  document.querySelectorAll('.stepper').forEach((stepper) => {
+  document.querySelectorAll('.stepper[data-stepper]').forEach((stepper) => {
     const value = game[stepper.dataset.stepper];
     stepper.querySelector('.stepper-value').textContent = value;
     stepper.querySelector('[data-step="-1"]').disabled = value <= Number(stepper.dataset.min);
@@ -207,16 +207,6 @@ export class MenuManager {
         break;
       case 'player-import-skin':
         document.getElementById('playerSkinFile')?.click();
-        break;
-      case 'player-rename-skin':
-        this.renameSelectedSkin();
-        break;
-      case 'player-delete-skin':
-        this.deleteSelectedSkin();
-        break;
-      case 'player-view-walk':
-        this.playerWalk = !this.playerWalk;
-        this.startSkinViewer();
         break;
       case 'player-done':
         this.savePlayerName();
@@ -1247,7 +1237,6 @@ export class MenuManager {
       nameInput.addEventListener('change', () => this.savePlayerName());
       nameInput.addEventListener('input', () => this.updateNametag());
     }
-    this.drawPlayerColors();
     this.drawPlayerSkins();
     this.updateNametag();
     this.startSkinViewer();
@@ -1264,99 +1253,76 @@ export class MenuManager {
     tag.style.color = playerColor() || '';
   }
 
-  drawPlayerColors() {
-    const box = document.getElementById('playerColors');
-    box.innerHTML = '';
-    const current = playerColor();
-    const swatch = (color, title) => {
-      const b = document.createElement('button');
-      b.className = 'swatch' + (color === current ? ' selected' : '') + (color ? '' : ' swatch-none');
-      b.title = title;
-      if (color) b.style.setProperty('--swatch', color);
-      b.addEventListener('click', () => {
-        setPlayerColor(color);
-        this.drawPlayerColors();
-        this.updateNametag();
-      });
-      box.appendChild(b);
-    };
-    swatch(null, 'Default');
-    for (const [name, color] of Object.entries(NAMED_COLORS)) swatch(color, name[0].toUpperCase() + name.slice(1));
-    // Any other colour, from the colour picker.
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.className = 'swatch swatch-any' + (current && !Object.values(NAMED_COLORS).includes(current) ? ' selected' : '');
-    custom.title = 'Pick any colour';
-    custom.value = current || '#ffffff';
-    custom.addEventListener('change', () => {
-      setPlayerColor(custom.value.toLowerCase());
-      this.drawPlayerColors();
-      this.updateNametag();
-    });
-    box.appendChild(custom);
-  }
-
-  // The big viewer: the selected skin from the front, walking if Walk is on.
+  // The big viewer: the selected skin, side-on.
   startSkinViewer() {
     const { skin, skinData } = playerSkin();
-    const src = skinData || `assets/textures/${skin}.png`;
-    if (this._viewerSrc !== src) {
-      this._viewerSrc = src;
-      const img = new Image();
-      img.src = src;
-      this._viewerImg = img;
-    }
-    document.getElementById('playerWalkButton').textContent = `Walk: ${this.playerWalk ? 'On' : 'Off'}`;
-    if (this._viewerLoop) return;
-    const frame = (t) => {
-      const menu = document.getElementById('playerOptionsMenu');
-      if (!menu || menu.classList.contains('hidden')) {
-        this._viewerLoop = null;
-        return;
-      }
-      const swing = this.playerWalk ? Math.sin(t / 160) : 0;
-      if (this._viewerImg?.complete) drawSkinView(document.getElementById('playerSkinPreview'), this._viewerImg, 'Front', swing);
-      this._viewerLoop = requestAnimationFrame(frame);
-    };
-    this._viewerLoop = requestAnimationFrame(frame);
+    const img = new Image();
+    img.onload = () => drawSkinView(document.getElementById('playerSkinPreview'), img, 'Right');
+    img.src = skinData || `assets/textures/${skin}.png`;
   }
 
+  // The skin list: each row its face, its name and (for your own skins) Rename and Delete.
   drawPlayerSkins() {
-    const grid = document.getElementById('playerSkinsGrid');
-    grid.innerHTML = '';
+    const list = document.getElementById('playerSkinsGrid');
+    list.innerHTML = '';
     const current = prefs.get('playerSelectedSkin') || 'steve';
     const options = [{ id: 'steve', name: 'Steve', src: 'assets/textures/steve.png' }, ...savedSkins().map((sk) => ({ id: sk.id, name: sk.name, src: sk.data }))];
     const selected = options.some((o) => o.id === current) ? current : 'steve';
+    const icon = (body) =>
+      `<svg viewBox="0 0 24 24" width="100%" height="100%" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="square">${body}</svg>`;
     for (const opt of options) {
-      const item = document.createElement('div');
-      item.className = 'skin-item' + (opt.id === selected ? ' selected' : '');
-      const preview = document.createElement('canvas');
-      preview.className = 'skin-preview';
-      preview.width = 32;
-      preview.height = 64;
+      const row = document.createElement('div');
+      row.className = 'skin-item skin-row' + (opt.id === selected ? ' selected' : '');
+      const face = document.createElement('canvas');
+      face.className = 'skin-face';
+      face.width = face.height = 8;
       const img = new Image();
-      img.onload = () => drawSkinView(preview, img, 'Front');
+      img.onload = () => {
+        const ctx = face.getContext('2d');
+        ctx.drawImage(img, 8, 8, 8, 8, 0, 0, 8, 8); // face
+        ctx.drawImage(img, 40, 8, 8, 8, 0, 0, 8, 8); // hat layer
+      };
       img.src = opt.src;
       const label = document.createElement('div');
       label.className = 'skin-name';
       label.textContent = opt.name;
-      item.append(preview, label);
-      item.addEventListener('click', () => {
+      row.append(face, label);
+      // The built-in skin can't be renamed or deleted.
+      if (opt.id !== 'steve') {
+        const button = (title, svg, action) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'minecraft-button small skin-row-button';
+          b.title = title;
+          b.setAttribute('aria-label', title);
+          b.innerHTML = icon(svg);
+          b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            action(opt.id);
+          });
+          row.appendChild(b);
+        };
+        button('Rename', '<path d="M4 20h4L19 9l-4-4L4 16z"/>', (id) => this.renameSkin(id));
+        button('Delete', '<path d="M6 6l12 12M18 6L6 18"/>', (id) => this.deleteSkin(id));
+      }
+      row.addEventListener('click', () => {
         prefs.set('playerSelectedSkin', opt.id);
         applyLocalSkin();
         this.drawPlayerSkins();
         this.startSkinViewer();
       });
-      grid.appendChild(item);
+      list.appendChild(row);
     }
-    // The built-in skin can't be renamed or deleted.
-    const own = selected !== 'steve';
-    document.getElementById('playerRenameSkin').disabled = !own;
-    document.getElementById('playerDeleteSkin').disabled = !own;
+    for (let i = options.length; i < 10; i++) {
+      const empty = document.createElement('div');
+      empty.className = 'skin-item skin-row skin-empty';
+      empty.title = 'Add Skin';
+      empty.addEventListener('click', () => document.getElementById('playerSkinFile').click());
+      list.appendChild(empty);
+    }
   }
 
-  renameSelectedSkin() {
-    const id = prefs.get('playerSelectedSkin');
+  renameSkin(id) {
     const list = savedSkins();
     const sk = list.find((x) => x.id === id);
     if (!sk) return;
@@ -1367,16 +1333,17 @@ export class MenuManager {
     this.drawPlayerSkins();
   }
 
-  deleteSelectedSkin() {
-    const id = prefs.get('playerSelectedSkin');
+  deleteSkin(id) {
     const list = savedSkins();
     if (!list.some((x) => x.id === id)) return;
     if (!window.confirm('Delete this skin?')) return;
     setSavedSkins(list.filter((x) => x.id !== id));
-    prefs.set('playerSelectedSkin', 'steve');
-    applyLocalSkin();
+    if (prefs.get('playerSelectedSkin') === id) {
+      prefs.set('playerSelectedSkin', 'steve');
+      applyLocalSkin();
+      this.startSkinViewer();
+    }
     this.drawPlayerSkins();
-    this.startSkinViewer();
   }
 
   importSkins(fileInput) {

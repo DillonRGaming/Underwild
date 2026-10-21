@@ -172,9 +172,8 @@ export function loadAudioSettings() {
   const savedMasterVolume = prefs.get('underwild_masterVolume');
   const savedMusicVolume = prefs.get('underwild_musicVolume');
   const savedMusicTrack = prefs.get('underwild_musicTrack');
-  const savedMenuMusic = prefs.get('underwild_menuMusic');
 
-  if (savedMenuMusic !== null) game.menuMusic = savedMenuMusic === true || savedMenuMusic === 'true';
+  game.menuMusic = prefs.getBool('underwild_menuMusic', true);
   document.querySelectorAll('[data-action^="menu-music-"]').forEach((b) => {
     if (b.dataset.action === (game.menuMusic ? 'menu-music-on' : 'menu-music-off')) b.dataset.selected = 'true';
     else b.removeAttribute('data-selected');
